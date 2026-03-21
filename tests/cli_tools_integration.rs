@@ -1,0 +1,1323 @@
+//! Integration tests for CLI subcommands — invokes the built binary directly.
+//!
+//! # Running
+//!
+//!   cargo test --test cli_tools_integration
+//!
+//! Chrome tests require a live Chrome installation and a configured profile in
+//! ~/.pagerunner/config.toml. They spin up a per-test daemon automatically.
+//!
+//! # DB isolation
+//!
+//! Non-Chrome tests set `PAGERUNNER_DB_PATH` to a temp file so they never conflict
+//! with a live `pagerunner mcp` process that may already hold `~/.pagerunner/state.db`.
+//! Chrome tests use `run_live()` which routes through a fresh test daemon.
+
+use serial_test::serial;
+use std::process::Command;
+
+fn bin() -> std::path::PathBuf {
+    let mut p = std::env::current_exe().unwrap();
+    p.pop();
+    if p.ends_with("deps") {
+        p.pop();
+    }
+    p.push("pagerunner");
+    p
+}
+
+/// Isolated DB path for integration tests.
+fn test_db() -> std::path::PathBuf {
+    std::env::temp_dir().join("pagerunner_integration_test.db")
+}
+
+fn run(args: &[&str]) -> std::process::Output {
+    Command::new(bin())
+        .args(args)
+        .env("PAGERUNNER_DB_PATH", test_db())
+        .output()
+        .expect("failed to run pagerunner")
+}
+
+/// Like `run`, but without PAGERUNNER_DB_PATH so calls route through the daemon.
+/// Required for Chrome tests: session state lives in the daemon's SessionManager.
+fn run_live(args: &[&str]) -> std::process::Output {
+    Command::new(bin())
+        .args(args)
+        .output()
+        .expect("failed to run pagerunner")
+}
+
+/// Starts a test daemon using the isolated test DB. Returns a guard that kills the
+/// daemon when dropped. The daemon removes any stale socket on startup and starts
+/// listening, so run_live() calls will route through it automatically.
+struct TestDaemon(std::process::Child);
+
+impl Drop for TestDaemon {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait(); // Block until daemon has fully exited and released file locks
+    }
+}
+
+fn start_daemon_with(binary: &std::path::Path) -> TestDaemon {
+    // Kill any leftover daemon, then wait for Chrome to fully release its profile lock.
+    std::process::Command::new("pkill")
+        .args(&["-f", "pagerunner.*daemon"])
+        .output()
+        .ok();
+    std::thread::sleep(std::time::Duration::from_millis(1000));
+
+    let child = Command::new(binary)
+        .args(&["daemon"])
+        .env("PAGERUNNER_DB_PATH", test_db())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .expect("failed to spawn test daemon");
+    // Poll until the daemon socket is accepting connections (up to 3s).
+    let socket = dirs::home_dir().unwrap().join(".pagerunner/daemon.sock");
+    for _ in 0..30 {
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        if std::os::unix::net::UnixStream::connect(&socket).is_ok() {
+            break;
+        }
+    }
+    TestDaemon(child)
+}
+
+fn start_test_daemon() -> TestDaemon {
+    start_daemon_with(&bin())
+}
+
+/// Returns the release binary path (target/release/pagerunner), used for NER tests
+/// which require --features ner compiled in.
+fn release_bin() -> std::path::PathBuf {
+    let mut p = std::env::current_exe().unwrap();
+    // current_exe is e.g. target/debug/deps/cli_tools_integration-xxx
+    // walk up to target/, then down to release/pagerunner
+    while p.file_name().map(|n| n != "target").unwrap_or(false) {
+        p.pop();
+    }
+    p.push("release");
+    p.push("pagerunner");
+    p
+}
+
+/// Starts a test daemon using the NER-enabled release binary (--features ner).
+/// Falls back to the debug binary if the release binary doesn't exist.
+fn start_ner_test_daemon() -> TestDaemon {
+    let rb = release_bin();
+    if rb.exists() {
+        start_daemon_with(&rb)
+    } else {
+        start_daemon_with(&bin())
+    }
+}
+
+fn stdout(out: &std::process::Output) -> String {
+    String::from_utf8_lossy(&out.stdout).into_owned()
+}
+
+fn stderr(out: &std::process::Output) -> String {
+    String::from_utf8_lossy(&out.stderr).into_owned()
+}
+
+// ─────────────────────────────────────────────────────────────
+// These test arg parsing, DB operations, and error handling.
+// ─────────────────────────────────────────────────────────────
+
+#[test]
+#[serial]
+fn test_list_profiles_exits_ok() {
+    let out = run(&["list-profiles"]);
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    let s = stdout(&out);
+    // Either a JSON array of profiles or the "No profiles" hint
+    assert!(
+        s.trim_start().starts_with('[') || s.contains("No profiles"),
+        "unexpected output: {}",
+        s
+    );
+}
+
+#[test]
+#[serial]
+fn test_list_sessions_returns_json() {
+    let out = run(&["list-sessions"]);
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    // No Chrome sessions open, but must be valid JSON (likely empty array or object)
+    let s = stdout(&out);
+    assert!(!s.is_empty(), "expected some output from list-sessions");
+}
+
+#[test]
+#[serial]
+fn test_list_snapshots_returns_json() {
+    let out = run(&["list-snapshots"]);
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    let s = stdout(&out);
+    // JSON array (may be empty)
+    assert!(
+        s.trim_start().starts_with('['),
+        "expected JSON array, got: {}",
+        s
+    );
+}
+
+#[test]
+#[serial]
+fn test_list_snapshots_all_flag() {
+    let out = run(&["list-snapshots", "--all"]);
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    let s = stdout(&out);
+    assert!(
+        s.trim_start().starts_with('['),
+        "expected JSON array, got: {}",
+        s
+    );
+}
+
+#[test]
+#[serial]
+fn test_kv_set_then_get() {
+    let ns = "cli_test_set_get";
+    let set = run(&["kv-set", ns, "mykey", "myvalue"]);
+    assert!(set.status.success(), "kv-set failed: {}", stderr(&set));
+
+    let get = run(&["kv-get", ns, "mykey"]);
+    assert!(get.status.success(), "kv-get failed: {}", stderr(&get));
+    assert!(
+        stdout(&get).contains("myvalue"),
+        "expected 'myvalue' in: {}",
+        stdout(&get)
+    );
+
+    // Cleanup
+    run(&["kv-clear", ns]);
+}
+
+#[test]
+#[serial]
+fn test_kv_list_shows_keys() {
+    let ns = "cli_test_list";
+    run(&["kv-set", ns, "alpha", "1"]);
+    run(&["kv-set", ns, "beta", "2"]);
+    run(&["kv-set", ns, "gamma", "3"]);
+
+    let list = run(&["kv-list", ns]);
+    assert!(list.status.success(), "kv-list failed: {}", stderr(&list));
+    let s = stdout(&list);
+    assert!(
+        s.contains("alpha") && s.contains("beta") && s.contains("gamma"),
+        "expected all keys in: {}",
+        s
+    );
+
+    run(&["kv-clear", ns]);
+}
+
+#[test]
+#[serial]
+fn test_kv_list_prefix_filter() {
+    let ns = "cli_test_prefix";
+    run(&["kv-set", ns, "foo-1", "a"]);
+    run(&["kv-set", ns, "foo-2", "b"]);
+    run(&["kv-set", ns, "bar-1", "c"]);
+
+    let list = run(&["kv-list", ns, "--prefix", "foo"]);
+    assert!(list.status.success());
+    let s = stdout(&list);
+    assert!(
+        s.contains("foo-1") && s.contains("foo-2"),
+        "expected foo-* keys in: {}",
+        s
+    );
+    assert!(
+        !s.contains("bar-1"),
+        "unexpected bar-1 in prefix-filtered output: {}",
+        s
+    );
+
+    run(&["kv-clear", ns]);
+}
+
+#[test]
+#[serial]
+fn test_kv_list_keys_only_flag() {
+    let ns = "cli_test_keys_only";
+    run(&["kv-set", ns, "k1", "v1"]);
+
+    let list = run(&["kv-list", ns, "--keys-only"]);
+    assert!(list.status.success());
+    let s = stdout(&list);
+    assert!(s.contains("k1"), "expected key in: {}", s);
+    // Values should not appear (include_values: false)
+    assert!(
+        !s.contains("v1"),
+        "value should not appear in keys-only output: {}",
+        s
+    );
+
+    run(&["kv-clear", ns]);
+}
+
+#[test]
+#[serial]
+fn test_kv_delete_removes_key() {
+    let ns = "cli_test_delete";
+    run(&["kv-set", ns, "todelete", "gone"]);
+
+    let del = run(&["kv-delete", ns, "todelete"]);
+    assert!(del.status.success(), "kv-delete failed: {}", stderr(&del));
+
+    let get = run(&["kv-get", ns, "todelete"]);
+    let s = stdout(&get);
+    // Should return null or empty (key no longer exists)
+    assert!(
+        s.contains("null") || s.trim().is_empty(),
+        "expected null/empty for deleted key, got: {}",
+        s
+    );
+
+    run(&["kv-clear", ns]);
+}
+
+#[test]
+#[serial]
+fn test_kv_clear_removes_all_keys() {
+    let ns = "cli_test_clear";
+    run(&["kv-set", ns, "a", "1"]);
+    run(&["kv-set", ns, "b", "2"]);
+
+    let clear = run(&["kv-clear", ns]);
+    assert!(
+        clear.status.success(),
+        "kv-clear failed: {}",
+        stderr(&clear)
+    );
+
+    let list = run(&["kv-list", ns]);
+    let s = stdout(&list);
+    // Namespace should now be empty
+    let v: serde_json::Value = serde_json::from_str(&s).unwrap_or(serde_json::json!([]));
+    let arr = v.as_array().unwrap();
+    assert!(
+        arr.is_empty(),
+        "expected empty namespace after kv-clear, got: {}",
+        s
+    );
+}
+
+#[test]
+#[serial]
+fn test_open_session_unknown_profile_exits_nonzero() {
+    let out = run(&["open-session", "nonexistent-profile-xyz"]);
+    assert!(
+        !out.status.success(),
+        "expected non-zero exit for unknown profile"
+    );
+    let err = stderr(&out);
+    // Error should mention the profile name
+    assert!(
+        err.contains("nonexistent-profile-xyz") || err.contains("not found"),
+        "expected error mentioning profile, got: {}",
+        err
+    );
+}
+
+#[test]
+#[serial]
+fn test_get_content_invalid_session_exits_nonzero() {
+    let out = run(&["get-content", "no-such-session", "no-such-target"]);
+    assert!(!out.status.success(), "expected non-zero exit");
+    assert!(!stderr(&out).is_empty(), "expected error on stderr");
+}
+
+#[test]
+#[serial]
+fn test_navigate_invalid_session_exits_nonzero() {
+    let out = run(&[
+        "navigate",
+        "no-such-session",
+        "no-such-target",
+        "https://example.com",
+    ]);
+    assert!(!out.status.success(), "expected non-zero exit");
+    assert!(!stderr(&out).is_empty(), "expected error on stderr");
+}
+
+#[test]
+#[serial]
+fn test_click_invalid_session_exits_nonzero() {
+    let out = run(&["click", "no-such-session", "no-such-target", "button"]);
+    assert!(!out.status.success(), "expected non-zero exit");
+    assert!(!stderr(&out).is_empty(), "expected error on stderr");
+}
+
+#[test]
+#[serial]
+fn test_screenshot_invalid_session_exits_nonzero() {
+    let out = run(&["screenshot", "no-such-session", "no-such-target"]);
+    assert!(!out.status.success(), "expected non-zero exit");
+    assert!(!stderr(&out).is_empty(), "expected error on stderr");
+}
+
+#[test]
+#[serial]
+fn test_evaluate_invalid_session_exits_nonzero() {
+    let out = run(&[
+        "evaluate",
+        "no-such-session",
+        "no-such-target",
+        "document.title",
+    ]);
+    assert!(!out.status.success(), "expected non-zero exit");
+    assert!(!stderr(&out).is_empty(), "expected error on stderr");
+}
+
+#[test]
+#[serial]
+fn test_list_tabs_invalid_session_exits_nonzero() {
+    let out = run(&["list-tabs", "no-such-session"]);
+    assert!(!out.status.success(), "expected non-zero exit");
+    assert!(!stderr(&out).is_empty(), "expected error on stderr");
+}
+
+#[test]
+#[serial]
+fn test_save_tab_state_invalid_session_exits_nonzero() {
+    let out = run(&["save-tab-state", "no-such-session"]);
+    assert!(!out.status.success(), "expected non-zero exit");
+    assert!(!stderr(&out).is_empty(), "expected error on stderr");
+}
+
+#[test]
+#[serial]
+fn test_wait_for_invalid_session_exits_nonzero() {
+    let out = run(&["wait-for", "no-such-session", "no-such-target", "--ms", "1"]);
+    assert!(!out.status.success(), "expected non-zero exit");
+    assert!(!stderr(&out).is_empty(), "expected error on stderr");
+}
+
+#[test]
+fn test_missing_required_arg_exits_nonzero_with_clap_error() {
+    // `navigate` requires session_id, target_id, url — omit all
+    let out = run(&["navigate"]);
+    assert!(
+        !out.status.success(),
+        "expected clap error for missing args"
+    );
+    // clap writes to stderr
+    let err = stderr(&out);
+    assert!(!err.is_empty(), "expected clap error on stderr");
+}
+
+#[test]
+fn test_screenshot_help_includes_base64_flag() {
+    let out = run(&["screenshot", "--help"]);
+    // --help exits 0
+    assert!(out.status.success());
+    let s = stdout(&out);
+    assert!(
+        s.contains("base64"),
+        "expected --base64 flag in screenshot help: {}",
+        s
+    );
+}
+
+#[test]
+fn test_open_session_help_includes_anonymization_flags() {
+    let out = run(&["open-session", "--help"]);
+    assert!(out.status.success());
+    let s = stdout(&out);
+    assert!(
+        s.contains("anonymize"),
+        "expected --anonymize in open-session help: {}",
+        s
+    );
+    assert!(
+        s.contains("stealth"),
+        "expected --stealth in open-session help: {}",
+        s
+    );
+}
+
+#[test]
+fn test_wait_for_help_shows_all_wait_modes() {
+    let out = run(&["wait-for", "--help"]);
+    assert!(out.status.success());
+    let s = stdout(&out);
+    assert!(
+        s.contains("selector"),
+        "expected --selector in wait-for help: {}",
+        s
+    );
+    assert!(s.contains("url"), "expected --url in wait-for help: {}", s);
+    assert!(s.contains("ms"), "expected --ms in wait-for help: {}", s);
+}
+
+// ─────────────────────────────────────────────────────────────
+// Chrome tests
+// ─────────────────────────────────────────────────────────────
+
+#[test]
+#[cfg_attr(not(target_os = "macos"), ignore)]
+#[serial]
+fn test_full_session_lifecycle() {
+    // open-session → new-tab → navigate → get-content → close-session
+    // Requires the first configured profile to exist in ~/.pagerunner/config.toml
+    // Uses run_live (daemon) so session state persists across CLI invocations.
+    let _daemon = start_test_daemon();
+    let profiles_out = run_live(&["list-profiles"]);
+    let s = stdout(&profiles_out);
+    let profiles: serde_json::Value = serde_json::from_str(&s).unwrap();
+    let profile = profiles[0]["name"].as_str().unwrap().to_string();
+
+    let open = run_live(&["open-session", &profile]);
+    assert!(
+        open.status.success(),
+        "open-session failed: {}",
+        stderr(&open)
+    );
+    let v: serde_json::Value = serde_json::from_str(&stdout(&open)).unwrap();
+    let sid = v["session_id"].as_str().unwrap().to_string();
+
+    let tab = run_live(&["new-tab", &sid]);
+    assert!(tab.status.success(), "new-tab failed: {}", stderr(&tab));
+    let v: serde_json::Value = serde_json::from_str(&stdout(&tab)).unwrap();
+    let tid = v["target_id"].as_str().unwrap().to_string();
+
+    let nav = run_live(&["navigate", &sid, &tid, "https://example.com"]);
+    assert!(nav.status.success(), "navigate failed: {}", stderr(&nav));
+
+    let content = run_live(&["get-content", &sid, &tid]);
+    assert!(
+        content.status.success(),
+        "get-content failed: {}",
+        stderr(&content)
+    );
+    assert!(
+        stdout(&content).contains("Example Domain"),
+        "expected page content, got: {}",
+        stdout(&content)
+    );
+
+    let close = run_live(&["close-session", &sid]);
+    assert!(
+        close.status.success(),
+        "close-session failed: {}",
+        stderr(&close)
+    );
+}
+
+#[test]
+#[cfg_attr(not(target_os = "macos"), ignore)]
+#[serial]
+fn test_screenshot_file_mode_writes_png() {
+    let _daemon = start_test_daemon();
+    let profiles_out = run_live(&["list-profiles"]);
+    let profiles: serde_json::Value = serde_json::from_str(&stdout(&profiles_out)).unwrap();
+    let profile = profiles[0]["name"].as_str().unwrap().to_string();
+
+    let open = run_live(&["open-session", &profile]);
+    let sid = serde_json::from_str::<serde_json::Value>(&stdout(&open)).unwrap()["session_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    let tab = run_live(&["new-tab", &sid]);
+    let tid = serde_json::from_str::<serde_json::Value>(&stdout(&tab)).unwrap()["target_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    let shot = run_live(&["screenshot", &sid, &tid]);
+    assert!(
+        shot.status.success(),
+        "screenshot failed: {}",
+        stderr(&shot)
+    );
+    let v: serde_json::Value = serde_json::from_str(&stdout(&shot)).unwrap();
+    let path = v["file"]
+        .as_str()
+        .expect("expected file key in screenshot output");
+    assert!(
+        std::path::Path::new(path).exists(),
+        "PNG file not found at {}",
+        path
+    );
+    assert!(
+        std::fs::metadata(path).unwrap().len() > 0,
+        "PNG file is empty"
+    );
+    std::fs::remove_file(path).ok();
+
+    run_live(&["close-session", &sid]);
+}
+
+#[test]
+#[cfg_attr(not(target_os = "macos"), ignore)]
+#[serial]
+fn test_screenshot_base64_mode_returns_inline() {
+    let _daemon = start_test_daemon();
+    let profiles_out = run_live(&["list-profiles"]);
+    let profiles: serde_json::Value = serde_json::from_str(&stdout(&profiles_out)).unwrap();
+    let profile = profiles[0]["name"].as_str().unwrap().to_string();
+
+    let open = run_live(&["open-session", &profile]);
+    let sid = serde_json::from_str::<serde_json::Value>(&stdout(&open)).unwrap()["session_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    let tab = run_live(&["new-tab", &sid]);
+    let tid = serde_json::from_str::<serde_json::Value>(&stdout(&tab)).unwrap()["target_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    let shot = run_live(&["screenshot", &sid, &tid, "--base64"]);
+    assert!(shot.status.success());
+    let v: serde_json::Value = serde_json::from_str(&stdout(&shot)).unwrap();
+    assert!(
+        v["base64"].as_str().is_some(),
+        "expected base64 key in: {}",
+        stdout(&shot)
+    );
+
+    run_live(&["close-session", &sid]);
+}
+
+#[test]
+#[cfg_attr(not(target_os = "macos"), ignore)]
+#[serial]
+fn test_evaluate_returns_json() {
+    let _daemon = start_test_daemon();
+    let profiles_out = run_live(&["list-profiles"]);
+    let profiles: serde_json::Value = serde_json::from_str(&stdout(&profiles_out)).unwrap();
+    let profile = profiles[0]["name"].as_str().unwrap().to_string();
+
+    let open = run_live(&["open-session", &profile]);
+    let sid = serde_json::from_str::<serde_json::Value>(&stdout(&open)).unwrap()["session_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    let tab = run_live(&["new-tab", &sid]);
+    let tid = serde_json::from_str::<serde_json::Value>(&stdout(&tab)).unwrap()["target_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    run_live(&["navigate", &sid, &tid, "https://example.com"]);
+
+    let eval = run_live(&["evaluate", &sid, &tid, "1 + 1"]);
+    assert!(eval.status.success(), "evaluate failed: {}", stderr(&eval));
+    assert!(
+        stdout(&eval).contains("2"),
+        "expected '2' in evaluate output: {}",
+        stdout(&eval)
+    );
+
+    run_live(&["close-session", &sid]);
+}
+
+#[test]
+#[cfg_attr(not(target_os = "macos"), ignore)]
+#[serial]
+fn test_kv_roundtrip_with_live_session() {
+    let set = run(&["kv-set", "test_cli_chrome", "hello", "world"]);
+    assert!(set.status.success());
+
+    let get = run(&["kv-get", "test_cli_chrome", "hello"]);
+    assert!(get.status.success());
+    assert!(stdout(&get).contains("world"));
+
+    run(&["kv-clear", "test_cli_chrome"]);
+}
+
+#[test]
+#[cfg_attr(not(target_os = "macos"), ignore)]
+#[serial]
+fn test_list_tabs_shows_open_tab() {
+    let _daemon = start_test_daemon();
+    let profile = first_profile();
+
+    let open = run_live(&["open-session", &profile]);
+    let sid = parse_json_field(&stdout(&open), "session_id");
+
+    let tab = run_live(&["new-tab", &sid]);
+    let tid = parse_json_field(&stdout(&tab), "target_id");
+
+    let list = run_live(&["list-tabs", &sid]);
+    assert!(list.status.success(), "list-tabs failed: {}", stderr(&list));
+    let s = stdout(&list);
+    assert!(
+        s.contains(&tid),
+        "expected target_id in list-tabs output: {}",
+        s
+    );
+
+    run_live(&["close-session", &sid]);
+}
+
+#[test]
+#[cfg_attr(not(target_os = "macos"), ignore)]
+#[serial]
+fn test_wait_for_ms() {
+    let _daemon = start_test_daemon();
+    let profile = first_profile();
+
+    let open = run_live(&["open-session", &profile]);
+    let sid = parse_json_field(&stdout(&open), "session_id");
+
+    let tab = run_live(&["new-tab", &sid]);
+    let tid = parse_json_field(&stdout(&tab), "target_id");
+
+    let wait = run_live(&["wait-for", &sid, &tid, "--ms", "100"]);
+    assert!(
+        wait.status.success(),
+        "wait-for --ms failed: {}",
+        stderr(&wait)
+    );
+
+    run_live(&["close-session", &sid]);
+}
+
+#[test]
+#[cfg_attr(not(target_os = "macos"), ignore)]
+#[serial]
+fn test_snapshot_save_list_delete() {
+    let _daemon = start_test_daemon();
+    let profile = first_profile();
+
+    let open = run_live(&["open-session", &profile]);
+    let sid = parse_json_field(&stdout(&open), "session_id");
+
+    let tab = run_live(&["new-tab", &sid]);
+    let tid = parse_json_field(&stdout(&tab), "target_id");
+
+    run_live(&["navigate", &sid, &tid, "https://example.com"]);
+
+    // Save snapshot
+    let save = run_live(&["save-snapshot", &sid, &tid]);
+    assert!(
+        save.status.success(),
+        "save-snapshot failed: {}",
+        stderr(&save)
+    );
+
+    // List snapshots via daemon
+    let list = run_live(&["list-snapshots"]);
+    assert!(
+        list.status.success(),
+        "list-snapshots failed: {}",
+        stderr(&list)
+    );
+    let s = stdout(&list);
+    assert!(
+        s.trim_start().starts_with('['),
+        "expected JSON array: {}",
+        s
+    );
+
+    run_live(&["close-session", &sid]);
+}
+
+#[test]
+#[cfg_attr(not(target_os = "macos"), ignore)]
+#[serial]
+fn test_tab_state_save_restore() {
+    let _daemon = start_test_daemon();
+    let profile = first_profile();
+
+    let open = run_live(&["open-session", &profile]);
+    let sid = parse_json_field(&stdout(&open), "session_id");
+
+    let tab = run_live(&["new-tab", &sid]);
+    let _tid = parse_json_field(&stdout(&tab), "target_id");
+
+    // Save tab state
+    let save = run_live(&["save-tab-state", &sid]);
+    assert!(
+        save.status.success(),
+        "save-tab-state failed: {}",
+        stderr(&save)
+    );
+
+    // Restore tab state
+    let restore = run_live(&["restore-tab-state", &sid]);
+    assert!(
+        restore.status.success(),
+        "restore-tab-state failed: {}",
+        stderr(&restore)
+    );
+
+    run_live(&["close-session", &sid]);
+}
+
+// ─────────────────────────────────────────────────────────────
+// Chrome tests — interactions
+// ─────────────────────────────────────────────────────────────
+
+#[test]
+#[cfg_attr(not(target_os = "macos"), ignore)]
+#[serial]
+fn test_cli_click() {
+    let _daemon = start_test_daemon();
+    let profile = first_profile();
+
+    let open = run_live(&["open-session", &profile]);
+    let sid = parse_json_field(&stdout(&open), "session_id");
+
+    let tab = run_live(&["new-tab", &sid]);
+    let tid = parse_json_field(&stdout(&tab), "target_id");
+
+    run_live(&[
+        "navigate",
+        &sid,
+        &tid,
+        "https://the-internet.herokuapp.com/checkboxes",
+    ]);
+
+    // Click the first checkbox
+    let click = run_live(&["click", &sid, &tid, "input[type=checkbox]"]);
+    assert!(click.status.success(), "click failed: {}", stderr(&click));
+
+    // Verify the checkbox is now checked
+    let eval = run_live(&[
+        "evaluate",
+        &sid,
+        &tid,
+        "document.querySelector('input[type=checkbox]').checked",
+    ]);
+    assert!(
+        eval.status.success(),
+        "evaluate after click failed: {}",
+        stderr(&eval)
+    );
+    assert!(
+        stdout(&eval).contains("true"),
+        "expected checkbox to be checked: {}",
+        stdout(&eval)
+    );
+
+    run_live(&["close-session", &sid]);
+}
+
+#[test]
+#[cfg_attr(not(target_os = "macos"), ignore)]
+#[serial]
+fn test_cli_fill_input() {
+    let _daemon = start_test_daemon();
+    let profile = first_profile();
+
+    let open = run_live(&["open-session", &profile]);
+    let sid = parse_json_field(&stdout(&open), "session_id");
+
+    let tab = run_live(&["new-tab", &sid]);
+    let tid = parse_json_field(&stdout(&tab), "target_id");
+
+    run_live(&[
+        "navigate",
+        &sid,
+        &tid,
+        "https://the-internet.herokuapp.com/login",
+    ]);
+    run_live(&["wait-for", &sid, &tid, "--selector", "#username"]);
+
+    // Fill the username input
+    let fill = run_live(&["fill", &sid, &tid, "#username", "tomsmith"]);
+    assert!(fill.status.success(), "fill failed: {}", stderr(&fill));
+
+    // Verify value was set
+    let eval = run_live(&[
+        "evaluate",
+        &sid,
+        &tid,
+        "document.querySelector('#username').value",
+    ]);
+    assert!(
+        eval.status.success(),
+        "evaluate after fill failed: {}",
+        stderr(&eval)
+    );
+    assert!(
+        stdout(&eval).contains("tomsmith"),
+        "expected 'tomsmith' in input value: {}",
+        stdout(&eval)
+    );
+
+    run_live(&["close-session", &sid]);
+}
+
+#[test]
+#[cfg_attr(not(target_os = "macos"), ignore)]
+#[serial]
+fn test_cli_fill_textarea() {
+    let _daemon = start_test_daemon();
+    let profile = first_profile();
+
+    let open = run_live(&["open-session", &profile]);
+    let sid = parse_json_field(&stdout(&open), "session_id");
+
+    let tab = run_live(&["new-tab", &sid]);
+    let tid = parse_json_field(&stdout(&tab), "target_id");
+
+    run_live(&[
+        "navigate",
+        &sid,
+        &tid,
+        "https://the-internet.herokuapp.com/login",
+    ]);
+    run_live(&["wait-for", &sid, &tid, "--selector", "form"]);
+
+    // Inject a textarea into the page
+    run_live(&["evaluate", &sid, &tid,
+        "const ta = document.createElement('textarea'); ta.id = 'test-ta'; document.body.appendChild(ta);"]);
+
+    // Fill the textarea
+    let fill = run_live(&["fill", &sid, &tid, "#test-ta", "hello textarea"]);
+    assert!(
+        fill.status.success(),
+        "fill on textarea failed: {}",
+        stderr(&fill)
+    );
+
+    // Verify value was set
+    let eval = run_live(&[
+        "evaluate",
+        &sid,
+        &tid,
+        "document.querySelector('#test-ta').value",
+    ]);
+    assert!(
+        eval.status.success(),
+        "evaluate after fill on textarea failed: {}",
+        stderr(&eval)
+    );
+    assert!(
+        stdout(&eval).contains("hello textarea"),
+        "expected 'hello textarea' in textarea value: {}",
+        stdout(&eval)
+    );
+
+    run_live(&["close-session", &sid]);
+}
+
+#[test]
+#[cfg_attr(not(target_os = "macos"), ignore)]
+#[serial]
+fn test_cli_type_text() {
+    let _daemon = start_test_daemon();
+    let profile = first_profile();
+
+    let open = run_live(&["open-session", &profile]);
+    let sid = parse_json_field(&stdout(&open), "session_id");
+
+    let tab = run_live(&["new-tab", &sid]);
+    let tid = parse_json_field(&stdout(&tab), "target_id");
+
+    run_live(&[
+        "navigate",
+        &sid,
+        &tid,
+        "https://the-internet.herokuapp.com/login",
+    ]);
+    run_live(&["wait-for", &sid, &tid, "--selector", "#username"]);
+
+    // Click to focus the username input, then type into it
+    run_live(&["click", &sid, &tid, "#username"]);
+    let type_out = run_live(&["type-text", &sid, &tid, "tomsmith"]);
+    assert!(
+        type_out.status.success(),
+        "type-text failed: {}",
+        stderr(&type_out)
+    );
+
+    // Verify value was typed
+    let eval = run_live(&[
+        "evaluate",
+        &sid,
+        &tid,
+        "document.querySelector('#username').value",
+    ]);
+    assert!(
+        eval.status.success(),
+        "evaluate after type-text failed: {}",
+        stderr(&eval)
+    );
+    assert!(
+        stdout(&eval).contains("tomsmith"),
+        "expected 'tomsmith' in input value: {}",
+        stdout(&eval)
+    );
+
+    run_live(&["close-session", &sid]);
+}
+
+#[test]
+#[cfg_attr(not(target_os = "macos"), ignore)]
+#[serial]
+fn test_cli_select() {
+    let _daemon = start_test_daemon();
+    let profile = first_profile();
+
+    let open = run_live(&["open-session", &profile]);
+    let sid = parse_json_field(&stdout(&open), "session_id");
+
+    let tab = run_live(&["new-tab", &sid]);
+    let tid = parse_json_field(&stdout(&tab), "target_id");
+
+    run_live(&[
+        "navigate",
+        &sid,
+        &tid,
+        "https://the-internet.herokuapp.com/dropdown",
+    ]);
+
+    // Select option 2 by its value attribute ("2"), not its display text
+    let sel = run_live(&["select", &sid, &tid, "#dropdown", "2"]);
+    assert!(sel.status.success(), "select failed: {}", stderr(&sel));
+
+    // Verify selectedIndex changed (option with value="2" is at index 2)
+    let eval = run_live(&[
+        "evaluate",
+        &sid,
+        &tid,
+        "document.querySelector('#dropdown').selectedIndex",
+    ]);
+    assert!(
+        eval.status.success(),
+        "evaluate after select failed: {}",
+        stderr(&eval)
+    );
+    assert!(
+        stdout(&eval).contains("2"),
+        "expected selectedIndex 2: {}",
+        stdout(&eval)
+    );
+
+    run_live(&["close-session", &sid]);
+}
+
+#[test]
+#[cfg_attr(not(target_os = "macos"), ignore)]
+#[serial]
+fn test_cli_scroll_y() {
+    let _daemon = start_test_daemon();
+    let profile = first_profile();
+
+    let open = run_live(&["open-session", &profile]);
+    let sid = parse_json_field(&stdout(&open), "session_id");
+
+    let tab = run_live(&["new-tab", &sid]);
+    let tid = parse_json_field(&stdout(&tab), "target_id");
+
+    run_live(&["navigate", &sid, &tid, "https://example.com"]);
+
+    // Scroll — just assert no error (example.com may not be scrollable)
+    let scroll = run_live(&["scroll", &sid, &tid, "--y", "100"]);
+    assert!(
+        scroll.status.success(),
+        "scroll failed: {}",
+        stderr(&scroll)
+    );
+
+    run_live(&["close-session", &sid]);
+}
+
+#[test]
+#[cfg_attr(not(target_os = "macos"), ignore)]
+#[serial]
+fn test_cli_invalid_selector_error() {
+    let _daemon = start_test_daemon();
+    let profile = first_profile();
+
+    let open = run_live(&["open-session", &profile]);
+    let sid = parse_json_field(&stdout(&open), "session_id");
+
+    let tab = run_live(&["new-tab", &sid]);
+    let tid = parse_json_field(&stdout(&tab), "target_id");
+
+    run_live(&["navigate", &sid, &tid, "https://example.com"]);
+
+    // Click a nonexistent selector — should fail
+    let click = run_live(&["click", &sid, &tid, "#nonexistent-selector-xyz"]);
+    assert!(
+        !click.status.success(),
+        "expected non-zero exit for invalid selector"
+    );
+    assert!(!stderr(&click).is_empty(), "expected error on stderr");
+
+    run_live(&["close-session", &sid]);
+}
+
+// ─────────────────────────────────────────────────────────────
+// Chrome tests — navigation waits
+// ─────────────────────────────────────────────────────────────
+
+#[test]
+#[cfg_attr(not(target_os = "macos"), ignore)]
+#[serial]
+fn test_cli_wait_for_selector() {
+    let _daemon = start_test_daemon();
+    let profile = first_profile();
+
+    let open = run_live(&["open-session", &profile]);
+    let sid = parse_json_field(&stdout(&open), "session_id");
+
+    let tab = run_live(&["new-tab", &sid]);
+    let tid = parse_json_field(&stdout(&tab), "target_id");
+
+    run_live(&["navigate", &sid, &tid, "https://example.com"]);
+
+    let wait = run_live(&["wait-for", &sid, &tid, "--selector", "h1"]);
+    assert!(
+        wait.status.success(),
+        "wait-for --selector h1 failed: {}",
+        stderr(&wait)
+    );
+
+    run_live(&["close-session", &sid]);
+}
+
+#[test]
+#[cfg_attr(not(target_os = "macos"), ignore)]
+#[serial]
+fn test_cli_wait_for_url_substring() {
+    let _daemon = start_test_daemon();
+    let profile = first_profile();
+
+    let open = run_live(&["open-session", &profile]);
+    let sid = parse_json_field(&stdout(&open), "session_id");
+
+    let tab = run_live(&["new-tab", &sid]);
+    let tid = parse_json_field(&stdout(&tab), "target_id");
+
+    run_live(&["navigate", &sid, &tid, "https://example.com"]);
+
+    let wait = run_live(&["wait-for", &sid, &tid, "--url", "example"]);
+    assert!(
+        wait.status.success(),
+        "wait-for --url 'example' failed: {}",
+        stderr(&wait)
+    );
+
+    run_live(&["close-session", &sid]);
+}
+
+// ─────────────────────────────────────────────────────────────
+// Chrome tests — anonymization
+// ─────────────────────────────────────────────────────────────
+
+#[test]
+#[cfg_attr(not(target_os = "macos"), ignore)]
+#[serial]
+fn test_cli_anonymize_get_content() {
+    let _daemon = start_test_daemon();
+    let profile = first_profile();
+
+    let open = run_live(&["open-session", &profile, "--anonymize"]);
+    assert!(
+        open.status.success(),
+        "open-session --anonymize failed: {}",
+        stderr(&open)
+    );
+    let sid = parse_json_field(&stdout(&open), "session_id");
+
+    let tab = run_live(&["new-tab", &sid]);
+    let tid = parse_json_field(&stdout(&tab), "target_id");
+
+    run_live(&["navigate", &sid, &tid, "https://example.com"]);
+
+    // Inject PII into the page body
+    run_live(&[
+        "evaluate",
+        &sid,
+        &tid,
+        "document.body.innerHTML = '<p>Email: test@example.com Phone: 555-867-5309</p>'",
+    ]);
+
+    // get-content should return anonymized output
+    let content = run_live(&["get-content", &sid, &tid]);
+    assert!(
+        content.status.success(),
+        "get-content failed: {}",
+        stderr(&content)
+    );
+    let s = stdout(&content);
+    assert!(
+        s.contains("[EMAIL:"),
+        "expected [EMAIL: token in anonymized content: {}",
+        s
+    );
+    assert!(
+        !s.contains("test@example.com"),
+        "raw email must not appear in anonymized content: {}",
+        s
+    );
+
+    run_live(&["close-session", &sid]);
+}
+
+#[test]
+#[cfg_attr(not(target_os = "macos"), ignore)]
+#[serial]
+fn test_cli_anonymize_screenshot_blocked() {
+    let _daemon = start_test_daemon();
+    let profile = first_profile();
+
+    let open = run_live(&["open-session", &profile, "--anonymize"]);
+    assert!(
+        open.status.success(),
+        "open-session --anonymize failed: {}",
+        stderr(&open)
+    );
+    let sid = parse_json_field(&stdout(&open), "session_id");
+
+    let tab = run_live(&["new-tab", &sid]);
+    let tid = parse_json_field(&stdout(&tab), "target_id");
+
+    // Screenshot is blocked in anonymize mode: call_tool returns a JSON error object
+    // (not a process exit code), so check stdout for the error message.
+    let shot = run_live(&["screenshot", &sid, &tid]);
+    let out = stdout(&shot);
+    assert!(
+        out.contains("AnonymizationActive") || out.contains("blocked"),
+        "expected screenshot-blocked error in output, got: {}",
+        out
+    );
+
+    run_live(&["close-session", &sid]);
+}
+
+// ─────────────────────────────────────────────────────────────
+// Chrome tests — security
+// ─────────────────────────────────────────────────────────────
+
+#[test]
+#[cfg_attr(not(target_os = "macos"), ignore)]
+#[serial]
+fn test_cli_allowed_domains_blocks_nav() {
+    let _daemon = start_test_daemon();
+    let profile = first_profile();
+
+    let open = run_live(&["open-session", &profile, "--allowed-domains", "example.com"]);
+    assert!(
+        open.status.success(),
+        "open-session --allowed-domains failed: {}",
+        stderr(&open)
+    );
+    let sid = parse_json_field(&stdout(&open), "session_id");
+
+    let tab = run_live(&["new-tab", &sid]);
+    let tid = parse_json_field(&stdout(&tab), "target_id");
+
+    // Navigate to allowed domain — should succeed
+    let nav_ok = run_live(&["navigate", &sid, &tid, "https://example.com"]);
+    assert!(
+        nav_ok.status.success(),
+        "navigate to allowed domain failed: {}",
+        stderr(&nav_ok)
+    );
+
+    // Navigate to disallowed domain — should fail
+    let nav_blocked = run_live(&["navigate", &sid, &tid, "https://httpbin.org"]);
+    assert!(
+        !nav_blocked.status.success(),
+        "expected navigation to httpbin.org to be blocked"
+    );
+    let err = stderr(&nav_blocked);
+    assert!(
+        err.contains("domain") || err.contains("allow") || err.contains("not permitted"),
+        "expected domain restriction error: {}",
+        err
+    );
+
+    run_live(&["close-session", &sid]);
+}
+
+// ─────────────────────────────────────────────────────────────
+// Chrome tests — NER anonymization (requires --features ner build)
+// ─────────────────────────────────────────────────────────────
+
+/// Requires: `cargo build --release --features ner` + model at ~/.pagerunner/models/ner.onnx
+/// Run locally with: cargo test --test cli_tools_integration test_cli_ner_anonymize_person_masked -- --ignored
+#[test]
+#[ignore] // requires `cargo build --release --features ner` + model at ~/.pagerunner/models/ner.onnx
+#[serial]
+fn test_cli_ner_anonymize_person_masked() {
+    // Uses the NER-enabled release binary as the test daemon so that PERSON/ORG
+    // detection is active. Falls back to debug binary if release binary is absent.
+    let _daemon = start_ner_test_daemon();
+    let profile = first_profile();
+
+    let open = run_live(&["open-session", &profile, "--anonymize"]);
+    assert!(
+        open.status.success(),
+        "open-session --anonymize failed: {}",
+        stderr(&open)
+    );
+    let sid = parse_json_field(&stdout(&open), "session_id");
+
+    let tab = run_live(&["new-tab", &sid]);
+    let tid = parse_json_field(&stdout(&tab), "target_id");
+
+    run_live(&["navigate", &sid, &tid, "https://example.com"]);
+
+    // Inject content with named persons and organisations
+    run_live(&[
+        "evaluate",
+        &sid,
+        &tid,
+        "document.body.innerHTML = '<p>Alice Smith is CEO of Acme Corp.</p>'",
+    ]);
+
+    // get-content should tokenize PERSON and ORG with NER build
+    let content = run_live(&["get-content", &sid, &tid]);
+    assert!(
+        content.status.success(),
+        "get-content failed: {}",
+        stderr(&content)
+    );
+    let s = stdout(&content);
+    assert!(
+        s.contains("[PERSON:"),
+        "expected [PERSON: token in NER-anonymized content: {}",
+        s
+    );
+
+    run_live(&["close-session", &sid]);
+}
+
+// ─────────────────────────────────────────────────────────────
+// Helpers used by Chrome tests
+// ─────────────────────────────────────────────────────────────
+
+/// Extract a string field from a JSON object string.
+fn parse_json_field(json_str: &str, field: &str) -> String {
+    let v: serde_json::Value = serde_json::from_str(json_str)
+        .unwrap_or_else(|e| panic!("parse_json_field: invalid JSON {:?}: {}", json_str, e));
+    v[field]
+        .as_str()
+        .unwrap_or_else(|| {
+            panic!(
+                "parse_json_field: field '{}' not found in {}",
+                field, json_str
+            )
+        })
+        .to_string()
+}
+
+/// Returns the name of the first configured profile.
+fn first_profile() -> String {
+    let out = run_live(&["list-profiles"]);
+    let profiles: serde_json::Value =
+        serde_json::from_str(&stdout(&out)).expect("list-profiles did not return JSON");
+    profiles[0]["name"]
+        .as_str()
+        .expect("no profiles configured")
+        .to_string()
+}

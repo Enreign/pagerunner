@@ -1,0 +1,1058 @@
+mod anonymizer;
+mod audit;
+mod browser;
+mod cdp;
+mod chrome;
+mod chrome_detect;
+mod cli_tools;
+mod config;
+mod daemon;
+mod daemon_client;
+mod db;
+mod error;
+mod init;
+mod ipc;
+mod mcp_server;
+mod network_guard;
+mod sanitizer;
+mod security;
+mod session;
+mod snapshot;
+mod stealth;
+
+use chrono::{DateTime, Utc};
+use clap::{Parser, Subcommand};
+
+#[derive(Parser)]
+#[command(name = "pagerunner", about = "Browser automation MCP server")]
+struct Cli {
+    #[command(subcommand)]
+    command: Commands,
+}
+
+#[derive(Subcommand)]
+enum Commands {
+    /// Start as MCP server (stdio transport)
+    Mcp,
+    /// List configured profiles
+    Profiles,
+    /// Print example config
+    ExampleConfig,
+    /// Run as persistent background daemon (Unix socket server)
+    Daemon,
+    /// Detect Chrome profiles and write ~/.pagerunner/config.toml
+    Init {
+        /// Overwrite existing config
+        #[arg(long)]
+        force: bool,
+    },
+    /// Show config, daemon, and database status
+    Status,
+    /// View audit log entries
+    Audit {
+        /// Filter by session ID
+        #[arg(long)]
+        session: Option<String>,
+        /// Show last N events (default: 50)
+        #[arg(long, default_value = "50")]
+        tail: usize,
+        /// Show events since this RFC 3339 datetime (e.g. 2026-03-20T14:00:00Z)
+        #[arg(long)]
+        since: Option<String>,
+    },
+    /// List Chrome profiles (JSON output for agent use; see also `profiles` for human-readable)
+    ListProfiles,
+    /// Launch Chrome for a named profile
+    OpenSession {
+        profile: String,
+        #[arg(long)]
+        stealth: bool,
+        /// Comma-separated domain allowlist (e.g. github.com,docs.rs)
+        #[arg(long, value_delimiter = ',')]
+        allowed_domains: Option<Vec<String>>,
+        #[arg(long)]
+        max_navigations: Option<u64>,
+        #[arg(long)]
+        sanitize_content: Option<bool>,
+        #[arg(long)]
+        scan_injections: Option<bool>,
+        /// Comma-separated tool allowlist
+        #[arg(long, value_delimiter = ',')]
+        allowed_tools: Option<Vec<String>>,
+        /// Comma-separated tool blocklist
+        #[arg(long, value_delimiter = ',')]
+        blocked_tools: Option<Vec<String>>,
+        #[arg(long)]
+        anonymize: bool,
+        #[arg(long)]
+        anonymization_profile: Option<String>,
+        /// Comma-separated entity types: EMAIL,PHONE,CREDIT_CARD,IBAN,SSN,IP
+        #[arg(long, value_delimiter = ',')]
+        anonymization_entities: Option<Vec<String>>,
+        /// tokenize or redact
+        #[arg(long)]
+        anonymization_mode: Option<String>,
+    },
+    /// Close a Chrome session
+    CloseSession { session_id: String },
+    /// List open sessions
+    ListSessions,
+    /// List open tabs in a session
+    ListTabs { session_id: String },
+    /// Open a new tab in a session
+    NewTab {
+        session_id: String,
+        #[arg(long)]
+        url: Option<String>,
+    },
+    /// Navigate to a URL
+    Navigate {
+        session_id: String,
+        target_id: String,
+        url: String,
+    },
+    /// Wait for a CSS selector, URL pattern, or fixed delay
+    WaitFor {
+        session_id: String,
+        target_id: String,
+        #[arg(long)]
+        selector: Option<String>,
+        #[arg(long)]
+        url: Option<String>,
+        #[arg(long)]
+        ms: Option<u64>,
+        #[arg(long)]
+        timeout_ms: Option<u64>,
+    },
+    /// Get page text content
+    GetContent {
+        session_id: String,
+        target_id: String,
+    },
+    /// Take a screenshot
+    Screenshot {
+        session_id: String,
+        target_id: String,
+        /// Return base64 inline instead of writing a file
+        #[arg(long)]
+        base64: bool,
+    },
+    /// Evaluate a JavaScript expression
+    Evaluate {
+        session_id: String,
+        target_id: String,
+        expression: String,
+    },
+    /// Click an element by CSS selector
+    Click {
+        session_id: String,
+        target_id: String,
+        selector: String,
+    },
+    /// Type text (optionally focus a selector first)
+    TypeText {
+        session_id: String,
+        target_id: String,
+        text: String,
+        #[arg(long)]
+        selector: Option<String>,
+    },
+    /// Set an input field's value (works with React/Vue/Angular)
+    Fill {
+        session_id: String,
+        target_id: String,
+        selector: String,
+        value: String,
+    },
+    /// Choose an option in a <select> dropdown
+    Select {
+        session_id: String,
+        target_id: String,
+        selector: String,
+        value: String,
+    },
+    /// Scroll the page or scroll an element into view
+    Scroll {
+        session_id: String,
+        target_id: String,
+        #[arg(long)]
+        selector: Option<String>,
+        #[arg(long)]
+        x: Option<i64>,
+        #[arg(long)]
+        y: Option<i64>,
+    },
+    /// Save cookies and localStorage for an origin
+    SaveSnapshot {
+        session_id: String,
+        target_id: String,
+        /// Origin URL to capture (omit for all origins in session)
+        #[arg(long)]
+        origin: Option<String>,
+    },
+    /// Restore cookies and localStorage from a saved snapshot
+    RestoreSnapshot {
+        session_id: String,
+        target_id: String,
+        origin: String,
+        /// Restore from this profile instead of current session's profile
+        #[arg(long)]
+        from_profile: Option<String>,
+    },
+    /// List saved browser state snapshots
+    ListSnapshots {
+        /// Filter to this profile only
+        #[arg(long)]
+        profile: Option<String>,
+        /// Show all versions, not just latest per origin
+        #[arg(long)]
+        all: bool,
+    },
+    /// Delete saved snapshots for a profile+origin
+    DeleteSnapshot {
+        profile: String,
+        origin: String,
+        /// Unix microsecond timestamp of specific version to delete (omit for all)
+        #[arg(long)]
+        saved_at: Option<i64>,
+    },
+    /// Save tab URLs and titles for later restoration
+    SaveTabState { session_id: String },
+    /// Reopen tabs from the most recently saved tab state
+    RestoreTabState { session_id: String },
+    /// Store a value in the encrypted KV store
+    KvSet {
+        namespace: String,
+        key: String,
+        value: String,
+    },
+    /// Retrieve a value from the encrypted KV store
+    KvGet { namespace: String, key: String },
+    /// Delete a key from the encrypted KV store
+    KvDelete { namespace: String, key: String },
+    /// List keys in a namespace
+    KvList {
+        namespace: String,
+        /// Filter by key prefix
+        #[arg(long)]
+        prefix: Option<String>,
+        /// Return only key names, no values
+        #[arg(long)]
+        keys_only: bool,
+    },
+    /// Delete all keys in a namespace
+    KvClear { namespace: String },
+    /// Download the NER model for PERSON/ORG name detection (requires --features ner build)
+    DownloadModel,
+}
+
+#[cfg(feature = "ner")]
+fn download_ner_model() -> anyhow::Result<()> {
+    use crate::anonymizer::ner::{verify_model_hash, MODEL_SHA256, MODEL_URL, TOKENIZER_URL};
+
+    let home = dirs::home_dir().ok_or_else(|| anyhow::anyhow!("Cannot find home directory"))?;
+    let model_dir = home.join(".pagerunner/models");
+    let model_path = model_dir.join("ner.onnx");
+    let tok_path = model_dir.join("tokenizer.json");
+
+    std::fs::create_dir_all(&model_dir)?;
+
+    // Model file — idempotent
+    if model_path.exists() && verify_model_hash(&model_path).is_ok() {
+        println!("NER model already up to date: {}", model_path.display());
+    } else {
+        if model_path.exists() {
+            eprintln!("Existing model has wrong hash — re-downloading.");
+            std::fs::remove_file(&model_path)?;
+        }
+        download_file(MODEL_URL, &model_path, Some(MODEL_SHA256))?;
+        println!("NER model downloaded: {}", model_path.display());
+    }
+
+    // Tokenizer — no hash check (small file, updated together with model)
+    if tok_path.exists() {
+        println!("Tokenizer already present: {}", tok_path.display());
+    } else {
+        download_file(TOKENIZER_URL, &tok_path, None)?;
+        println!("Tokenizer downloaded: {}", tok_path.display());
+    }
+
+    Ok(())
+}
+
+#[cfg(feature = "ner")]
+fn download_file(
+    url: &str,
+    dest: &std::path::Path,
+    expected_sha256: Option<&str>,
+) -> anyhow::Result<()> {
+    use sha2::{Digest, Sha256};
+    use std::io::{Read, Write};
+
+    eprintln!("Downloading {} -> {}", url, dest.display());
+
+    let client = reqwest::blocking::Client::new();
+    let mut resp = client
+        .get(url)
+        .send()
+        .map_err(|e| anyhow::anyhow!("Download failed: {}", e))?;
+
+    let total = resp.content_length();
+    let mut downloaded = 0u64;
+    let mut hasher = Sha256::new();
+    let tmp_path = dest.with_extension("tmp");
+    let mut file = std::fs::File::create(&tmp_path)?;
+    let mut buf = vec![0u8; 65536];
+
+    loop {
+        let n = resp.read(&mut buf)?;
+        if n == 0 {
+            break;
+        }
+        file.write_all(&buf[..n])?;
+        hasher.update(&buf[..n]);
+        downloaded += n as u64;
+        if let Some(t) = total {
+            eprint!(
+                "\r  {:.1} MB / {:.1} MB",
+                downloaded as f64 / 1e6,
+                t as f64 / 1e6
+            );
+        } else {
+            eprint!("\r  {:.1} MB", downloaded as f64 / 1e6);
+        }
+    }
+    eprintln!();
+    drop(file);
+
+    if let Some(expected) = expected_sha256 {
+        let actual = format!("{:x}", hasher.finalize());
+        if actual != expected {
+            std::fs::remove_file(&tmp_path).ok();
+            return Err(anyhow::anyhow!(
+                "Hash mismatch!\nExpected: {}\nActual:   {}\nFile deleted.",
+                expected,
+                actual
+            ));
+        }
+    }
+
+    std::fs::rename(&tmp_path, dest)?;
+    Ok(())
+}
+
+fn format_audit_event(event: &crate::audit::AuditEvent) -> String {
+    let ts = event.timestamp.format("%Y-%m-%d %H:%M:%S UTC");
+    match &event.kind {
+        crate::audit::AuditEventKind::SessionOpened {
+            session_id,
+            profile,
+            stealth,
+            ..
+        } => {
+            let sid = if session_id.len() >= 8 {
+                &session_id[..8]
+            } else {
+                session_id
+            };
+            format!(
+                "[{}] SESSION_OPENED  session={} profile={} stealth={}",
+                ts, sid, profile, stealth
+            )
+        }
+        crate::audit::AuditEventKind::SessionClosed { session_id } => {
+            let sid = if session_id.len() >= 8 {
+                &session_id[..8]
+            } else {
+                session_id
+            };
+            format!("[{}] SESSION_CLOSED  session={}", ts, sid)
+        }
+        crate::audit::AuditEventKind::ToolCall {
+            session_id,
+            tool,
+            args_summary,
+            outcome,
+            security_violation,
+        } => {
+            let sid = session_id.as_deref().unwrap_or("-");
+            let sid = if sid.len() >= 8 { &sid[..8] } else { sid };
+            let ok = matches!(outcome, crate::audit::ToolOutcome::Success);
+            let sv = if *security_violation {
+                " [SECURITY]"
+            } else {
+                ""
+            };
+            let status = if ok { "OK" } else { "ERR" };
+            format!(
+                "[{}] TOOL_CALL {}{} session={} tool={} args={}",
+                ts, status, sv, sid, tool, args_summary
+            )
+        }
+        crate::audit::AuditEventKind::SecurityEvent {
+            session_id,
+            kind,
+            detail,
+        } => {
+            let sid = session_id.as_deref().unwrap_or("-");
+            let sid = if sid.len() >= 8 { &sid[..8] } else { sid };
+            format!(
+                "[{}] SECURITY {:?} session={} detail={}",
+                ts, kind, sid, detail
+            )
+        }
+        crate::audit::AuditEventKind::ContentAnonymized {
+            session_id,
+            target_id,
+            mode,
+            entity_counts,
+        } => {
+            let sid = if session_id.len() >= 8 {
+                &session_id[..8]
+            } else {
+                session_id
+            };
+            let counts: Vec<String> = entity_counts
+                .iter()
+                .map(|(k, v)| format!("{}:{}", k, v))
+                .collect();
+            format!(
+                "[{}] CONTENT_ANONYMIZED session={} target={} mode={} counts={}",
+                ts,
+                sid,
+                target_id,
+                mode,
+                counts.join(",")
+            )
+        }
+    }
+}
+
+#[tokio::main]
+async fn main() -> anyhow::Result<()> {
+    tracing_subscriber::fmt()
+        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
+        .with_writer(std::io::stderr)
+        .init();
+
+    let cli = Cli::parse();
+    match cli.command {
+        Commands::Mcp => mcp_server::run().await?,
+        Commands::Profiles => {
+            let config = config::PagerunnerConfig::load()?;
+            for p in &config.profiles {
+                println!("{}: {}", p.name, p.user_data_dir);
+            }
+        }
+        Commands::ExampleConfig => {
+            println!("{}", include_str!("../config.example.toml"));
+        }
+        Commands::Daemon => daemon::run().await?,
+        Commands::Init { force } => {
+            if let Err(e) = crate::init::run(force) {
+                eprintln!("Error: {}", e);
+                std::process::exit(1);
+            }
+        }
+        Commands::Status => {
+            let home =
+                dirs::home_dir().ok_or_else(|| anyhow::anyhow!("Cannot find home directory"))?;
+            let config_path = home.join(".pagerunner/config.toml");
+            let socket_path = home.join(ipc::SOCKET_SUBPATH);
+            let db_path = home.join(".pagerunner/state.db");
+
+            // Config
+            if config_path.exists() {
+                match config::PagerunnerConfig::load() {
+                    Ok(cfg) if cfg.profiles.is_empty() => {
+                        println!(
+                            "Config:  {} ⚠️  (no profiles — run `pagerunner init`)",
+                            config_path.display()
+                        );
+                    }
+                    Ok(cfg) => {
+                        println!(
+                            "Config:  {} ✓ ({} profile{})",
+                            config_path.display(),
+                            cfg.profiles.len(),
+                            if cfg.profiles.len() == 1 { "" } else { "s" }
+                        );
+                        for p in &cfg.profiles {
+                            println!("  • {}  ({})", p.name, p.display_name);
+                        }
+                    }
+                    Err(e) => println!("Config:  {} ✗ ({})", config_path.display(), e),
+                }
+            } else {
+                println!(
+                    "Config:  {} ✗ (not found — run `pagerunner init`)",
+                    config_path.display()
+                );
+            }
+
+            // Daemon
+            let daemon_ok = daemon_client::DaemonClient::connect().await.is_ok();
+            if daemon_ok {
+                println!("Daemon:  {} ✓ running", socket_path.display());
+            } else {
+                println!(
+                    "Daemon:  {} ✗ not running  (run `pagerunner daemon &` for multi-session use)",
+                    socket_path.display()
+                );
+            }
+
+            // DB
+            if db_path.exists() {
+                println!("DB:      {} ✓", db_path.display());
+            } else {
+                println!("DB:      {} (created on first use)", db_path.display());
+            }
+
+            // NER model
+            #[cfg(feature = "ner")]
+            {
+                let model_path = home.join(".pagerunner/models/ner.onnx");
+                let ner_config_disabled = crate::config::PagerunnerConfig::load()
+                    .map(|c| c.ner.enabled == Some(false))
+                    .unwrap_or(false);
+                let ner_line = if ner_config_disabled {
+                    "disabled in config".to_string()
+                } else if !model_path.exists() {
+                    "missing  (run `pagerunner download-model` to install)".to_string()
+                } else {
+                    match crate::anonymizer::ner::verify_model_hash(&model_path) {
+                        Ok(()) => format!("present, hash ok  ({})", model_path.display()),
+                        Err(e) => format!("CORRUPT: {}  (run `pagerunner download-model`)", e),
+                    }
+                };
+                println!("NER:     {}", ner_line);
+            }
+            #[cfg(not(feature = "ner"))]
+            println!("NER:     not compiled  (rebuild with --features ner to enable)");
+        }
+        Commands::ListProfiles => {
+            let config = config::PagerunnerConfig::load()?;
+            crate::cli_tools::run_tool(
+                "list_profiles",
+                serde_json::json!({}),
+                crate::cli_tools::ScreenshotMode::File,
+                &config,
+            )
+            .await?;
+        }
+        Commands::OpenSession {
+            profile,
+            stealth,
+            allowed_domains,
+            max_navigations,
+            sanitize_content,
+            scan_injections,
+            allowed_tools,
+            blocked_tools,
+            anonymize,
+            anonymization_profile,
+            anonymization_entities,
+            anonymization_mode,
+        } => {
+            let config = config::PagerunnerConfig::load()?;
+            let mut args = serde_json::json!({"profile": profile});
+            if stealth {
+                args["stealth"] = serde_json::json!(true);
+            }
+            if let Some(v) = allowed_domains {
+                args["allowed_domains"] = serde_json::json!(v);
+            }
+            if let Some(v) = max_navigations {
+                args["max_navigations"] = serde_json::json!(v);
+            }
+            if let Some(v) = sanitize_content {
+                args["sanitize_content"] = serde_json::json!(v);
+            }
+            if let Some(v) = scan_injections {
+                args["scan_injections"] = serde_json::json!(v);
+            }
+            if let Some(v) = allowed_tools {
+                args["allowed_tools"] = serde_json::json!(v);
+            }
+            if let Some(v) = blocked_tools {
+                args["blocked_tools"] = serde_json::json!(v);
+            }
+            if anonymize {
+                args["anonymize"] = serde_json::json!(true);
+            }
+            if let Some(v) = anonymization_profile {
+                args["anonymization_profile"] = serde_json::json!(v);
+            }
+            if let Some(v) = anonymization_entities {
+                args["anonymization_entities"] = serde_json::json!(v);
+            }
+            if let Some(v) = anonymization_mode {
+                args["anonymization_mode"] = serde_json::json!(v);
+            }
+            crate::cli_tools::run_tool(
+                "open_session",
+                args,
+                crate::cli_tools::ScreenshotMode::File,
+                &config,
+            )
+            .await?;
+        }
+        Commands::CloseSession { session_id } => {
+            let config = config::PagerunnerConfig::load()?;
+            crate::cli_tools::run_tool(
+                "close_session",
+                serde_json::json!({"session_id": session_id}),
+                crate::cli_tools::ScreenshotMode::File,
+                &config,
+            )
+            .await?;
+        }
+        Commands::ListSessions => {
+            let config = config::PagerunnerConfig::load()?;
+            crate::cli_tools::run_tool(
+                "list_sessions",
+                serde_json::json!({}),
+                crate::cli_tools::ScreenshotMode::File,
+                &config,
+            )
+            .await?;
+        }
+        Commands::ListTabs { session_id } => {
+            let config = config::PagerunnerConfig::load()?;
+            crate::cli_tools::run_tool(
+                "list_tabs",
+                serde_json::json!({"session_id": session_id}),
+                crate::cli_tools::ScreenshotMode::File,
+                &config,
+            )
+            .await?;
+        }
+        Commands::NewTab { session_id, url } => {
+            let config = config::PagerunnerConfig::load()?;
+            let mut args = serde_json::json!({"session_id": session_id});
+            if let Some(u) = url {
+                args["url"] = serde_json::json!(u);
+            }
+            crate::cli_tools::run_tool(
+                "new_tab",
+                args,
+                crate::cli_tools::ScreenshotMode::File,
+                &config,
+            )
+            .await?;
+        }
+        Commands::Navigate {
+            session_id,
+            target_id,
+            url,
+        } => {
+            let config = config::PagerunnerConfig::load()?;
+            crate::cli_tools::run_tool(
+                "navigate",
+                serde_json::json!({"session_id": session_id, "target_id": target_id, "url": url}),
+                crate::cli_tools::ScreenshotMode::File,
+                &config,
+            )
+            .await?;
+        }
+        Commands::WaitFor {
+            session_id,
+            target_id,
+            selector,
+            url,
+            ms,
+            timeout_ms,
+        } => {
+            let config = config::PagerunnerConfig::load()?;
+            let mut args = serde_json::json!({"session_id": session_id, "target_id": target_id});
+            if let Some(v) = selector {
+                args["selector"] = serde_json::json!(v);
+            }
+            if let Some(v) = url {
+                args["url"] = serde_json::json!(v);
+            }
+            if let Some(v) = ms {
+                args["ms"] = serde_json::json!(v);
+            }
+            if let Some(v) = timeout_ms {
+                args["timeout_ms"] = serde_json::json!(v);
+            }
+            crate::cli_tools::run_tool(
+                "wait_for",
+                args,
+                crate::cli_tools::ScreenshotMode::File,
+                &config,
+            )
+            .await?;
+        }
+        Commands::GetContent {
+            session_id,
+            target_id,
+        } => {
+            let config = config::PagerunnerConfig::load()?;
+            crate::cli_tools::run_tool(
+                "get_content",
+                serde_json::json!({"session_id": session_id, "target_id": target_id}),
+                crate::cli_tools::ScreenshotMode::File,
+                &config,
+            )
+            .await?;
+        }
+        Commands::Screenshot {
+            session_id,
+            target_id,
+            base64,
+        } => {
+            let config = config::PagerunnerConfig::load()?;
+            let mode = if base64 {
+                crate::cli_tools::ScreenshotMode::Base64
+            } else {
+                crate::cli_tools::ScreenshotMode::File
+            };
+            crate::cli_tools::run_tool(
+                "screenshot",
+                serde_json::json!({"session_id": session_id, "target_id": target_id}),
+                mode,
+                &config,
+            )
+            .await?;
+        }
+        Commands::Evaluate {
+            session_id,
+            target_id,
+            expression,
+        } => {
+            let config = config::PagerunnerConfig::load()?;
+            crate::cli_tools::run_tool("evaluate",
+                serde_json::json!({"session_id": session_id, "target_id": target_id, "expression": expression}),
+                crate::cli_tools::ScreenshotMode::File, &config).await?;
+        }
+        Commands::Click {
+            session_id,
+            target_id,
+            selector,
+        } => {
+            let config = config::PagerunnerConfig::load()?;
+            crate::cli_tools::run_tool("click",
+                serde_json::json!({"session_id": session_id, "target_id": target_id, "selector": selector}),
+                crate::cli_tools::ScreenshotMode::File, &config).await?;
+        }
+        Commands::TypeText {
+            session_id,
+            target_id,
+            text,
+            selector,
+        } => {
+            let config = config::PagerunnerConfig::load()?;
+            let mut args =
+                serde_json::json!({"session_id": session_id, "target_id": target_id, "text": text});
+            if let Some(v) = selector {
+                args["selector"] = serde_json::json!(v);
+            }
+            crate::cli_tools::run_tool(
+                "type_text",
+                args,
+                crate::cli_tools::ScreenshotMode::File,
+                &config,
+            )
+            .await?;
+        }
+        Commands::Fill {
+            session_id,
+            target_id,
+            selector,
+            value,
+        } => {
+            let config = config::PagerunnerConfig::load()?;
+            crate::cli_tools::run_tool("fill",
+                serde_json::json!({"session_id": session_id, "target_id": target_id, "selector": selector, "value": value}),
+                crate::cli_tools::ScreenshotMode::File, &config).await?;
+        }
+        Commands::Select {
+            session_id,
+            target_id,
+            selector,
+            value,
+        } => {
+            let config = config::PagerunnerConfig::load()?;
+            crate::cli_tools::run_tool("select",
+                serde_json::json!({"session_id": session_id, "target_id": target_id, "selector": selector, "value": value}),
+                crate::cli_tools::ScreenshotMode::File, &config).await?;
+        }
+        Commands::Scroll {
+            session_id,
+            target_id,
+            selector,
+            x,
+            y,
+        } => {
+            let config = config::PagerunnerConfig::load()?;
+            let mut args = serde_json::json!({"session_id": session_id, "target_id": target_id});
+            if let Some(v) = selector {
+                args["selector"] = serde_json::json!(v);
+            }
+            if let Some(v) = x {
+                args["x"] = serde_json::json!(v);
+            }
+            if let Some(v) = y {
+                args["y"] = serde_json::json!(v);
+            }
+            crate::cli_tools::run_tool(
+                "scroll",
+                args,
+                crate::cli_tools::ScreenshotMode::File,
+                &config,
+            )
+            .await?;
+        }
+        Commands::SaveSnapshot {
+            session_id,
+            target_id,
+            origin,
+        } => {
+            let config = config::PagerunnerConfig::load()?;
+            let mut args = serde_json::json!({"session_id": session_id, "target_id": target_id});
+            if let Some(v) = origin {
+                args["origin"] = serde_json::json!(v);
+            }
+            crate::cli_tools::run_tool(
+                "save_snapshot",
+                args,
+                crate::cli_tools::ScreenshotMode::File,
+                &config,
+            )
+            .await?;
+        }
+        Commands::RestoreSnapshot {
+            session_id,
+            target_id,
+            origin,
+            from_profile,
+        } => {
+            let config = config::PagerunnerConfig::load()?;
+            let mut args = serde_json::json!({"session_id": session_id, "target_id": target_id, "origin": origin});
+            if let Some(v) = from_profile {
+                args["from_profile"] = serde_json::json!(v);
+            }
+            crate::cli_tools::run_tool(
+                "restore_snapshot",
+                args,
+                crate::cli_tools::ScreenshotMode::File,
+                &config,
+            )
+            .await?;
+        }
+        Commands::ListSnapshots { profile, all } => {
+            let config = config::PagerunnerConfig::load()?;
+            let mut args = serde_json::json!({});
+            if let Some(v) = profile {
+                args["profile"] = serde_json::json!(v);
+            }
+            if all {
+                args["latest_only"] = serde_json::json!(false);
+            }
+            crate::cli_tools::run_tool(
+                "list_snapshots",
+                args,
+                crate::cli_tools::ScreenshotMode::File,
+                &config,
+            )
+            .await?;
+        }
+        Commands::DeleteSnapshot {
+            profile,
+            origin,
+            saved_at,
+        } => {
+            let config = config::PagerunnerConfig::load()?;
+            let mut args = serde_json::json!({"profile": profile, "origin": origin});
+            if let Some(v) = saved_at {
+                args["saved_at"] = serde_json::json!(v);
+            }
+            crate::cli_tools::run_tool(
+                "delete_snapshot",
+                args,
+                crate::cli_tools::ScreenshotMode::File,
+                &config,
+            )
+            .await?;
+        }
+        Commands::SaveTabState { session_id } => {
+            let config = config::PagerunnerConfig::load()?;
+            crate::cli_tools::run_tool(
+                "save_tab_state",
+                serde_json::json!({"session_id": session_id}),
+                crate::cli_tools::ScreenshotMode::File,
+                &config,
+            )
+            .await?;
+        }
+        Commands::RestoreTabState { session_id } => {
+            let config = config::PagerunnerConfig::load()?;
+            crate::cli_tools::run_tool(
+                "restore_tab_state",
+                serde_json::json!({"session_id": session_id}),
+                crate::cli_tools::ScreenshotMode::File,
+                &config,
+            )
+            .await?;
+        }
+        Commands::KvSet {
+            namespace,
+            key,
+            value,
+        } => {
+            let config = config::PagerunnerConfig::load()?;
+            crate::cli_tools::run_tool(
+                "kv_set",
+                serde_json::json!({"namespace": namespace, "key": key, "value": value}),
+                crate::cli_tools::ScreenshotMode::File,
+                &config,
+            )
+            .await?;
+        }
+        Commands::KvGet { namespace, key } => {
+            let config = config::PagerunnerConfig::load()?;
+            crate::cli_tools::run_tool(
+                "kv_get",
+                serde_json::json!({"namespace": namespace, "key": key}),
+                crate::cli_tools::ScreenshotMode::File,
+                &config,
+            )
+            .await?;
+        }
+        Commands::KvDelete { namespace, key } => {
+            let config = config::PagerunnerConfig::load()?;
+            crate::cli_tools::run_tool(
+                "kv_delete",
+                serde_json::json!({"namespace": namespace, "key": key}),
+                crate::cli_tools::ScreenshotMode::File,
+                &config,
+            )
+            .await?;
+        }
+        Commands::KvList {
+            namespace,
+            prefix,
+            keys_only,
+        } => {
+            let config = config::PagerunnerConfig::load()?;
+            let mut args = serde_json::json!({"namespace": namespace});
+            if let Some(v) = prefix {
+                args["prefix"] = serde_json::json!(v);
+            }
+            if keys_only {
+                args["include_values"] = serde_json::json!(false);
+            }
+            crate::cli_tools::run_tool(
+                "kv_list",
+                args,
+                crate::cli_tools::ScreenshotMode::File,
+                &config,
+            )
+            .await?;
+        }
+        Commands::KvClear { namespace } => {
+            let config = config::PagerunnerConfig::load()?;
+            crate::cli_tools::run_tool(
+                "kv_clear",
+                serde_json::json!({"namespace": namespace}),
+                crate::cli_tools::ScreenshotMode::File,
+                &config,
+            )
+            .await?;
+        }
+        Commands::DownloadModel => {
+            #[cfg(not(feature = "ner"))]
+            {
+                eprintln!("Error: this binary was not compiled with --features ner.");
+                eprintln!("Rebuild with: cargo build --release --features ner");
+                std::process::exit(1);
+            }
+            #[cfg(feature = "ner")]
+            download_ner_model()?;
+        }
+        Commands::Audit {
+            session,
+            tail,
+            since,
+        } => {
+            let since_dt: Option<DateTime<Utc>> = if let Some(s) = &since {
+                match DateTime::parse_from_rfc3339(s) {
+                    Ok(dt) => Some(dt.with_timezone(&Utc)),
+                    Err(_) => {
+                        eprintln!(
+                            "Error: --since must be RFC 3339 format (e.g. 2026-03-20T14:00:00Z)"
+                        );
+                        std::process::exit(1);
+                    }
+                }
+            } else {
+                None
+            };
+
+            let home = dirs::home_dir().expect("No home dir");
+            let db_path = home.join(".pagerunner/state.db");
+            if !db_path.exists() {
+                eprintln!("No audit records found (database not yet created).");
+                return Ok(());
+            }
+            let db_path_str = db_path.to_str().ok_or_else(|| {
+                crate::error::PagerunnerError::Config("Non-UTF-8 home path".into())
+            })?;
+            let db = crate::db::Db::open(db_path_str)?;
+            let entries = db.scan_prefix("audit", "")?;
+
+            let mut events: Vec<crate::audit::AuditEvent> = entries
+                .iter()
+                .filter_map(|(_, v)| serde_json::from_slice(v).ok())
+                .collect();
+
+            if let Some(ref sid) = session {
+                events.retain(|e| {
+                    let event_sid: Option<&str> = match &e.kind {
+                        crate::audit::AuditEventKind::SessionOpened { session_id, .. } => {
+                            Some(session_id)
+                        }
+                        crate::audit::AuditEventKind::SessionClosed { session_id } => {
+                            Some(session_id)
+                        }
+                        crate::audit::AuditEventKind::ToolCall { session_id, .. } => {
+                            session_id.as_deref()
+                        }
+                        crate::audit::AuditEventKind::SecurityEvent { session_id, .. } => {
+                            session_id.as_deref()
+                        }
+                        crate::audit::AuditEventKind::ContentAnonymized { session_id, .. } => {
+                            Some(session_id)
+                        }
+                    };
+                    event_sid == Some(sid.as_str())
+                });
+            }
+
+            if let Some(dt) = since_dt {
+                events.retain(|e| e.timestamp >= dt);
+            }
+
+            let start = events.len().saturating_sub(tail);
+            for event in &events[start..] {
+                println!("{}", format_audit_event(event));
+            }
+        }
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod download_tests {
+    #[test]
+    #[cfg(feature = "ner")]
+    fn test_verify_model_hash_rejects_wrong_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("ner.onnx");
+        std::fs::write(&path, b"not a real model").unwrap();
+        let result = crate::anonymizer::ner::verify_model_hash(&path);
+        assert!(result.is_err(), "wrong file must not match pinned hash");
+    }
+}

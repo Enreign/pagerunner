@@ -1,0 +1,43 @@
+# cargo deny configuration
+# https://embarkstudios.github.io/cargo-deny/
+
+[graph]
+# Only check the default features — the `ner` feature is intentionally
+# excluded from CI (it pulls in `ort` with `download-binaries`, which
+# downloads the ONNX runtime at build time; this is reviewed and intentional
+# but should not be enabled in automated CI via --all-features).
+all-features = false
+no-default-features = false
+
+[advisories]
+# Deny crates with known security vulnerabilities; ignore list can be added
+# here when a RUSTSEC advisory has no fix yet and the risk is accepted.
+ignore = [
+    # Example: { id = "RUSTSEC-0000-0000", reason = "no fix available yet" }
+]
+
+[licenses]
+version = 2
+# Allow standard permissive licenses used in the Rust ecosystem
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Unicode-DFS-2016",
+    "Unicode-3.0",
+    "OpenSSL",
+    "Zlib",
+    "CC0-1.0",
+    "MPL-2.0",
+]
+# Confidence threshold for license text matching
+confidence-threshold = 0.8
+
+[sources]
+# Only allow crates from crates.io and our explicit git dependencies
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]

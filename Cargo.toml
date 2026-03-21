@@ -1,0 +1,53 @@
+[package]
+name = "pagerunner"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.91"
+description = "Browser automation MCP server for AI agents — drives real Chrome with your profiles"
+authors = ["Enreign <taysic@gmail.com>"]
+license = "MIT"
+repository = "https://github.com/Enreign/pagerunner"
+homepage = "https://github.com/Enreign/pagerunner"
+readme = "README.md"
+keywords = ["mcp", "browser", "automation", "chrome", "ai"]
+categories = ["command-line-utilities", "web-programming"]
+exclude = ["docs/test-runs/", "docs/plans/", "docs/test-plans/", ".claude/"]
+
+[[bin]]
+name = "pagerunner"
+path = "src/main.rs"
+
+[features]
+default = []
+ner = ["dep:ort", "dep:tokenizers", "dep:ndarray", "dep:sha2", "dep:reqwest"]
+
+[dependencies]
+tokio = { version = "1", features = ["full"] }
+clap = { version = "4", features = ["derive"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "0.8"
+anyhow = "1"
+thiserror = "2"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+uuid = { version = "1", features = ["v4"] }
+chrono = { version = "0.4", features = ["serde"] }
+dirs = "6"
+nix = { version = "0.29", features = ["fs", "process"] }
+rand = "0.8"
+redb = "2"
+aes-gcm = "0.10"
+base64 = "0.22"
+hex = "0.4"
+url = "2"
+regex = "1"
+sha2       = { version = "0.10", optional = true }
+reqwest    = { version = "0.12", features = ["blocking"], optional = true }
+ndarray    = { version = "0.16", optional = true }
+ort        = { version = "2.0.0-rc.12", features = ["download-binaries", "ndarray"], optional = true }
+tokenizers = { version = "0", optional = true }
+
+[dev-dependencies]
+serial_test = "3.4.0"
+tempfile = "3"

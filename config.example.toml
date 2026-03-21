@@ -1,0 +1,43 @@
+# ~/.pagerunner/config.toml
+# Run `pagerunner init` to generate this automatically from your Chrome profiles.
+# Or fill in the paths manually — find them at chrome://version → Profile Path.
+
+[[profiles]]
+name = "personal"
+display_name = "Personal (you@gmail.com)"
+user_data_dir = "/Users/you/Library/Application Support/Google/Chrome/Default"
+
+[[profiles]]
+name = "work"
+display_name = "Work (you@corp.com)"
+user_data_dir = "/Users/you/Library/Application Support/Google/Chrome/Profile 1"
+
+# Security policy — applies to all sessions unless overridden at open_session time.
+[security]
+# Strip hidden elements, scripts, and HTML markup from get_content output.
+# Strongly recommended — prevents hidden prompt injection via CSS/aria tricks.
+sanitize_content = true
+
+# Scan sanitized content for prompt injection patterns and prepend an untrusted-content warning.
+scan_injections = true
+
+# Restrict navigation to these domains only (empty = allow all).
+# Example: allowed_domains = ["github.com", "docs.rs"]
+allowed_domains = []
+
+# Maximum navigations per session (omit for unlimited).
+# max_navigations = 50
+
+# Tools to never advertise or execute (server-wide).
+# Example: blocked_tools = ["evaluate", "screenshot"]
+blocked_tools = []
+
+# If non-empty, ONLY these tools are permitted server-wide (intersection with per-session override).
+# Example: allowed_tools = ["navigate", "get_content", "list_tabs"]
+allowed_tools = []
+
+# NER model for PERSON and ORG name detection.
+# Requires building with --features ner and running 'pagerunner download-model'.
+# Set enabled = false to disable globally even if the feature is compiled in.
+# [ner]
+# enabled = false

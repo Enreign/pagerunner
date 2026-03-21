@@ -1,0 +1,126 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag to build and release (e.g. v0.1.0)'
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  create-release:
+    name: Create release
+    runs-on: ubuntu-latest
+    outputs:
+      tag_name: ${{ steps.resolve-tag.outputs.tag_name }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve tag name
+        id: resolve-tag
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "tag_name=${{ inputs.tag }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "tag_name=${{ github.ref_name }}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Create GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.resolve-tag.outputs.tag_name }}
+          generate_release_notes: true
+          body: |
+            **pagerunner** is a Chrome browser automation MCP server. Connect Claude (or any MCP client) to a real Chrome session using your existing profiles — cookies, saved passwords, and history included.
+
+            See the [Wiki](https://github.com/Enreign/pagerunner/wiki) for setup and full documentation.
+
+            ---
+
+  build-macos-arm64:
+    name: macOS arm64
+    needs: create-release
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Add target
+        run: rustup target add aarch64-apple-darwin
+
+      - name: Build
+        run: cargo build --release --locked --target aarch64-apple-darwin
+
+      - name: Prepare artifacts
+        run: |
+          strip target/aarch64-apple-darwin/release/pagerunner
+          cp target/aarch64-apple-darwin/release/pagerunner pagerunner-macos-arm64
+          shasum -a 256 pagerunner-macos-arm64 > pagerunner-macos-arm64.sha256
+
+      - name: Upload to release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.create-release.outputs.tag_name }}
+          files: |
+            pagerunner-macos-arm64
+            pagerunner-macos-arm64.sha256
+
+  build-macos-x86_64:
+    name: macOS x86_64
+    needs: create-release
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Add target
+        run: rustup target add x86_64-apple-darwin
+
+      - name: Build
+        run: cargo build --release --locked --target x86_64-apple-darwin
+
+      - name: Prepare artifacts
+        run: |
+          strip target/x86_64-apple-darwin/release/pagerunner
+          cp target/x86_64-apple-darwin/release/pagerunner pagerunner-macos-x86_64
+          shasum -a 256 pagerunner-macos-x86_64 > pagerunner-macos-x86_64.sha256
+
+      - name: Upload to release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.create-release.outputs.tag_name }}
+          files: |
+            pagerunner-macos-x86_64
+            pagerunner-macos-x86_64.sha256
+
+  build-linux-x86_64:
+    name: Linux x86_64
+    needs: create-release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Add target
+        run: rustup target add x86_64-unknown-linux-gnu
+
+      - name: Build
+        run: cargo build --release --locked --target x86_64-unknown-linux-gnu
+
+      - name: Prepare artifacts
+        run: |
+          strip target/x86_64-unknown-linux-gnu/release/pagerunner
+          cp target/x86_64-unknown-linux-gnu/release/pagerunner pagerunner-linux-x86_64
+          sha256sum pagerunner-linux-x86_64 > pagerunner-linux-x86_64.sha256
+
+      - name: Upload to release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.create-release.outputs.tag_name }}
+          files: |
+            pagerunner-linux-x86_64
+            pagerunner-linux-x86_64.sha256

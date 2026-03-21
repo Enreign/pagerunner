@@ -1,0 +1,50 @@
+/target/
+.worktrees/
+*.rlib
+rust_out
+librust_out.rlib
+
+# Internal AI agent instructions and planning docs
+CLAUDE.md
+GEMINI.md
+AGENTS.md
+docs/superpowers/
+docs/research/
+docs/plans/
+docs/alerts.md
+
+# macOS
+.DS_Store
+
+# Editor
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Test artifacts
+/tmp/pagerunner_integration_test.db
+
+# Coverage reports
+*.profraw
+*.profdata
+lcov.info
+tarpaulin-report.html
+coverage/
+
+# Perf / profiling
+flamegraph.svg
+perf.data
+perf.data.old
+
+# Local release binaries
+/pagerunner
+/pagerunner-*
+
+# Secrets / env
+.env
+.env.*
+!.env.example
+
+# OS
+Thumbs.db
