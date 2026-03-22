@@ -89,9 +89,9 @@ async fn handle_connection(
         )
         .await;
         let resp = match outcome {
-            Ok(text) => DaemonResponse {
+            Ok(tool_response) => DaemonResponse {
                 id,
-                result: Some(text),
+                result: Some(tool_response.result),
                 error: None,
             },
             Err(e) => DaemonResponse {

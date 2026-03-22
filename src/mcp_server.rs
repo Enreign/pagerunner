@@ -7,6 +7,13 @@ use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::sync::Mutex;
 
+/// Response from a tool call, including the result and optional semantic metadata.
+#[derive(Debug, Clone)]
+pub struct ToolResponse {
+    pub result: String,
+    pub metadata: Option<Value>,
+}
+
 pub fn all_tools() -> Vec<Value> {
     vec![
         json!({
@@ -804,10 +811,9 @@ async fn handle_request(
             let args = params.get("arguments").cloned().unwrap_or(json!({}));
             dispatch_tool(tool, &args, config, sessions, db, audit)
                 .await
-                .map(|text| {
-                    let meta = build_tool_metadata(tool, &args, &text);
-                    let mut content = vec![json!({"type": "text", "text": text})];
-                    if let Some(m) = meta {
+                .map(|tool_response| {
+                    let mut content = vec![json!({"type": "text", "text": tool_response.result})];
+                    if let Some(m) = tool_response.metadata {
                         content.push(json!({"type": "text", "text": serde_json::to_string(&m).unwrap_or_default()}));
                     }
                     json!({ "content": content })
@@ -825,7 +831,7 @@ pub async fn dispatch_tool(
     sessions: Arc<Mutex<SessionManager>>,
     db: Arc<crate::db::Db>,
     audit: Option<Arc<crate::audit::AuditLog>>,
-) -> crate::error::Result<String> {
+) -> crate::error::Result<ToolResponse> {
     // Session-level tool permission check (moved from dispatch_tool_inner).
     let tool_permitted: Option<crate::error::Result<()>> = {
         let mgr = sessions.lock().await;
@@ -899,7 +905,13 @@ pub async fn dispatch_tool(
             .await;
     }
 
-    result
+    result.map(|result_string| {
+        let metadata = build_tool_metadata(tool, args, &result_string);
+        ToolResponse {
+            result: result_string,
+            metadata,
+        }
+    })
 }
 
 async fn record_security(
@@ -951,14 +963,16 @@ pub(crate) async fn call_tool(
     tool: &str,
     args: serde_json::Value,
     config: &PagerunnerConfig,
-) -> Result<String> {
+) -> Result<ToolResponse> {
     // If a custom DB path is set (e.g. in tests), bypass daemon and use it directly.
     let custom_db = std::env::var("PAGERUNNER_DB_PATH").ok();
 
     if custom_db.is_none() {
         // Prefer daemon if running — avoids DB lock conflicts with a live MCP session.
         if let Ok(mut client) = crate::daemon_client::DaemonClient::connect().await {
-            return client.call(tool, args).await;
+            let result = client.call(tool, args.clone()).await?;
+            // Daemon returns only the result string; metadata will be added if the daemon protocol is extended
+            return Ok(ToolResponse { result, metadata: None });
         }
     }
 
