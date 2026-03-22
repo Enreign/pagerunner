@@ -81,7 +81,7 @@ async fn handle_connection(
         let id = req.id.clone();
         let outcome = crate::mcp_server::dispatch_tool(
             &req.tool,
-            req.args,
+            &req.args,
             &config,
             Arc::clone(&sessions),
             Arc::clone(&db),
