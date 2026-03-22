@@ -34,7 +34,14 @@ Pagerunner launches Chrome with your existing user profile via CDP (Chrome DevTo
 **1. Install**
 
 ```bash
-# Option A — pre-built binary (no Rust needed):
+# Option A — Homebrew (easiest on macOS/Linux):
+brew tap enreign/pagerunner
+brew install pagerunner
+
+# Option B — Cargo (if you have Rust):
+cargo install pagerunner
+
+# Option C — Pre-built binary (no dependencies):
 
 # macOS arm64 (Apple Silicon):
 curl -L https://github.com/Enreign/pagerunner/releases/latest/download/pagerunner-macos-arm64 \
