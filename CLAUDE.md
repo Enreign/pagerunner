@@ -52,8 +52,8 @@ Real Chrome profiles are configured in `~/.pagerunner/config.toml`. Example:
 ```toml
 [[profiles]]
 name = "personal"
-display_name = "Stas (stas.shymansky@gmail.com)"
-user_data_dir = "/Users/stas/Library/Application Support/Google/Chrome/Default"
+display_name = "User (user@example.com)"
+user_data_dir = "/Users/user/Library/Application Support/Google/Chrome/Default"
 ```
 **Note:** Chrome locks profile directories — close any Chrome window using the profile before opening a pagerunner session on it.
 
