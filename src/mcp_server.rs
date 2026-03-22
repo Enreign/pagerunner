@@ -862,7 +862,7 @@ pub async fn dispatch_tool(
                     crate::audit::AuditEventKind::ToolCall {
                         session_id: sid,
                         tool: tool.to_string(),
-                        args_summary: crate::audit::build_args_summary(tool, &args),
+                        args_summary: crate::audit::build_args_summary(tool, args),
                         outcome: crate::audit::ToolOutcome::Error(e.to_string()),
                         security_violation: true,
                     },
@@ -873,7 +873,7 @@ pub async fn dispatch_tool(
     }
 
     let session_id = args["session_id"].as_str().map(|s| s.to_string());
-    let args_summary = crate::audit::build_args_summary(tool, &args);
+    let args_summary = crate::audit::build_args_summary(tool, args);
     let mut sec_violation = false;
 
     let result = dispatch_tool_inner(
