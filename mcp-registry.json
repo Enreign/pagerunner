@@ -1,0 +1,151 @@
+{
+  "name": "pagerunner",
+  "version": "0.1.1",
+  "description": "Chrome browser automation MCP server for AI agents — drives real Chrome with your profiles",
+  "author": {
+    "name": "Enreign",
+    "email": "contact@enreign.io"
+  },
+  "repository": "https://github.com/Enreign/pagerunner",
+  "license": "MIT",
+  "homepage": "https://github.com/Enreign/pagerunner",
+  "bugs": "https://github.com/Enreign/pagerunner/issues",
+  "keywords": [
+    "mcp",
+    "browser-automation",
+    "chrome",
+    "cdp",
+    "web-scraping",
+    "ai-agents",
+    "automation"
+  ],
+  "categories": [
+    "browser-automation",
+    "web-scraping",
+    "data-extraction"
+  ],
+  "mcp": {
+    "version": "1.0",
+    "transport": "stdio",
+    "tools": 27,
+    "features": [
+      "anonymization",
+      "snapshots",
+      "stealth-mode",
+      "audit-logging",
+      "kv-store",
+      "tab-state-persistence"
+    ]
+  },
+  "installation": {
+    "methods": [
+      {
+        "method": "binary",
+        "description": "Download pre-built binary from GitHub releases",
+        "platforms": [
+          {
+            "os": "macos",
+            "arch": "arm64",
+            "url": "https://github.com/Enreign/pagerunner/releases/download/v0.1.1/pagerunner-macos-arm64"
+          },
+          {
+            "os": "macos",
+            "arch": "x86_64",
+            "url": "https://github.com/Enreign/pagerunner/releases/download/v0.1.1/pagerunner-macos-x86_64"
+          },
+          {
+            "os": "linux",
+            "arch": "x86_64",
+            "url": "https://github.com/Enreign/pagerunner/releases/download/v0.1.1/pagerunner-linux-x86_64"
+          }
+        ]
+      },
+      {
+        "method": "cargo",
+        "command": "cargo install --git https://github.com/Enreign/pagerunner"
+      },
+      {
+        "method": "source",
+        "command": "git clone https://github.com/Enreign/pagerunner && cd pagerunner && cargo build --release"
+      }
+    ]
+  },
+  "setup": {
+    "preRequisites": [
+      "Chrome or Chromium browser installed",
+      "Chrome profile directory accessible (not locked by browser)"
+    ],
+    "steps": [
+      "pagerunner init",
+      "pagerunner mcp",
+      "In Claude Code: /mcp /path/to/pagerunner mcp"
+    ]
+  },
+  "documentation": {
+    "readme": "https://github.com/Enreign/pagerunner#readme",
+    "setup": "https://github.com/Enreign/pagerunner#quick-start",
+    "tools": "https://github.com/Enreign/pagerunner#mcp-tools-27",
+    "security": "https://github.com/Enreign/pagerunner/blob/main/SECURITY.md",
+    "hallucination-prevention": "https://github.com/Enreign/pagerunner/blob/main/HALLUCINATION_PREVENTION.md"
+  },
+  "capabilities": {
+    "sessionManagement": [
+      "Multiple concurrent browser sessions",
+      "Chrome profile persistence",
+      "Daemon mode for shared state across MCP clients"
+    ],
+    "browserControl": [
+      "Tab management (new, list, close)",
+      "Navigation with URL and selector-based wait conditions",
+      "JavaScript evaluation with automatic array/object ambiguity detection",
+      "Stealth mode to mask automation signals"
+    ],
+    "contentExtraction": [
+      "Sanitized page text content",
+      "Full-page and viewport-only screenshots (PNG)",
+      "Content with hallucination prevention metadata"
+    ],
+    "pageInteraction": [
+      "Click elements by CSS selector",
+      "Type text with synthetic event support (React/Vue/Angular)",
+      "Fill forms with React/Vue/Angular support",
+      "Select dropdown options",
+      "Scroll page or elements"
+    ],
+    "stateManagement": [
+      "Browser snapshots (save/restore cookies + localStorage)",
+      "Tab state persistence across sessions",
+      "Persistent namespaced KV store"
+    ],
+    "security": [
+      "PII anonymization (tokenize or redact modes)",
+      "Named anonymization profiles per domain",
+      "SSRF protection (blocked IPs, file://, javascript:)",
+      "Prompt injection sanitization",
+      "Domain allowlisting",
+      "Navigation budget (max pages per session)",
+      "Append-only audit logging"
+    ]
+  },
+  "testing": {
+    "unitTests": "232 passing",
+    "cliIntegration": "45 passing (44 on macOS, 23 on Linux CI)",
+    "liveTests": "65 scenarios documented",
+    "coverage": "Session management, navigation, content extraction, interactions, security, anonymization"
+  },
+  "knownLimitations": [
+    "Requires local Chrome/Chromium installation",
+    "macOS Keychain required for encrypted database on macOS",
+    "Screenshots disabled in anonymization mode (security constraint)",
+    "Windows support pending (CDP availability verification)"
+  ],
+  "releaseNotes": {
+    "v0.1.1": "https://github.com/Enreign/pagerunner/releases/tag/v0.1.1",
+    "v0.1.0": "https://github.com/Enreign/pagerunner/releases/tag/v0.1.0"
+  },
+  "maintainance": {
+    "active": true,
+    "responseTime": "48 hours",
+    "issueTracking": "GitHub Issues"
+  }
+}
