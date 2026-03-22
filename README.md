@@ -123,6 +123,27 @@ curl -sL https://raw.githubusercontent.com/Enreign/pagerunner/main/docs/examples
 
 Or paste the content manually and extend it with project-specific instructions.
 
+## Using Pagerunner with Claude Code
+
+For comprehensive guidance, workflows, and examples tailored to 4 different use cases, install the **Pagerunner Skill**:
+
+```bash
+# Install the skill (once available in skills.sh registry)
+claude skill install pagerunner-skill
+```
+
+Or explore the skill repository directly: [pagerunner-skill](https://github.com/Enreign/pagerunner-skill)
+
+The skill includes:
+- **Quick starts for 4 ICPs:** Solo Developer, Power User, Security-Conscious, Server-Side
+- **11 workflow patterns:** form filling, authentication, scrolling, multi-step interactions
+- **Complete reference:** all 27 tools with parameters and examples
+- **Security guide:** PII anonymization, audit logging, encryption
+- **Real-world examples:** end-to-end workflows with error handling
+- **Troubleshooting:** common issues and solutions
+
+Start with the skill's [SKILL.md](https://github.com/Enreign/pagerunner-skill/blob/main/SKILL.md) to find your use case and quick start path.
+
 ## Tools
 
 ### Sessions & tabs
