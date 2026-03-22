@@ -39,17 +39,26 @@ pub async fn run_tool(
     screenshot_mode: ScreenshotMode,
     config: &PagerunnerConfig,
 ) -> anyhow::Result<()> {
-    let output = crate::mcp_server::call_tool(tool, args, config)
+    let tool_response = crate::mcp_server::call_tool(tool, args, config)
         .await
         .map_err(|e| anyhow::anyhow!("{}", e))?;
 
-    let printed = if let Some(b64) = output.strip_prefix("data:image/png;base64,") {
+    let output = if let Some(b64) = tool_response.result.strip_prefix("data:image/png;base64,") {
         handle_screenshot_output(b64, &screenshot_mode)?
     } else {
-        output
+        // If there's metadata, wrap result and metadata together in JSON
+        if let Some(meta) = tool_response.metadata {
+            let output_obj = serde_json::json!({
+                "result": serde_json::from_str::<serde_json::Value>(&tool_response.result).unwrap_or_else(|_| serde_json::Value::String(tool_response.result.clone())),
+                "_metadata": meta
+            });
+            serde_json::to_string_pretty(&output_obj)?
+        } else {
+            tool_response.result
+        }
     };
 
-    println!("{}", printed);
+    println!("{}", output);
     Ok(())
 }
 

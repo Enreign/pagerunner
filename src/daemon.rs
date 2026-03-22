@@ -81,7 +81,7 @@ async fn handle_connection(
         let id = req.id.clone();
         let outcome = crate::mcp_server::dispatch_tool(
             &req.tool,
-            req.args,
+            &req.args,
             &config,
             Arc::clone(&sessions),
             Arc::clone(&db),
@@ -89,9 +89,9 @@ async fn handle_connection(
         )
         .await;
         let resp = match outcome {
-            Ok(text) => DaemonResponse {
+            Ok(tool_response) => DaemonResponse {
                 id,
-                result: Some(text),
+                result: Some(tool_response.result),
                 error: None,
             },
             Err(e) => DaemonResponse {
