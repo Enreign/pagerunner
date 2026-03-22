@@ -24,6 +24,7 @@ docs/alerts.md
 
 # Test artifacts
 /tmp/pagerunner_integration_test.db
+test-results/
 
 # Coverage reports
 *.profraw
@@ -45,6 +46,7 @@ perf.data.old
 .env
 .env.*
 !.env.example
+.mcpregistry_*_token
 
 # OS
 Thumbs.db
