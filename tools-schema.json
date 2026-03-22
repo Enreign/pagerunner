@@ -1,0 +1,838 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Pagerunner MCP Tools Schema",
+  "description": "Complete JSON Schema definitions for all 27 Pagerunner MCP tools",
+  "type": "object",
+  "tools": [
+    {
+      "name": "list_profiles",
+      "description": "List all available Chrome profiles on this system",
+      "inputSchema": {
+        "type": "object",
+        "properties": {}
+      },
+      "outputSchema": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "properties": {
+            "name": {
+              "type": "string",
+              "description": "Profile identifier (pass to open_session as 'profile')"
+            },
+            "display_name": {
+              "type": "string",
+              "description": "Human-readable profile label (e.g., 'Stas (user@example.com)')"
+            }
+          },
+          "required": ["name", "display_name"]
+        }
+      }
+    },
+    {
+      "name": "open_session",
+      "description": "Open a new browser session with a Chrome profile",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "profile": {
+            "type": "string",
+            "description": "Profile name from list_profiles"
+          },
+          "stealth": {
+            "type": "boolean",
+            "description": "Enable stealth mode (masks navigator.webdriver, adds human-like delays)"
+          },
+          "anonymize": {
+            "type": "boolean",
+            "description": "Enable PII anonymization (strips PII from get_content and evaluate results)"
+          },
+          "anonymization_profile": {
+            "type": "string",
+            "description": "Named anonymization profile from config.toml (mutually exclusive with anonymization_entities)"
+          },
+          "anonymization_entities": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": ["EMAIL", "PHONE", "CREDIT_CARD", "IBAN", "SSN", "IP", "PERSON", "ORG"]
+            },
+            "description": "Entities to anonymize (for inline config)"
+          },
+          "anonymization_mode": {
+            "type": "string",
+            "enum": ["tokenize", "redact"],
+            "description": "Anonymization mode: tokenize (reversible) or redact (one-way)"
+          },
+          "allowed_domains": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Whitelist of allowed domains (e.g., ['example.com', '*.sub.example.com'])"
+          },
+          "max_navigations": {
+            "type": "integer",
+            "description": "Maximum number of page loads allowed in this session"
+          }
+        },
+        "required": ["profile"]
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "session_id": {
+            "type": "string",
+            "description": "Session identifier (pass to all subsequent tools)"
+          },
+          "profile": {
+            "type": "string",
+            "description": "Profile name"
+          },
+          "stealth": {
+            "type": "boolean"
+          },
+          "anonymize": {
+            "type": "boolean"
+          }
+        },
+        "required": ["session_id", "profile"]
+      }
+    },
+    {
+      "name": "close_session",
+      "description": "Close a browser session and release all resources",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "session_id": {
+            "type": "string",
+            "description": "Session ID from open_session"
+          }
+        },
+        "required": ["session_id"]
+      },
+      "outputSchema": {
+        "type": "string",
+        "description": "Confirmation message"
+      }
+    },
+    {
+      "name": "list_sessions",
+      "description": "List all active browser sessions",
+      "inputSchema": {
+        "type": "object",
+        "properties": {}
+      },
+      "outputSchema": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string",
+              "description": "Session ID"
+            },
+            "profile": {
+              "type": "string",
+              "description": "Chrome profile name"
+            },
+            "stealth": {
+              "type": "boolean",
+              "description": "Is stealth mode enabled"
+            },
+            "anonymize": {
+              "type": "boolean",
+              "description": "Is anonymization enabled"
+            },
+            "opened_at": {
+              "type": "string",
+              "format": "date-time",
+              "description": "Session creation timestamp"
+            }
+          },
+          "required": ["id", "profile"]
+        }
+      }
+    },
+    {
+      "name": "list_tabs",
+      "description": "List all open tabs in a session",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "session_id": {
+            "type": "string",
+            "description": "Session ID from open_session"
+          }
+        },
+        "required": ["session_id"]
+      },
+      "outputSchema": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "properties": {
+            "target_id": {
+              "type": "string",
+              "description": "CDP target identifier (pass to navigate, get_content, evaluate, etc.)"
+            },
+            "url": {
+              "type": "string",
+              "description": "Current page URL"
+            },
+            "title": {
+              "type": "string",
+              "description": "Page title (may be sanitized)"
+            }
+          },
+          "required": ["target_id", "url"]
+        }
+      }
+    },
+    {
+      "name": "new_tab",
+      "description": "Open a new tab in a session",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "session_id": {
+            "type": "string",
+            "description": "Session ID from open_session"
+          },
+          "url": {
+            "type": "string",
+            "description": "URL to navigate to (optional)"
+          }
+        },
+        "required": ["session_id"]
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "target_id": {
+            "type": "string",
+            "description": "New tab's CDP target ID"
+          },
+          "url": {
+            "type": "string",
+            "description": "Tab URL (about:blank if no URL provided)"
+          }
+        },
+        "required": ["target_id"]
+      }
+    },
+    {
+      "name": "navigate",
+      "description": "Navigate to a URL in a tab",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "session_id": {
+            "type": "string",
+            "description": "Session ID"
+          },
+          "target_id": {
+            "type": "string",
+            "description": "Tab target ID from list_tabs"
+          },
+          "url": {
+            "type": "string",
+            "description": "URL to navigate to (must start with http://, https://, file://, or about:)"
+          }
+        },
+        "required": ["session_id", "target_id", "url"]
+      },
+      "outputSchema": {
+        "type": "string",
+        "description": "Confirmation message with target_id and URL"
+      }
+    },
+    {
+      "name": "wait_for",
+      "description": "Wait for a condition: CSS selector, URL pattern, or fixed delay",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "session_id": {
+            "type": "string",
+            "description": "Session ID"
+          },
+          "target_id": {
+            "type": "string",
+            "description": "Tab target ID"
+          },
+          "selector": {
+            "type": "string",
+            "description": "CSS selector to wait for (mutually exclusive with url and ms)"
+          },
+          "url": {
+            "type": "string",
+            "description": "URL pattern to wait for (glob-style: **/path/**) (mutually exclusive with selector and ms)"
+          },
+          "ms": {
+            "type": "integer",
+            "description": "Fixed delay in milliseconds (mutually exclusive with selector and url)"
+          }
+        },
+        "required": ["session_id", "target_id"]
+      },
+      "outputSchema": {
+        "type": "string",
+        "description": "Success message indicating condition met or delay completed"
+      }
+    },
+    {
+      "name": "get_content",
+      "description": "Extract sanitized page text content",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "session_id": {
+            "type": "string",
+            "description": "Session ID"
+          },
+          "target_id": {
+            "type": "string",
+            "description": "Tab target ID"
+          }
+        },
+        "required": ["session_id", "target_id"]
+      },
+      "outputSchema": {
+        "type": "string",
+        "description": "Sanitized page text content (marked with <<<UNTRUSTED_WEB_CONTENT>>> if anonymization is disabled; anonymized if enabled)"
+      }
+    },
+    {
+      "name": "screenshot",
+      "description": "Capture a screenshot of the current viewport or full page",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "session_id": {
+            "type": "string",
+            "description": "Session ID"
+          },
+          "target_id": {
+            "type": "string",
+            "description": "Tab target ID"
+          },
+          "base64": {
+            "type": "boolean",
+            "description": "Return base64-encoded PNG instead of file path (default: false)"
+          }
+        },
+        "required": ["session_id", "target_id"]
+      },
+      "outputSchema": {
+        "oneOf": [
+          {
+            "type": "string",
+            "description": "File path to PNG image (when base64=false)"
+          },
+          {
+            "type": "object",
+            "properties": {
+              "base64": {
+                "type": "string",
+                "description": "Base64-encoded PNG data (when base64=true)"
+              }
+            },
+            "required": ["base64"]
+          }
+        ]
+      }
+    },
+    {
+      "name": "evaluate",
+      "description": "Execute JavaScript and return the result",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "session_id": {
+            "type": "string",
+            "description": "Session ID"
+          },
+          "target_id": {
+            "type": "string",
+            "description": "Tab target ID"
+          },
+          "expression": {
+            "type": "string",
+            "description": "JavaScript expression to evaluate (return a value, not just execute)"
+          }
+        },
+        "required": ["session_id", "target_id", "expression"]
+      },
+      "outputSchema": {
+        "type": "string",
+        "description": "JSON-serialized result of the JavaScript expression. WARNING: Always return labeled objects {key: value}, not unlabeled arrays, to prevent hallucination."
+      }
+    },
+    {
+      "name": "click",
+      "description": "Click an element by CSS selector",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "session_id": {
+            "type": "string",
+            "description": "Session ID"
+          },
+          "target_id": {
+            "type": "string",
+            "description": "Tab target ID"
+          },
+          "selector": {
+            "type": "string",
+            "description": "CSS selector of element to click"
+          }
+        },
+        "required": ["session_id", "target_id", "selector"]
+      },
+      "outputSchema": {
+        "type": "string",
+        "description": "Confirmation message"
+      }
+    },
+    {
+      "name": "type_text",
+      "description": "Type text into an element by CSS selector",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "session_id": {
+            "type": "string",
+            "description": "Session ID"
+          },
+          "target_id": {
+            "type": "string",
+            "description": "Tab target ID"
+          },
+          "text": {
+            "type": "string",
+            "description": "Text to type (supports anonymization tokens like [EMAIL:a3f9b2])"
+          },
+          "selector": {
+            "type": "string",
+            "description": "CSS selector of input element (optional; uses focus() if not provided)"
+          }
+        },
+        "required": ["session_id", "target_id", "text"]
+      },
+      "outputSchema": {
+        "type": "string",
+        "description": "Confirmation message"
+      }
+    },
+    {
+      "name": "fill",
+      "description": "Clear and fill an input or textarea element",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "session_id": {
+            "type": "string",
+            "description": "Session ID"
+          },
+          "target_id": {
+            "type": "string",
+            "description": "Tab target ID"
+          },
+          "selector": {
+            "type": "string",
+            "description": "CSS selector of input/textarea element"
+          },
+          "value": {
+            "type": "string",
+            "description": "Value to fill (supports anonymization tokens like [EMAIL:a3f9b2] which will be de-tokenized before writing)"
+          }
+        },
+        "required": ["session_id", "target_id", "selector", "value"]
+      },
+      "outputSchema": {
+        "type": "string",
+        "description": "Confirmation message (includes synthetic event support for React/Vue/Angular)"
+      }
+    },
+    {
+      "name": "select",
+      "description": "Select an option in a dropdown element",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "session_id": {
+            "type": "string",
+            "description": "Session ID"
+          },
+          "target_id": {
+            "type": "string",
+            "description": "Tab target ID"
+          },
+          "selector": {
+            "type": "string",
+            "description": "CSS selector of select element"
+          },
+          "value": {
+            "type": "string",
+            "description": "Option value to select"
+          }
+        },
+        "required": ["session_id", "target_id", "selector", "value"]
+      },
+      "outputSchema": {
+        "type": "string",
+        "description": "Confirmation message"
+      }
+    },
+    {
+      "name": "scroll",
+      "description": "Scroll a page or element",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "session_id": {
+            "type": "string",
+            "description": "Session ID"
+          },
+          "target_id": {
+            "type": "string",
+            "description": "Tab target ID"
+          },
+          "selector": {
+            "type": "string",
+            "description": "CSS selector of element to scroll (optional; scrolls page if not provided)"
+          },
+          "x": {
+            "type": "integer",
+            "description": "Horizontal scroll distance in pixels (default: 0)"
+          },
+          "y": {
+            "type": "integer",
+            "description": "Vertical scroll distance in pixels (default: 300)"
+          }
+        },
+        "required": ["session_id", "target_id"]
+      },
+      "outputSchema": {
+        "type": "string",
+        "description": "Confirmation message"
+      }
+    },
+    {
+      "name": "save_snapshot",
+      "description": "Save cookies and localStorage for a URL origin",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "session_id": {
+            "type": "string",
+            "description": "Session ID"
+          },
+          "target_id": {
+            "type": "string",
+            "description": "Tab target ID (used to determine origin)"
+          },
+          "origin": {
+            "type": "string",
+            "description": "Optional explicit origin (e.g., 'https://example.com'). If not provided, uses current page origin."
+          }
+        },
+        "required": ["session_id", "target_id"]
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "origin": {
+            "type": "string",
+            "description": "Origin URL"
+          },
+          "saved_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Snapshot creation timestamp"
+          }
+        },
+        "required": ["origin"]
+      }
+    },
+    {
+      "name": "restore_snapshot",
+      "description": "Restore cookies and localStorage from a snapshot",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "session_id": {
+            "type": "string",
+            "description": "Session ID"
+          },
+          "target_id": {
+            "type": "string",
+            "description": "Tab target ID (must be at the target origin)"
+          },
+          "origin": {
+            "type": "string",
+            "description": "Origin URL to restore for"
+          },
+          "from_profile": {
+            "type": "string",
+            "description": "Optional: restore from a different profile (must be same origin)"
+          }
+        },
+        "required": ["session_id", "target_id", "origin"]
+      },
+      "outputSchema": {
+        "type": "string",
+        "description": "Confirmation message"
+      }
+    },
+    {
+      "name": "list_snapshots",
+      "description": "List all saved snapshots",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "profile": {
+            "type": "string",
+            "description": "Filter by profile name (optional)"
+          },
+          "all": {
+            "type": "boolean",
+            "description": "List snapshots from all profiles (default: current session profile)"
+          }
+        }
+      },
+      "outputSchema": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "properties": {
+            "origin": {
+              "type": "string",
+              "description": "URL origin"
+            },
+            "profile": {
+              "type": "string",
+              "description": "Profile name"
+            },
+            "saved_at": {
+              "type": "string",
+              "format": "date-time",
+              "description": "Snapshot creation timestamp"
+            }
+          },
+          "required": ["origin", "saved_at"]
+        }
+      }
+    },
+    {
+      "name": "delete_snapshot",
+      "description": "Delete a saved snapshot",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "profile": {
+            "type": "string",
+            "description": "Profile name"
+          },
+          "origin": {
+            "type": "string",
+            "description": "Origin URL"
+          },
+          "saved_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Snapshot creation timestamp (from list_snapshots)"
+          }
+        },
+        "required": ["profile", "origin"]
+      },
+      "outputSchema": {
+        "type": "string",
+        "description": "Confirmation message"
+      }
+    },
+    {
+      "name": "save_tab_state",
+      "description": "Save all open tab URLs and state for restoration",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "session_id": {
+            "type": "string",
+            "description": "Session ID"
+          }
+        },
+        "required": ["session_id"]
+      },
+      "outputSchema": {
+        "type": "string",
+        "description": "Confirmation message with number of tabs saved"
+      }
+    },
+    {
+      "name": "restore_tab_state",
+      "description": "Restore previously saved tab URLs and state",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "session_id": {
+            "type": "string",
+            "description": "Session ID"
+          }
+        },
+        "required": ["session_id"]
+      },
+      "outputSchema": {
+        "type": "string",
+        "description": "Confirmation message with number of tabs restored"
+      }
+    },
+    {
+      "name": "kv_set",
+      "description": "Set a key-value pair in the persistent store",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "namespace": {
+            "type": "string",
+            "description": "Namespace (e.g., 'session-state', 'user-data')"
+          },
+          "key": {
+            "type": "string",
+            "description": "Key name"
+          },
+          "value": {
+            "type": "string",
+            "description": "Value (string or JSON)"
+          }
+        },
+        "required": ["namespace", "key", "value"]
+      },
+      "outputSchema": {
+        "type": "string",
+        "description": "Confirmation message"
+      }
+    },
+    {
+      "name": "kv_get",
+      "description": "Get a value from the persistent store",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "namespace": {
+            "type": "string",
+            "description": "Namespace"
+          },
+          "key": {
+            "type": "string",
+            "description": "Key name"
+          }
+        },
+        "required": ["namespace", "key"]
+      },
+      "outputSchema": {
+        "oneOf": [
+          {
+            "type": "string",
+            "description": "Value if found"
+          },
+          {
+            "type": "null",
+            "description": "null if key not found"
+          }
+        ]
+      }
+    },
+    {
+      "name": "kv_delete",
+      "description": "Delete a key from the persistent store",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "namespace": {
+            "type": "string",
+            "description": "Namespace"
+          },
+          "key": {
+            "type": "string",
+            "description": "Key name"
+          }
+        },
+        "required": ["namespace", "key"]
+      },
+      "outputSchema": {
+        "type": "string",
+        "description": "Confirmation message"
+      }
+    },
+    {
+      "name": "kv_list",
+      "description": "List all keys in a namespace, optionally filtered by prefix",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "namespace": {
+            "type": "string",
+            "description": "Namespace"
+          },
+          "prefix": {
+            "type": "string",
+            "description": "Filter keys by prefix (optional)"
+          },
+          "keys_only": {
+            "type": "boolean",
+            "description": "Return only key names, not values (default: false)"
+          }
+        },
+        "required": ["namespace"]
+      },
+      "outputSchema": {
+        "oneOf": [
+          {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "List of keys (when keys_only=true)"
+          },
+          {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "key": {
+                  "type": "string"
+                },
+                "value": {
+                  "type": "string"
+                }
+              },
+              "required": ["key", "value"]
+            },
+            "description": "List of {key, value} objects (when keys_only=false)"
+          }
+        ]
+      }
+    },
+    {
+      "name": "kv_clear",
+      "description": "Delete all keys in a namespace",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "namespace": {
+            "type": "string",
+            "description": "Namespace to clear"
+          }
+        },
+        "required": ["namespace"]
+      },
+      "outputSchema": {
+        "type": "string",
+        "description": "Confirmation message with number of keys deleted"
+      }
+    }
+  ]
+}
