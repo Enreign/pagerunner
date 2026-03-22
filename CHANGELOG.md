@@ -7,6 +7,54 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.1] — 2026-03-22
+
+### Added - Hallucination Prevention
+
+**Semantic metadata for all tool responses** — prevents LLM hallucination when interpreting ambiguous data.
+
+- **Array ambiguity detection**: `evaluate()` warns when returning unlabeled arrays like `[25, 2]` with explicit message: "Result is an array — field meanings cannot be inferred"
+- **Condition clarity**: `wait_for()` clarifies `_condition_type` (selector/url/fixed_delay) and whether `_condition_met`
+- **Schema information**: `list_tabs()`, `list_sessions()`, `list_profiles()` include field descriptions
+- **Tool context**: All responses include `_tool`, `_result_type`, `_hint`, `_warning` fields
+- **CLI/MCP parity**: Both interfaces receive identical metadata (no information loss)
+
+**Problem solved** (incident 2026-03-21): Array `[25, 2]` was interpreted as "25 likes, 2 replies" instead of "25 views, 2 likes". With metadata warning, Claude now asks for clarification instead of guessing.
+
+**Implementation**:
+- New `ToolResponse` struct: `{result: String, metadata: Option<Value>}`
+- `build_tool_metadata()` function analyzes results and generates context
+- Single source of truth: metadata generated once in `dispatch_tool()`, used everywhere
+- MCP envelope wraps metadata in second content block
+- CLI wraps metadata in JSON output alongside result
+
+**Test validation**:
+- ✅ 232/232 unit tests passing (14 new metadata tests)
+- ✅ Real-world testing: Compared against agent-browser and Playwright
+- ✅ Zero breaking changes
+
+**Examples**:
+```bash
+# Unlabeled array (triggers warning)
+pagerunner evaluate $SESSION $TARGET "Array.from(...).map(el => parseInt(el.textContent))"
+# Response includes: _warning: "Result is an array — field meanings cannot be inferred"
+
+# Labeled object (no warning)
+pagerunner evaluate $SESSION $TARGET "Array.from(...).map(el => ({value: ..., label: ...}))"
+# Response includes: _hint: "Always return labeled objects..."
+```
+
+**Monitoring**:
+- Track array warnings: `grep "_warning.*array" ~/.pagerunner/audit.log`
+- Incident tracking: GitHub issues with `hallucination-prevention` label
+- See [docs/MONITORING_HALLUCINATION_PREVENTION.md](docs/MONITORING_HALLUCINATION_PREVENTION.md) for detailed procedures
+
+**Documentation**:
+- [HALLUCINATION_PREVENTION.md](HALLUCINATION_PREVENTION.md) — User guide
+- [docs/MONITORING_HALLUCINATION_PREVENTION.md](docs/MONITORING_HALLUCINATION_PREVENTION.md) — Monitoring guide
+
+---
+
 ## [0.1.0] — 2026-03-21
 
 ### Added
@@ -51,5 +99,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `pagerunner example-config`: prints an annotated config template
 - `pagerunner audit`: query the audit log by tail count, session ID, or timestamp
 
-[Unreleased]: https://github.com/Enreign/pagerunner/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/Enreign/pagerunner/compare/v0.1.1...HEAD
+[0.1.1]: https://github.com/Enreign/pagerunner/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/Enreign/pagerunner/releases/tag/v0.1.0
