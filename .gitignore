@@ -42,6 +42,12 @@ perf.data.old
 /pagerunner
 /pagerunner-*
 
+# npm wrapper build artifacts
+npm/bin/
+
+# MCPB bundle output
+mcpb/dist/
+
 # Secrets / env
 .env
 .env.*

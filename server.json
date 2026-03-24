@@ -1,55 +1,33 @@
 {
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
   "name": "io.github.Enreign/pagerunner",
-  "description": "Chrome browser automation MCP server for AI agents — drives real Chrome with your profiles",
+  "title": "Pagerunner — Authenticated Chrome for AI Agents",
+  "description": "Real Chrome profiles for AI agents — already logged in, PII anonymization, encrypted, multi-session",
   "repository": {
     "url": "https://github.com/Enreign/pagerunner.git",
     "source": "github"
   },
-  "version": "0.1.1",
-  "author": {
-    "name": "Enreign",
-    "url": "https://github.com/Enreign"
-  },
-  "license": "MIT",
-  "homepage": "https://github.com/Enreign/pagerunner",
-  "documentation": "https://github.com/Enreign/pagerunner#readme",
-  "installation": {
-    "methods": [
-      {
-        "method": "homebrew",
-        "tap": "enreign/pagerunner",
-        "command": "brew install pagerunner"
-      },
-      {
-        "method": "cargo",
-        "command": "cargo install pagerunner"
-      },
-      {
-        "method": "binary",
-        "url": "https://github.com/Enreign/pagerunner/releases/latest"
-      }
-    ]
-  },
-  "tags": [
-    "browser-automation",
-    "chrome",
-    "web-scraping",
-    "ai-agents",
-    "cdp",
-    "automation"
+  "version": "0.2.1",
+  "websiteUrl": "https://github.com/Enreign/pagerunner",
+  "icons": [
+    {
+      "src": "https://raw.githubusercontent.com/Enreign/pagerunner/main/assets/icon-512.png",
+      "sizes": ["512x512"]
+    },
+    {
+      "src": "https://raw.githubusercontent.com/Enreign/pagerunner/main/assets/icon-96.png",
+      "sizes": ["96x96"]
+    }
   ],
-  "features": {
-    "session_management": "Multiple concurrent sessions with Chrome profiles",
-    "tab_management": "Open, close, and list tabs",
-    "navigation": "Smart waiting with selectors, URL patterns, or fixed delays",
-    "content_extraction": "Sanitized text, screenshots, and JavaScript evaluation",
-    "interactions": "Click, type, fill, select, scroll elements",
-    "state_persistence": "Snapshots for cookies/localStorage and tab state",
-    "pii_anonymization": "Tokenize or redact PII with named profiles",
-    "security": "SSRF protection, prompt injection mitigation, domain allowlisting",
-    "audit_logging": "Append-only JSON-lines for compliance",
-    "stealth_mode": "Masks automation signals with human-like delays",
-    "daemon_mode": "Shared state across multiple MCP clients"
-  }
+  "packages": [
+    {
+      "registryType": "npm",
+      "identifier": "pagerunner",
+      "version": "0.2.0",
+      "transport": {
+        "type": "stdio",
+        "args": ["mcp"]
+      }
+    }
+  ]
 }

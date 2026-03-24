@@ -1,0 +1,25 @@
+<svg width="512" height="512" viewBox="0 0 512 512" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#0EA5E9"/>
+      <stop offset="100%" style="stop-color:#6366F1"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Background -->
+  <rect width="512" height="512" rx="112" fill="url(#bg)"/>
+
+  <!-- Page with folded corner -->
+  <path d="M184 80 L368 80 L368 352 L304 432 L184 432 Z"
+        fill="none" stroke="#fff" stroke-width="14" stroke-linejoin="round"/>
+  <path d="M304 432 L304 352 L368 352"
+        fill="none" stroke="#fff" stroke-width="12" stroke-linejoin="round"/>
+
+  <!-- Speed lines -->
+  <line x1="56" y1="184" x2="152" y2="184" stroke="#fff" stroke-width="14" stroke-linecap="round" opacity="0.9"/>
+  <line x1="80" y1="232" x2="152" y2="232" stroke="#fff" stroke-width="14" stroke-linecap="round" opacity="0.65"/>
+  <line x1="104" y1="280" x2="152" y2="280" stroke="#fff" stroke-width="14" stroke-linecap="round" opacity="0.4"/>
+
+  <!-- Play arrow on page -->
+  <polygon points="240,196 316,256 240,316" fill="#fff" opacity="0.85"/>
+</svg>

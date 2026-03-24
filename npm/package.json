@@ -1,0 +1,36 @@
+{
+  "name": "pagerunner",
+  "version": "0.2.0",
+  "description": "Authenticated Chrome browser automation for AI agents. Connects any MCP client to your real Chrome profiles — already logged in, with PII anonymization, encrypted state, and multi-session daemon.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Enreign/pagerunner.git",
+    "directory": "npm"
+  },
+  "homepage": "https://github.com/Enreign/pagerunner",
+  "author": "Enreign",
+  "bin": {
+    "pagerunner": "run.js"
+  },
+  "scripts": {
+    "postinstall": "node install.js"
+  },
+  "keywords": [
+    "mcp",
+    "browser",
+    "automation",
+    "chrome",
+    "ai",
+    "cdp",
+    "web-scraping"
+  ],
+  "files": [
+    "install.js",
+    "run.js"
+  ],
+  "engines": {
+    "node": ">=16"
+  },
+  "mcpName": "io.github.Enreign/pagerunner"
+}

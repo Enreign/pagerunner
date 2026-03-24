@@ -1,0 +1,65 @@
+{
+  "manifest_version": "0.3",
+  "name": "pagerunner",
+  "display_name": "Pagerunner",
+  "version": "0.2.0",
+  "description": "Real Chrome profiles for AI agents — already logged in, PII anonymization, encrypted, multi-session",
+  "long_description": "Agent-first browser orchestration. Connects any MCP client (Claude Code, Cursor, Windsurf) to your real Chrome profiles — already logged in with cookies, saved passwords, and history. Stealth mode, PII anonymization, encrypted state, multi-session daemon.",
+  "author": {
+    "name": "Enreign",
+    "url": "https://github.com/Enreign"
+  },
+  "license": "MIT",
+  "repository": {
+    "url": "https://github.com/Enreign/pagerunner"
+  },
+  "homepage": "https://github.com/Enreign/pagerunner",
+  "keywords": [
+    "browser-automation",
+    "chrome",
+    "cdp",
+    "ai-agents",
+    "web-scraping",
+    "automation"
+  ],
+  "server": {
+    "type": "binary",
+    "entry_point": "server/pagerunner",
+    "mcp_config": {
+      "command": "server/pagerunner",
+      "args": ["mcp"]
+    }
+  },
+  "tools": [
+    { "name": "open_session", "description": "Open a Chrome session with a named profile" },
+    { "name": "close_session", "description": "Close a Chrome session" },
+    { "name": "list_sessions", "description": "List active sessions" },
+    { "name": "list_profiles", "description": "List configured Chrome profiles" },
+    { "name": "list_tabs", "description": "List open tabs in a session" },
+    { "name": "new_tab", "description": "Open a new tab" },
+    { "name": "navigate", "description": "Navigate a tab to a URL" },
+    { "name": "wait_for", "description": "Wait for a selector, URL pattern, or delay" },
+    { "name": "get_content", "description": "Extract sanitized text content from a tab" },
+    { "name": "screenshot", "description": "Take a screenshot of a tab" },
+    { "name": "evaluate", "description": "Run JavaScript in a tab" },
+    { "name": "click", "description": "Click an element by CSS selector" },
+    { "name": "type_text", "description": "Type text into an element" },
+    { "name": "fill", "description": "Fill a form field by selector" },
+    { "name": "select", "description": "Select an option from a dropdown" },
+    { "name": "scroll", "description": "Scroll the page or an element" },
+    { "name": "save_snapshot", "description": "Save cookies and localStorage" },
+    { "name": "restore_snapshot", "description": "Restore a saved snapshot" },
+    { "name": "list_snapshots", "description": "List saved snapshots" },
+    { "name": "delete_snapshot", "description": "Delete a snapshot" },
+    { "name": "save_tab_state", "description": "Save all open tabs" },
+    { "name": "restore_tab_state", "description": "Restore saved tabs" },
+    { "name": "kv_set", "description": "Store a key-value pair" },
+    { "name": "kv_get", "description": "Retrieve a value by key" },
+    { "name": "kv_delete", "description": "Delete a key-value pair" },
+    { "name": "kv_list", "description": "List keys in a namespace" },
+    { "name": "kv_clear", "description": "Clear all keys in a namespace" }
+  ],
+  "compatibility": {
+    "platforms": ["darwin", "linux"]
+  }
+}
