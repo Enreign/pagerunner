@@ -21,6 +21,7 @@ pub struct Session {
     /// Last navigated URL per target_id — used for untrusted-content domain labeling
     pub tab_urls: HashMap<String, String>,
     pub anon_config: Option<crate::anonymizer::AnonConfig>,
+    pub _reader_task: tokio::task::JoinHandle<()>,
 }
 
 #[derive(Debug, Clone)]
@@ -49,7 +50,7 @@ impl SessionManager {
         security_policy: Option<crate::security::SecurityPolicy>,
     ) -> Result<SessionId> {
         let result = crate::chrome::ChromeProcess::spawn(&profile.user_data_dir, stealth).await?;
-        let cdp = CdpConn::new(result.cmd_write, result.evt_read);
+        let (cdp, reader_task) = CdpConn::new(result.cmd_write, result.evt_read);
         let id = Uuid::new_v4().to_string();
         self.sessions.insert(
             id.clone(),
@@ -65,6 +66,7 @@ impl SessionManager {
                 nav_count: 0,
                 tab_urls: HashMap::new(),
                 anon_config: None,
+                _reader_task: reader_task,
             },
         );
         Ok(id)
@@ -133,7 +135,7 @@ impl SessionManager {
             .spawn()
             .expect("spawn /usr/bin/true");
         let chrome = crate::chrome::ChromeProcess::from_child_for_test(child);
-        let cdp = crate::cdp::CdpConn::new(cmd_write, evt_read);
+        let (cdp, _reader_handle) = crate::cdp::CdpConn::new(cmd_write, evt_read);
 
         let id = uuid::Uuid::new_v4().to_string();
         self.sessions.insert(
@@ -150,6 +152,7 @@ impl SessionManager {
                 nav_count: 0,
                 tab_urls: HashMap::new(),
                 anon_config: None,
+                _reader_task: tokio::spawn(async {}),
             },
         );
         id

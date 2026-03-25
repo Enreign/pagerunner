@@ -10,7 +10,7 @@ pub struct TabInfo {
     pub title: String,
 }
 
-pub async fn list_tabs(cdp: &mut CdpConn) -> Result<Vec<TabInfo>> {
+pub async fn list_tabs(cdp: &CdpConn) -> Result<Vec<TabInfo>> {
     let result = cdp.send("Target.getTargets", json!({})).await?;
     let targets = result["targetInfos"]
         .as_array()
@@ -27,7 +27,7 @@ pub async fn list_tabs(cdp: &mut CdpConn) -> Result<Vec<TabInfo>> {
         .collect())
 }
 
-pub async fn new_tab(cdp: &mut CdpConn, url: &str) -> Result<TabInfo> {
+pub async fn new_tab(cdp: &CdpConn, url: &str) -> Result<TabInfo> {
     let result = cdp
         .send(
             "Target.createTarget",
@@ -79,7 +79,7 @@ pub async fn attach_to_target(session: &mut Session, target_id: &str) -> Result<
 /// Called on every fresh CDP session attach when the pagerunner session has a policy.
 // Tested indirectly: blocked_url_patterns_covers_all_private_ranges verifies
 // the pattern list; e2e redirect tests verify the CDP integration.
-async fn enable_network_blocking(cdp: &mut CdpConn, session_id: &str) -> Result<()> {
+async fn enable_network_blocking(cdp: &CdpConn, session_id: &str) -> Result<()> {
     cdp.send_on_session(
         "Network.enable",
         serde_json::json!({}),
@@ -114,10 +114,10 @@ async fn fresh_attach(session: &mut Session, target_id: &str) -> Result<String> 
         .to_string();
 
     if session.stealth {
-        crate::stealth::inject(&mut session.cdp, &session_id).await?;
+        crate::stealth::inject(&session.cdp, &session_id).await?;
     }
     if session.security_policy.is_some() {
-        enable_network_blocking(&mut session.cdp, &session_id).await?;
+        enable_network_blocking(&session.cdp, &session_id).await?;
     }
 
     session
@@ -583,7 +583,7 @@ pub async fn select_option(
 
 /// Navigate a target to about:blank (cleanup after blocked redirect detection).
 /// Does not go through policy checks — used only for cleanup.
-pub async fn navigate_to_blank(cdp: &mut CdpConn, target_id: &str) -> Result<()> {
+pub async fn navigate_to_blank(cdp: &CdpConn, target_id: &str) -> Result<()> {
     cdp.send("Target.activateTarget", json!({ "targetId": target_id }))
         .await
         .ok();

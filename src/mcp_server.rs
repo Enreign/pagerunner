@@ -1388,7 +1388,7 @@ async fn dispatch_tool_inner(
             let session = mgr
                 .get_mut(id)
                 .ok_or_else(|| crate::error::PagerunnerError::SessionNotFound(id.into()))?;
-            let tabs = browser::list_tabs(&mut session.cdp).await?;
+            let tabs = browser::list_tabs(&session.cdp).await?;
             let has_policy = session
                 .security_policy
                 .as_ref()
@@ -1466,7 +1466,7 @@ async fn dispatch_tool_inner(
                 }
             }
 
-            let tab = browser::new_tab(&mut session.cdp, url).await?;
+            let tab = browser::new_tab(&session.cdp, url).await?;
             Ok(serde_json::to_string_pretty(&json!({
                 "target_id": tab.target_id,
                 "url": tab.url,
@@ -1834,7 +1834,7 @@ async fn dispatch_tool_inner(
                 // After the URL pattern matched, validate the actual current URL against policy.
                 // wait_for_url uses substring matching, so the actual URL may be different from
                 // what the agent intended (e.g. "github.com" matches "evil-github.com").
-                let actual_url = browser::list_tabs(&mut session.cdp)
+                let actual_url = browser::list_tabs(&session.cdp)
                     .await?
                     .into_iter()
                     .find(|t| t.target_id == tid)
@@ -1847,7 +1847,7 @@ async fn dispatch_tool_inner(
                         .and_then(|p| p.check_navigate(actual).err());
                     if let Some(reason) = blocked {
                         // Navigate away from the blocked page before returning error.
-                        let _ = browser::navigate_to_blank(&mut session.cdp, tid).await;
+                        let _ = browser::navigate_to_blank(&session.cdp, tid).await;
                         // Evict stale cdp_sessions entry so next attach goes through fresh_attach cleanly.
                         session.cdp_sessions.remove(tid);
                         session

@@ -51,7 +51,7 @@ for (const key of Object.keys(window)) {
 "#;
 
 /// Inject stealth scripts into a CDP session so they run before every page load.
-pub async fn inject(cdp: &mut CdpConn, session_id: &str) -> Result<()> {
+pub async fn inject(cdp: &CdpConn, session_id: &str) -> Result<()> {
     cdp.send_on_session(
         "Page.addScriptToEvaluateOnNewDocument",
         json!({ "source": STEALTH_JS }),
