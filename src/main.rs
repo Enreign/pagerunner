@@ -243,6 +243,31 @@ enum Commands {
     },
     /// Delete all keys in a namespace
     KvClear { namespace: String },
+    /// Query network requests captured during a session
+    #[command(name = "get-network-log")]
+    GetNetworkLog {
+        session_id: String,
+        #[arg(long)]
+        target_id: Option<String>,
+        #[arg(long)]
+        url_pattern: Option<String>,
+        #[arg(long)]
+        method: Option<String>,
+        #[arg(long)]
+        status_min: Option<u16>,
+        #[arg(long)]
+        status_max: Option<u16>,
+        #[arg(long)]
+        lookback_ms: Option<u64>,
+        #[arg(long, default_value = "50")]
+        limit: usize,
+        #[arg(long)]
+        include_request_body: bool,
+        #[arg(long)]
+        full_response: bool,
+        #[arg(long)]
+        all_tabs: bool,
+    },
     /// Download the NER model for PERSON/ORG name detection (requires --features ner build)
     DownloadModel,
 }
@@ -958,6 +983,32 @@ async fn main() -> anyhow::Result<()> {
             crate::cli_tools::run_tool(
                 "kv_clear",
                 serde_json::json!({"namespace": namespace}),
+                crate::cli_tools::ScreenshotMode::File,
+                &config,
+            )
+            .await?;
+        }
+        Commands::GetNetworkLog {
+            session_id, target_id, url_pattern, method, status_min,
+            status_max, lookback_ms, limit, include_request_body,
+            full_response, all_tabs,
+        } => {
+            let config = config::PagerunnerConfig::load()?;
+            crate::cli_tools::run_tool(
+                "get_network_log",
+                serde_json::json!({
+                    "session_id": session_id,
+                    "target_id": target_id,
+                    "url_pattern": url_pattern,
+                    "method": method,
+                    "status_min": status_min,
+                    "status_max": status_max,
+                    "lookback_ms": lookback_ms,
+                    "limit": limit,
+                    "include_request_body": include_request_body,
+                    "full_response": full_response,
+                    "all_tabs": all_tabs
+                }),
                 crate::cli_tools::ScreenshotMode::File,
                 &config,
             )
