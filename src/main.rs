@@ -14,6 +14,7 @@ mod init;
 mod ipc;
 mod mcp_server;
 mod network_guard;
+mod network_log;
 mod sanitizer;
 mod security;
 mod session;
