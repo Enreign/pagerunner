@@ -1,6 +1,7 @@
 use crate::db::Db;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use tokio::sync::broadcast;
 
 const SENSITIVE_HEADERS: &[&str] = &[
     "authorization",
@@ -243,6 +244,161 @@ pub fn query_entries(
 /// Delete all network log entries for a session (called on close_session).
 pub fn delete_session_entries(db: &Db, session_id: &str) -> crate::error::Result<()> {
     db.delete_prefix("netlog", &format!("{}/", session_id))
+}
+
+/// Background task: receives CDP events and writes completed requests to the ring buffer.
+pub async fn network_event_processor(
+    mut events: broadcast::Receiver<serde_json::Value>,
+    cdp: crate::cdp::CdpConn,
+    session_id: String,
+    db: std::sync::Arc<crate::db::Db>,
+    cdp_sessions_rev: std::sync::Arc<std::sync::RwLock<HashMap<String, String>>>,
+    buffer_capacity: usize,
+) {
+    // in-flight: (cdp_session_id, request_id) → InFlightRequest
+    let mut in_flight: HashMap<(String, String), InFlightRequest> = HashMap::new();
+    // per-tab sequence counters: target_id → next_seq
+    let mut seq_counters: HashMap<String, u64> = HashMap::new();
+
+    loop {
+        match events.recv().await {
+            Ok(event) => {
+                let cdp_session = event
+                    .get("sessionId")
+                    .and_then(|s| s.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                let method = event
+                    .get("method")
+                    .and_then(|m| m.as_str())
+                    .unwrap_or("");
+                let params = &event["params"];
+
+                match method {
+                    "Network.requestWillBeSent" => {
+                        let request_id =
+                            params["requestId"].as_str().unwrap_or("").to_string();
+                        let url =
+                            params["request"]["url"].as_str().unwrap_or("").to_string();
+                        let req_method = params["request"]["method"]
+                            .as_str()
+                            .unwrap_or("GET")
+                            .to_string();
+                        let timestamp_ms = params["timestamp"]
+                            .as_f64()
+                            .map(|t| (t * 1000.0) as u64)
+                            .unwrap_or(0);
+                        let mut request_headers: HashMap<String, String> = params["request"]
+                            ["headers"]
+                            .as_object()
+                            .map(|h| {
+                                h.iter()
+                                    .map(|(k, v)| {
+                                        (k.clone(), v.as_str().unwrap_or("").to_string())
+                                    })
+                                    .collect()
+                            })
+                            .unwrap_or_default();
+                        strip_sensitive_headers(&mut request_headers);
+                        let request_body =
+                            params["request"]["postData"].as_str().map(String::from);
+
+                        in_flight.insert(
+                            (cdp_session, request_id),
+                            InFlightRequest {
+                                url,
+                                method: req_method,
+                                request_headers,
+                                request_body,
+                                start_timestamp_ms: timestamp_ms,
+                                status: None,
+                            },
+                        );
+                    }
+                    "Network.responseReceived" => {
+                        let request_id =
+                            params["requestId"].as_str().unwrap_or("").to_string();
+                        let status =
+                            params["response"]["status"].as_u64().map(|s| s as u16);
+                        if let Some(req) =
+                            in_flight.get_mut(&(cdp_session, request_id))
+                        {
+                            req.status = status;
+                        }
+                    }
+                    "Network.loadingFinished" => {
+                        let request_id =
+                            params["requestId"].as_str().unwrap_or("").to_string();
+                        let key = (cdp_session.clone(), request_id.clone());
+                        if let Some(req) = in_flight.remove(&key) {
+                            let target_id = cdp_sessions_rev
+                                .read()
+                                .ok()
+                                .and_then(|m| m.get(&cdp_session).cloned())
+                                .unwrap_or_else(|| cdp_session.clone());
+
+                            // Fetch response body
+                            let response_body = cdp
+                                .send_on_session(
+                                    "Network.getResponseBody",
+                                    serde_json::json!({ "requestId": request_id }),
+                                    Some(cdp_session.clone()),
+                                )
+                                .await
+                                .ok()
+                                .and_then(|r| r["body"].as_str().map(String::from));
+
+                            let finish_ms = params["timestamp"]
+                                .as_f64()
+                                .map(|t| (t * 1000.0) as u64)
+                                .unwrap_or(req.start_timestamp_ms);
+
+                            let mut headers = req.request_headers.clone();
+                            strip_sensitive_headers(&mut headers);
+
+                            let entry = NetworkEntry {
+                                request_id: request_id.clone(),
+                                url: req.url.clone(),
+                                method: req.method.clone(),
+                                status: req.status.unwrap_or(0),
+                                duration_ms: finish_ms
+                                    .saturating_sub(req.start_timestamp_ms),
+                                timestamp_ms: req.start_timestamp_ms,
+                                request_headers: headers,
+                                request_body: req.request_body.clone(),
+                                response_body,
+                                response_truncated: false,
+                                tab_id: target_id.clone(),
+                            };
+
+                            let seq = seq_counters
+                                .entry(target_id.clone())
+                                .or_insert(0);
+                            let _ = write_entry(
+                                &db,
+                                &session_id,
+                                &target_id,
+                                *seq,
+                                buffer_capacity,
+                                &entry,
+                            );
+                            *seq += 1;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            Err(broadcast::error::RecvError::Lagged(n)) => {
+                tracing::warn!(
+                    "Network event processor lagged, dropped {} events",
+                    n
+                );
+            }
+            Err(broadcast::error::RecvError::Closed) => {
+                break;
+            }
+        }
+    }
 }
 
 #[cfg(test)]

@@ -511,7 +511,7 @@ async fn run_standalone() -> Result<()> {
     {
         let mut mgr = sessions.lock().await;
         for sid in &session_ids {
-            let _ = mgr.close(sid).await;
+            let _ = mgr.close(sid, &db).await;
         }
     }
 
@@ -1314,7 +1314,7 @@ async fn dispatch_tool_inner(
 
             let id = {
                 let mut mgr = sessions.lock().await;
-                let session_id = mgr.open(&profile, stealth, Some(policy)).await?;
+                let session_id = mgr.open(&profile, stealth, Some(policy), Arc::clone(&db), &config.network).await?;
                 if anon_config_result.is_some() {
                     if let Some(session) = mgr.get_mut(&session_id) {
                         session.anon_config = anon_config_result;
@@ -1354,7 +1354,7 @@ async fn dispatch_tool_inner(
             }
 
             let mut mgr = sessions.lock().await;
-            mgr.close(id).await?;
+            mgr.close(id, &db).await?;
             // Purge vault entries for this session (best-effort, non-fatal)
             let vault = crate::anonymizer::vault::Vault::new(Arc::clone(&db));
             if let Err(e) = vault.purge_session(id) {
