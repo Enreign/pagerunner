@@ -8,6 +8,7 @@ const SENSITIVE_HEADERS: &[&str] = &[
     "cookie",
     "set-cookie",
     "x-auth-token",
+    "x-api-key",
 ];
 
 const RESPONSE_BODY_TRUNCATE_BYTES: usize = 2048;
@@ -77,6 +78,12 @@ pub struct QueryResult {
 
 pub fn strip_sensitive_headers(headers: &mut HashMap<String, String>) {
     headers.retain(|k, _| !SENSITIVE_HEADERS.contains(&k.to_lowercase().as_str()));
+}
+
+/// Extract the origin (scheme + host) from a URL, e.g. "https://linear.app".
+pub fn url_to_origin(url: &str) -> Option<String> {
+    let parsed = url::Url::parse(url).ok()?;
+    Some(format!("{}://{}", parsed.scheme(), parsed.host_str()?))
 }
 
 pub fn truncate_body(body: Option<String>, full_response: bool) -> (Option<String>, bool) {
@@ -257,6 +264,7 @@ pub async fn network_event_processor(
     db: std::sync::Arc<crate::db::Db>,
     cdp_sessions_rev: std::sync::Arc<std::sync::RwLock<HashMap<String, String>>>,
     buffer_capacity: usize,
+    site_store: Option<std::sync::Arc<crate::site_knowledge::SiteKnowledgeStore>>,
 ) {
     // in-flight: (cdp_session_id, request_id) → InFlightRequest
     let mut in_flight: HashMap<(String, String), InFlightRequest> = HashMap::new();
@@ -313,6 +321,16 @@ pub async fn network_event_processor(
                                     .collect()
                             })
                             .unwrap_or_default();
+                        // Detect and vault auth tokens BEFORE stripping headers.
+                        // detect_and_vault returns redacted headers if any encryption error
+                        // occurred, ensuring raw token values never reach the ring buffer.
+                        if let Some(ref store) = site_store {
+                            if let Some(origin) = url_to_origin(&url) {
+                                request_headers = crate::auth_token_detector::detect_and_vault(
+                                    &request_headers, &origin, store
+                                );
+                            }
+                        }
                         strip_sensitive_headers(&mut request_headers);
                         let request_body =
                             params["request"]["postData"].as_str().map(String::from);
@@ -661,6 +679,54 @@ mod tests {
         let result = query_entries(&db, "s1", Some("t1"), &[], &query, now_ms).unwrap();
         assert_eq!(result.entries.len(), 1, "entry older than 24h should be expired");
         assert!(result.entries[0].url.contains("new"));
+    }
+
+    #[test]
+    fn write_entry_strips_sensitive_headers_from_stored_entry() {
+        // Verify auth header is stripped from stored entry (existing behavior baseline).
+        // The token detection side is tested in auth_token_detector tests.
+        let dir = tempdir().unwrap();
+        let key = crate::db::Db::generate_key();
+        let db = crate::db::Db::open_with_key(dir.path().join("t.db").to_str().unwrap(), key).unwrap();
+
+        let mut entry = NetworkEntry {
+            request_id: "r1".into(),
+            url: "https://linear.app/api".into(),
+            method: "POST".into(),
+            status: 200,
+            duration_ms: 10,
+            timestamp_ms: 1000,
+            request_headers: [
+                ("authorization".into(), "Bearer secret_token".into()),
+                ("content-type".into(), "application/json".into()),
+            ].into_iter().collect(),
+            request_body: None,
+            response_body: None,
+            response_truncated: false,
+            tab_id: "T1".into(),
+        };
+        strip_sensitive_headers(&mut entry.request_headers);
+        write_entry(&db, "s1", "T1", 0, 500, &entry).unwrap();
+
+        let entries = query_entries(
+            &db, "s1", Some("T1"), &["T1".to_string()],
+            &NetworkQuery::default(), 2000,
+        ).unwrap();
+        assert_eq!(entries.entries.len(), 1);
+        assert!(!entries.entries[0].request_headers.contains_key("authorization"));
+    }
+
+    #[test]
+    fn url_to_origin_extracts_scheme_and_host() {
+        assert_eq!(
+            url_to_origin("https://linear.app/some/path?q=1"),
+            Some("https://linear.app".into())
+        );
+    }
+
+    #[test]
+    fn url_to_origin_returns_none_for_invalid_url() {
+        assert_eq!(url_to_origin("not-a-url"), None);
     }
 
     #[test]

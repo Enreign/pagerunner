@@ -1372,7 +1372,7 @@ async fn dispatch_tool_inner(
 
             let id = {
                 let mut mgr = sessions.lock().await;
-                let session_id = mgr.open(&profile, stealth, Some(policy), Arc::clone(&db), &config.network).await?;
+                let session_id = mgr.open(&profile, stealth, Some(policy), Arc::clone(&db), &config.network, None).await?;
                 if anon_config_result.is_some() {
                     if let Some(session) = mgr.get_mut(&session_id) {
                         session.anon_config = anon_config_result;

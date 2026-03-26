@@ -69,6 +69,7 @@ impl SessionManager {
         security_policy: Option<crate::security::SecurityPolicy>,
         db: std::sync::Arc<crate::db::Db>,
         network_config: &crate::config::NetworkConfig,
+        site_store: Option<std::sync::Arc<crate::site_knowledge::SiteKnowledgeStore>>,
     ) -> Result<SessionId> {
         let result = crate::chrome::ChromeProcess::spawn(&profile.user_data_dir, stealth).await?;
         let (cdp, reader_task) = CdpConn::new(result.cmd_write, result.evt_read);
@@ -89,6 +90,7 @@ impl SessionManager {
             db_for_processor,
             rev_map,
             capacity,
+            site_store,
         ));
 
         let events_rx2 = cdp.subscribe_events();
