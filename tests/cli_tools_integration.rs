@@ -1937,10 +1937,21 @@ fn test_generate_adapter_missing_api_key_returns_error() {
 
 #[test]
 #[serial]
-fn test_get_site_knowledge_includes_endpoints_after_ingest() {
-    // Returns null for unknown origin — just check it doesn't crash
+fn test_get_site_knowledge_includes_endpoints_field() {
+    // get-site-knowledge response should include an "endpoints" field (even if null or empty)
+    // when a site entry exists. For a nonexistent origin, response is null (no entry yet).
+    // Just verify that the command succeeds and response is valid JSON.
     let out = run(&["get-site-knowledge", "https://no-such-origin.test"]);
     assert!(out.status.success());
+    // Verify output is valid JSON (null is valid for unknown origin)
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let parsed: serde_json::Value = serde_json::from_str(stdout.trim()).expect("output should be valid JSON");
+    // If an entry exists, it should have an endpoints field; if null, that's OK for unknown origin
+    if let Some(obj) = parsed.as_object() {
+        assert!(obj.contains_key("endpoints"),
+            "site knowledge response should include endpoints field, got: {:?}", obj.keys().collect::<Vec<_>>());
+    }
+    // parsed == null means no entry yet — that's expected for a fresh origin
 }
 
 #[test]
