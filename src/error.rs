@@ -128,4 +128,24 @@ mod tests {
         let e = PagerunnerError::Config("URL blocked by allowed_domains policy".into());
         assert_eq!(e.error_type(), "permission_denied");
     }
+
+    #[test]
+    fn io_error_maps_to_io_error() {
+        let e = PagerunnerError::Io(std::io::Error::new(std::io::ErrorKind::NotFound, "file not found"));
+        assert_eq!(e.error_type(), "io_error");
+        assert!(!e.recovery_hint().is_empty());
+    }
+
+    #[test]
+    fn json_error_maps_to_internal_error() {
+        let json_err = serde_json::from_str::<serde_json::Value>("not json").unwrap_err();
+        let e = PagerunnerError::Json(json_err);
+        assert_eq!(e.error_type(), "internal_error");
+    }
+
+    #[test]
+    fn cdp_generic_error_maps_to_cdp_error() {
+        let e = PagerunnerError::Cdp("Protocol error occurred".into());
+        assert_eq!(e.error_type(), "cdp_error");
+    }
 }
