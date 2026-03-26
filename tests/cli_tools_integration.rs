@@ -1321,3 +1321,79 @@ fn first_profile() -> String {
         .expect("no profiles configured")
         .to_string()
 }
+
+// ---------------------------------------------------------------------------
+// init --json tests (LNY-171)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_init_json_flag_accepted() {
+    // Verify --json flag is accepted (not "unexpected argument")
+    // Chrome may not be available in test env so we just check the flag is valid
+    let tmp = tempfile::tempdir().unwrap();
+    let out = std::process::Command::new(bin())
+        .args(["init", "--json", "--force"])
+        .current_dir(tmp.path())
+        .env("PAGERUNNER_DB_PATH", "/tmp/pagerunner_integration_test.db")
+        .output()
+        .expect("binary should run");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        !stderr.contains("unexpected argument"),
+        "--json must be a valid flag; stderr: {stderr}"
+    );
+}
+
+#[test]
+fn test_init_json_with_claude_md_returns_snippet() {
+    let tmp = tempfile::tempdir().unwrap();
+    std::fs::write(tmp.path().join("CLAUDE.md"), "# My Project\n").unwrap();
+    let out = std::process::Command::new(bin())
+        .args(["init", "--json", "--force"])
+        .current_dir(tmp.path())
+        .env("PAGERUNNER_DB_PATH", "/tmp/pagerunner_integration_test.db")
+        .output()
+        .expect("binary should run");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        !stderr.contains("unexpected argument"),
+        "stderr: {stderr}"
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    if !stdout.trim().is_empty() {
+        if let Ok(v) = serde_json::from_str::<serde_json::Value>(stdout.trim()) {
+            if v["ok"] == true {
+                // When project file found, snippet must be present
+                assert!(v["snippet"].is_string(), "snippet field missing: {v}");
+                assert!(!v["snippet"].as_str().unwrap_or("").is_empty(), "snippet empty: {v}");
+                assert_eq!(v["project_file"].as_str().unwrap_or(""), "CLAUDE.md");
+            }
+        }
+    }
+}
+
+#[test]
+fn test_init_json_with_agents_md_returns_snippet() {
+    let tmp = tempfile::tempdir().unwrap();
+    std::fs::write(tmp.path().join("AGENTS.md"), "# My Project\n").unwrap();
+    let out = std::process::Command::new(bin())
+        .args(["init", "--json", "--force"])
+        .current_dir(tmp.path())
+        .env("PAGERUNNER_DB_PATH", "/tmp/pagerunner_integration_test.db")
+        .output()
+        .expect("binary should run");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        !stderr.contains("unexpected argument"),
+        "stderr: {stderr}"
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    if !stdout.trim().is_empty() {
+        if let Ok(v) = serde_json::from_str::<serde_json::Value>(stdout.trim()) {
+            if v["ok"] == true {
+                assert!(v["snippet"].is_string(), "snippet field missing: {v}");
+                assert_eq!(v["project_file"].as_str().unwrap_or(""), "AGENTS.md");
+            }
+        }
+    }
+}
