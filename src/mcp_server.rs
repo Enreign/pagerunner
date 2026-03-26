@@ -1906,7 +1906,7 @@ async fn dispatch_tool_inner(
                 Ok(serde_json::json!({"ok": true, "condition_met": true}).to_string())
             } else if let Some(ms) = args["ms"].as_u64() {
                 tokio::time::sleep(std::time::Duration::from_millis(ms)).await;
-                Ok(serde_json::json!({"ok": true, "condition_met": true}).to_string())
+                Ok(serde_json::json!({"ok": true, "condition_met": false}).to_string())
             } else {
                 Err(crate::error::PagerunnerError::Config(
                     "wait_for requires one of: selector, url, ms".into(),

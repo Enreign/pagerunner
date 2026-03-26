@@ -41,7 +41,7 @@ pub async fn run_tool(
 ) -> anyhow::Result<()> {
     let tool_response = crate::mcp_server::call_tool(tool, args, config)
         .await
-        .map_err(|e| anyhow::anyhow!("{}", e))?;
+        .map_err(anyhow::Error::from)?;
 
     // Check if this is a screenshot response ({"ok":true,"data":"data:image/png;base64,..."})
     let parsed_result: serde_json::Value =
