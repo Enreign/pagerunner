@@ -505,15 +505,19 @@ pub async fn fill(
             let el = document.querySelector(_sel);
             if (!el) {{
                 const _hint = (() => {{
-                    if (_sel.startsWith('#')) return _sel.slice(1).replace(/-/g,' ');
-                    if (_sel.startsWith('.')) return _sel.replace(/^\./,'').replace(/-/g,' ');
+                    const _td = _sel.match(/data-testid=["']?([^"'\]]+)/);
+                    if (_td) return _td[1].toLowerCase().replace(/-/g, ' ');
+                    if (_sel.startsWith('#')) return _sel.slice(1).replace(/-/g, ' ');
+                    if (_sel.startsWith('.')) return _sel.replace(/^\./, '').replace(/-/g, ' ');
                     const _cm = _sel.match(/\.([a-zA-Z0-9_-]+)/);
-                    if (_cm) return _cm[1].replace(/-/g,' ');
+                    if (_cm) return _cm[1].replace(/-/g, ' ');
                     return null;
                 }})();
                 if (_hint) {{
                     el = document.querySelector('[data-testid*="' + _hint + '"]')
                       || document.querySelector('[aria-label*="' + _hint + '"]')
+                      || Array.from(document.querySelectorAll('button,a,[role="button"],[type="submit"]'))
+                             .find(function(b) {{ return b.textContent.toLowerCase().includes(_hint); }})
                       || null;
                 }}
             }}
@@ -608,10 +612,12 @@ pub async fn select_option(
             let el = document.querySelector(_sel);
             if (!el) {{
                 const _hint = (() => {{
-                    if (_sel.startsWith('#')) return _sel.slice(1).replace(/-/g,' ');
-                    if (_sel.startsWith('.')) return _sel.replace(/^\./,'').replace(/-/g,' ');
+                    const _td = _sel.match(/data-testid=["']?([^"'\]]+)/);
+                    if (_td) return _td[1].toLowerCase().replace(/-/g, ' ');
+                    if (_sel.startsWith('#')) return _sel.slice(1).replace(/-/g, ' ');
+                    if (_sel.startsWith('.')) return _sel.replace(/^\./, '').replace(/-/g, ' ');
                     const _cm = _sel.match(/\.([a-zA-Z0-9_-]+)/);
-                    if (_cm) return _cm[1].replace(/-/g,' ');
+                    if (_cm) return _cm[1].replace(/-/g, ' ');
                     return null;
                 }})();
                 if (_hint) {{
