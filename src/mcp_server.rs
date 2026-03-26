@@ -2759,11 +2759,56 @@ async fn dispatch_tool_inner(
                 .ok_or_else(|| PagerunnerError::Config(format!(
                     "No site knowledge for '{}'. Use register_adapter to add adapters, or get_site_knowledge to list available ones.", origin
                 )))?;
-            let js_code = sk_entry.adapters.get(adapter_name)
+            let adapter_entry = sk_entry.adapters.get(adapter_name)
                 .ok_or_else(|| PagerunnerError::Config(format!(
                     "Adapter '{}' not found for origin '{}'. Use get_site_knowledge('{}') to list available adapters, or register_adapter to create one.",
                     adapter_name, origin, origin
-                )))?.js_code.clone();
+                )))?;
+
+            // Check staleness BEFORE executing
+            if adapter_entry.is_stale {
+                // Trigger background regeneration if API key available
+                if std::env::var("ANTHROPIC_API_KEY").is_ok() {
+                    let store_clone = Arc::clone(&site_store);
+                    let origin_owned = origin.to_string();
+                    let name_owned = adapter_name.to_string();
+                    tokio::spawn(async move {
+                        let entry = store_clone.get(&origin_owned).unwrap_or_default().unwrap_or_default();
+                        match crate::adapter_generator::generate(&origin_owned, &entry, &name_owned).await {
+                            Ok(js_code) => {
+                                let mut updated = store_clone.get(&origin_owned).unwrap_or_default().unwrap_or_default();
+                                if let Some(adapter) = updated.adapters.get_mut(&name_owned) {
+                                    adapter.js_code = js_code;
+                                    adapter.consecutive_failures = 0;
+                                    adapter.is_stale = false;
+                                    updated.last_updated = crate::site_knowledge::now_micros();
+                                    let _ = store_clone.put(&origin_owned, &updated);
+                                }
+                            }
+                            Err(e) => {
+                                tracing::warn!("Background adapter regen failed for {}/{}: {}", origin_owned, name_owned, e);
+                            }
+                        }
+                    });
+                }
+
+                let site_warn = {
+                    let sk = site_store.get(origin)?.unwrap_or_default();
+                    if crate::site_knowledge::SiteKnowledgeStore::is_site_stale(&sk) {
+                        Some("Warning: more than 50% of adapters for this site are stale — the site API may have changed significantly.")
+                    } else {
+                        None
+                    }
+                };
+
+                return Ok(serde_json::to_string(&serde_json::json!({
+                    "error": format!("Adapter '{}' is stale after 3+ consecutive failures. Use DOM tools (click, fill, etc.) or call generate_adapter to regenerate it.", adapter_name),
+                    "adapter_status": "stale_using_dom_fallback",
+                    "site_changed": site_warn,
+                }))?);
+            }
+
+            let js_code = adapter_entry.js_code.clone();
 
             // Security checks (non-async, using the sessions lock briefly)
             {
@@ -2784,11 +2829,43 @@ async fn dispatch_tool_inner(
                 origin_json = serde_json::to_string(origin)?,
             );
 
-            // Execute via browser::evaluate
+            // Execute via browser::evaluate — track success/failure for staleness detection
             let result_value = {
                 let mut mgr = sessions.lock().await;
                 let session = mgr.get_live(session_id)?;
-                browser::evaluate(session, target_id, &wrapped_js).await?
+                match browser::evaluate(session, target_id, &wrapped_js).await {
+                    Ok(v) => {
+                        // Reset failure count on success
+                        drop(mgr);
+                        if let Ok(Some(mut sk)) = site_store.get(origin) {
+                            if let Some(adapter) = sk.adapters.get_mut(adapter_name) {
+                                if adapter.consecutive_failures > 0 {
+                                    adapter.consecutive_failures = 0;
+                                    adapter.last_error = None;
+                                    sk.last_updated = crate::site_knowledge::now_micros();
+                                    let _ = site_store.put(origin, &sk);
+                                }
+                            }
+                        }
+                        v
+                    }
+                    Err(e) => {
+                        // Increment failure count, mark stale at threshold
+                        drop(mgr);
+                        if let Ok(Some(mut sk)) = site_store.get(origin) {
+                            if let Some(adapter) = sk.adapters.get_mut(adapter_name) {
+                                adapter.consecutive_failures += 1;
+                                adapter.last_error = Some(e.to_string());
+                                if adapter.consecutive_failures >= 3 {
+                                    adapter.is_stale = true;
+                                }
+                                sk.last_updated = crate::site_knowledge::now_micros();
+                                let _ = site_store.put(origin, &sk);
+                            }
+                        }
+                        return Err(e);
+                    }
+                }
             };
 
             let result_text = serde_json::to_string_pretty(&result_value)?;

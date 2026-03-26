@@ -1968,6 +1968,14 @@ fn test_call_site_api_invalid_session_returns_error() {
 }
 
 #[test]
+#[serial]
+fn test_call_site_api_stale_adapter_returns_error() {
+    // call-site-api with invalid session should return non-zero exit
+    let output = run(&["call-site-api", "bad-session", "bad-target", "https://example.com", "test"]);
+    assert!(!output.status.success());
+}
+
+#[test]
 #[cfg_attr(not(target_os = "macos"), ignore)]
 #[serial]
 fn test_register_and_call_adapter_roundtrip() {

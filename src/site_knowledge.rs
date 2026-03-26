@@ -168,6 +168,16 @@ impl SiteKnowledgeStore {
         now_micros.saturating_sub(entry.last_updated) > NINETY_DAYS_MICROS
     }
 
+    /// Returns true if more than 50% of adapters for a site are stale.
+    /// Used to surface a `site_changed` warning to the agent.
+    pub fn is_site_stale(entry: &SiteKnowledgeEntry) -> bool {
+        if entry.adapters.is_empty() {
+            return false;
+        }
+        let stale_count = entry.adapters.values().filter(|a| a.is_stale).count();
+        stale_count as f64 / entry.adapters.len() as f64 > 0.5
+    }
+
     /// Removes never-used (last_used == 0) non-trusted adapters created more than 30 days ago.
     /// Trusted (seed) adapters are never pruned.
     /// Adapters that have been used at least once (last_used > 0) are never pruned regardless of age.
@@ -383,5 +393,21 @@ mod tests {
         let entry: AdapterEntry = serde_json::from_str(json).unwrap();
         assert_eq!(entry.consecutive_failures, 0);
         assert!(!entry.is_stale);
+    }
+
+    #[test]
+    fn stale_site_threshold_50_percent() {
+        let mut entry = SiteKnowledgeEntry::default();
+        entry.adapters.insert("a".into(), AdapterEntry { is_stale: true, ..Default::default() });
+        entry.adapters.insert("b".into(), AdapterEntry { is_stale: true, ..Default::default() });
+        entry.adapters.insert("c".into(), AdapterEntry { is_stale: false, ..Default::default() });
+        entry.adapters.insert("d".into(), AdapterEntry { is_stale: false, ..Default::default() });
+        // 2/4 = 50% stale — exactly at threshold, should NOT warn
+        assert!(!SiteKnowledgeStore::is_site_stale(&entry));
+
+        // Add one more stale
+        entry.adapters.insert("e".into(), AdapterEntry { is_stale: true, ..Default::default() });
+        // 3/5 = 60% — over threshold, should warn
+        assert!(SiteKnowledgeStore::is_site_stale(&entry));
     }
 }
