@@ -100,6 +100,14 @@ pub fn detect_crud(method: &str, path_pattern: &str) -> Option<CrudOp> {
 /// Process a completed network request and update endpoint knowledge.
 /// Non-API requests (static assets, navigation, etc.) are silently skipped.
 /// Best-effort: any storage error is logged and ignored.
+///
+/// # Concurrency note
+/// Within a single session, `ingest` is called from the `network_event_processor`
+/// event loop (single-task), so calls are serialized for that session. In multi-session
+/// daemon mode, multiple sessions may call `ingest` concurrently for the same origin.
+/// The get→modify→put is not atomic, so concurrent calls can lose observation_count
+/// increments for the same endpoint. This is intentional best-effort behavior —
+/// schema confidence will converge correctly over time even with occasional dropped updates.
 pub fn ingest(
     entry: &crate::network_log::NetworkEntry,
     store: &SiteKnowledgeStore,
