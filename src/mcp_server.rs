@@ -1366,6 +1366,7 @@ fn ensure_seed_adapters_loaded(
                 created_at: now,
                 last_used: 0,
                 last_error: None,
+                ..Default::default()
             });
             changed = true;
         }
@@ -2683,6 +2684,7 @@ async fn dispatch_tool_inner(
                 created_at: now,
                 last_used: 0,
                 last_error: None,
+                ..Default::default()
             });
             entry.last_updated = now;
             site_store.put(origin, &entry)?;
@@ -3951,6 +3953,7 @@ mod site_knowledge_response_tests {
             created_at: 0,
             last_used: 0,
             last_error: None,
+            ..Default::default()
         });
 
         let response = build_site_knowledge_response(&entry, "https://example.com");

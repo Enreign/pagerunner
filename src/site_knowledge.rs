@@ -14,6 +14,10 @@ pub struct AdapterEntry {
     pub created_at: u64,
     pub last_used: u64,
     pub last_error: Option<String>,
+    #[serde(default)]
+    pub consecutive_failures: u32,
+    #[serde(default)]
+    pub is_stale: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -28,11 +32,58 @@ pub struct AuthTokenEntry {
     pub vault_ref: String, // e.g. "site_vault:a3f9b2"
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+pub enum ApiKind {
+    #[default]
+    Rest,
+    GraphQL,
+    Trpc,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub enum CrudOp {
+    GetList,
+    GetItem,
+    Create,
+    Update,
+    Delete,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+pub enum SchemaConfidence {
+    #[default]
+    Provisional,
+    Likely,
+    Confirmed,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct EndpointSchema {
+    pub request_body: Option<serde_json::Value>,
+    pub response_body: Option<serde_json::Value>,
+    pub confidence: SchemaConfidence,
+    pub observation_count: u32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct EndpointEntry {
+    pub method: String,
+    pub path_pattern: String,
+    #[serde(default)]
+    pub api_kind: ApiKind,
+    pub crud_op: Option<CrudOp>,
+    pub observation_count: u32,
+    pub last_seen: u64,
+    pub schema: Option<EndpointSchema>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct SiteKnowledgeEntry {
     pub adapters: HashMap<String, AdapterEntry>,
     pub selectors: HashMap<String, SelectorEntry>,
     pub auth_tokens: HashMap<String, AuthTokenEntry>,
+    #[serde(default)]
+    pub endpoints: HashMap<String, EndpointEntry>,
     pub last_updated: u64,
 }
 
@@ -296,5 +347,42 @@ mod tests {
         let pruned = SiteKnowledgeStore::prune_stale_adapters(&mut entry, now_micros());
         assert!(!pruned);
         assert!(entry.adapters.contains_key("seed"));
+    }
+
+    #[test]
+    fn endpoint_entry_roundtrip() {
+        let (store, _dir) = make_store();
+        let mut entry = SiteKnowledgeEntry::default();
+        entry.endpoints.insert("GET /api/users".into(), EndpointEntry {
+            method: "GET".into(),
+            path_pattern: "/api/users".into(),
+            api_kind: ApiKind::Rest,
+            crud_op: Some(CrudOp::GetList),
+            observation_count: 3,
+            last_seen: 12345,
+            schema: None,
+        });
+        store.put("https://example.com", &entry).unwrap();
+        let got = store.get("https://example.com").unwrap().unwrap();
+        let ep = got.endpoints.get("GET /api/users").unwrap();
+        assert_eq!(ep.crud_op, Some(CrudOp::GetList));
+        assert_eq!(ep.api_kind, ApiKind::Rest);
+        assert_eq!(ep.observation_count, 3);
+    }
+
+    #[test]
+    fn adapter_entry_staleness_defaults_to_false() {
+        let entry = AdapterEntry::default();
+        assert_eq!(entry.consecutive_failures, 0);
+        assert!(!entry.is_stale);
+    }
+
+    #[test]
+    fn old_adapter_entry_deserializes_without_staleness_fields() {
+        // Simulate a JSON blob that was written before staleness fields existed
+        let json = r#"{"js_code":"return 1;","description":"test","params_schema":null,"trusted":false,"created_at":0,"last_used":0,"last_error":null}"#;
+        let entry: AdapterEntry = serde_json::from_str(json).unwrap();
+        assert_eq!(entry.consecutive_failures, 0);
+        assert!(!entry.is_stale);
     }
 }
