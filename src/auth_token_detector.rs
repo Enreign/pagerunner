@@ -96,11 +96,6 @@ pub fn detect_and_vault(
     origin: &str,
     store: &SiteKnowledgeStore,
 ) -> HashMap<String, String> {
-    // IMPORTANT for Task 4 integration: `strip_sensitive_headers` in network_log.rs does not
-    // currently strip `x-api-key` headers. Task 4 must add "x-api-key" to SENSITIVE_HEADERS
-    // to ensure api_key tokens are stripped from the ring buffer on the happy path
-    // (when vault succeeds, we return original headers and strip_sensitive_headers is the
-    // only backstop for this header type).
     let tokens = detect_tokens(headers);
     if tokens.is_empty() {
         return headers.clone();

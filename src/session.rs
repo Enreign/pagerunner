@@ -287,7 +287,10 @@ pub async fn frame_nav_processor(
                     continue;
                 }
                 let params = &event["params"];
-                // Only update for the main frame — no parentId means it's the top-level frame.
+                // Only update for the main frame — ignore iframes (which have a parentId).
+                // serde_json returns Value::Null for both absent keys and JSON null, so
+                // is_null() correctly identifies the main frame whether parentId is absent
+                // or explicitly set to null.
                 if !params["frame"]["parentId"].is_null() {
                     continue;
                 }
@@ -300,6 +303,11 @@ pub async fn frame_nav_processor(
                     .and_then(|s| s.as_str())
                     .unwrap_or("")
                     .to_string();
+                // cdp_sessions_rev is populated by fresh_attach, which runs only when a
+                // tool first attaches to a tab. The very first frameNavigated event (at
+                // Chrome launch) may fire before any attachment, in which case the map is
+                // empty and we fall back to the CDP session ID as the key. Subsequent
+                // navigations after a fresh_attach will use the correct target_id.
                 let target_id = cdp_sessions_rev
                     .read()
                     .ok()
