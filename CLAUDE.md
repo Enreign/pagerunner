@@ -6,10 +6,6 @@ Rust MCP server that drives Chrome via CDP for AI agents. Serves Claude Code via
 ## Build & Test
 ```bash
 cargo build --release          # build release binary
-cargo test                     # run all tests (239 unit + 45 CLI integration)
-cargo test                     # run all tests (232 unit + 46 CLI integration)
-cargo test                     # run all tests (232 unit + 47 CLI integration)
-cargo test                     # run all tests (256 unit + 50 CLI integration)
 cargo test                     # run all tests (332 unit + 65 CLI integration)
 cargo test --test cli_tools_integration   # run CLI integration tests only
 ```
@@ -168,11 +164,7 @@ All commands output JSON to stdout. Errors go to stderr with exit 1.
 CLI calls try the daemon socket first (`~/.pagerunner/daemon.sock`), then fall back to opening the DB directly. If a live MCP server is running standalone, start the daemon mode first to avoid DB lock conflicts.
 
 ## Known Issues
-None currently. On CI (Linux): 262 tests pass (239 unit + 23 non-Chrome CLI), 23 skipped. On macOS locally: 283 pass (239 unit + 44 Chrome CLI), 1 NER test skipped (requires `--features ner` build + model). NER live tests pass with model at `~/.pagerunner/models/ner.onnx`.
-None currently. On CI (Linux): 255 tests pass (232 unit + 23 non-Chrome CLI), 23 skipped. On macOS locally: 276 pass (232 unit + 44 Chrome CLI), 1 NER test skipped (requires `--features ner` build + model). NER live tests pass with model at `~/.pagerunner/models/ner.onnx`.
-None currently. On CI (Linux): 255 tests pass (232 unit + 23 non-Chrome CLI), 25 skipped. On macOS locally: 278 pass (232 unit + 46 Chrome CLI), 1 NER test skipped (requires `--features ner` build + model). NER live tests pass with model at `~/.pagerunner/models/ner.onnx`.
-None currently. On CI (Linux): 280 tests pass (256 unit + 24 non-Chrome CLI), 26 skipped. On macOS locally: 306 pass (256 unit + 50 CLI integration), 1 NER test skipped (requires `--features ner` build + model). NER live tests pass with model at `~/.pagerunner/models/ner.onnx`.
-None currently. On CI (Linux): 366 tests pass (332 unit + 34 non-Chrome CLI), 32 skipped. On macOS locally: 396 pass (332 unit + 64 CLI integration), 1 NER test skipped (requires `--features ner` build + model). NER live tests pass with model at `~/.pagerunner/models/ner.onnx`.
+None currently. On CI (Linux): 366 tests pass (332 unit + 34 non-Chrome CLI), 32 skipped. On macOS locally: 397 pass (332 unit + 65 CLI integration), 1 NER test skipped (requires `--features ner` build + model). NER live tests pass with model at `~/.pagerunner/models/ner.onnx`.
 
 ## Testing
 
@@ -196,8 +188,7 @@ Test runs are saved in `docs/test-runs/`. Run naming: `YYYY-MM-DD-run-N.md`.
 
 ### CLI Integration Tests (`tests/cli_tools_integration.rs`)
 
-26 non-Chrome tests cover subcommands without a live browser:
-24 non-Chrome tests cover subcommands without a live browser:
+34 non-Chrome tests cover subcommands without a live browser:
 - `list-profiles`, `list-sessions`, `list-snapshots` — happy-path output shape
 - KV store — full lifecycle (set, get, list, prefix filter, keys-only, delete, clear)
 - `init --json` — flag acceptance, CLAUDE.md snippet return, AGENTS.md snippet return
@@ -210,26 +201,18 @@ Tests use `PAGERUNNER_DB_PATH=/tmp/pagerunner_integration_test.db` automatically
 ### Last CLI Test Run: 2026-03-26 (`cargo test --test cli_tools_integration`)
 | Category | Pass | Notes |
 |----------|------|-------|
-| Non-Chrome (profiles, sessions, KV, errors, help) | 23/23 | |
-| Non-Chrome: init --json | 3/3 | |
-| Non-Chrome (profiles, sessions, KV, errors, help) | 24/24 | includes `test_list_sessions_has_status_field` |
-| Non-Chrome (profiles, sessions, KV, errors, help) | 24/24 | |
+| Non-Chrome (profiles, sessions, KV, errors, help, init) | 27/27 | |
+| Non-Chrome: network log + site knowledge errors | 7/7 | |
 | Chrome: sessions + tabs | 4/4 | |
 | Chrome: screenshot, evaluate | 3/3 | |
 | Chrome: interactions (click, fill, type, select, scroll) | 8/8 | |
-| Chrome: wait-for | 4/4 | +2 new: stability_ms (selector + url) |
+| Chrome: wait-for | 4/4 | |
 | Chrome: anonymization | 2/2 | |
 | Chrome: security (allowed-domains) | 1/1 | |
-| Chrome: NER CLI | 1/1 | `#[ignore]` — requires `--features ner` + model |
 | Chrome: kv-roundtrip, snapshots, tab-state | 3/3 | |
-| **Total** | **48/48** | macOS: 47 pass + 1 ignored; Linux CI: 26 pass + 22 cfg_attr-ignored + 1 ignored |
-| **Total** | **46/46** | macOS: 45 pass + 1 ignored; Linux CI: 24 pass + 21 cfg_attr-ignored + 1 ignored |
-| **Total** | **47/47** | macOS: 46 pass + 1 ignored; Linux CI: 23 pass + 24 cfg_attr-ignored + 1 ignored |
-| Chrome: network log (get_network_log) | 3/3 | macOS only |
-| **Total** | **50/50** | macOS: 49 pass + 1 ignored; Linux CI: 24 pass + 25 cfg_attr-ignored + 1 ignored |
-| Non-Chrome: site knowledge (get-site-knowledge, register-adapter, call-site-api errors) | 3/3 | |
+| Chrome: network log + auth token detection | 3/3 | macOS only |
 | Chrome: site intelligence (adapter register+call, selector stability) | 3/3 | macOS only |
-| Chrome: get_network_log + auth token detection | 3/3 | macOS only — included in prior Chrome: network log row |
+| Chrome: NER CLI | 1/1 | `#[ignore]` — requires `--features ner` + model |
 | **Total** | **65/65** | macOS: 64 pass + 1 ignored; Linux CI: 34 pass + 31 cfg_attr-ignored + 1 ignored |
 
 ### Last Full Live Test Run: [2026-03-21-run-6](docs/test-runs/2026-03-21-run-6.md)
