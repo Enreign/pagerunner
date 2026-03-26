@@ -389,9 +389,7 @@ pub async fn network_event_processor(
                             let duration_ms = finish_monotonic_ms
                                 .saturating_sub(req.start_monotonic_ms);
 
-                            let mut headers = req.request_headers.clone();
-                            strip_sensitive_headers(&mut headers);
-
+                            // Headers were already stripped at requestWillBeSent ingestion time.
                             let entry = NetworkEntry {
                                 request_id: request_id.clone(),
                                 url: req.url.clone(),
@@ -399,7 +397,7 @@ pub async fn network_event_processor(
                                 status: req.status.unwrap_or(0),
                                 duration_ms,
                                 timestamp_ms: req.start_timestamp_ms,
-                                request_headers: headers,
+                                request_headers: req.request_headers.clone(),
                                 request_body: req.request_body.clone(),
                                 response_body,
                                 response_truncated: false,
