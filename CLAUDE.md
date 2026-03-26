@@ -159,7 +159,7 @@ All commands output JSON to stdout. Errors go to stderr with exit 1.
 CLI calls try the daemon socket first (`~/.pagerunner/daemon.sock`), then fall back to opening the DB directly. If a live MCP server is running standalone, start the daemon mode first to avoid DB lock conflicts.
 
 ## Known Issues
-None currently. On CI (Linux): 241 tests pass (218 unit + 23 non-Chrome CLI), 23 skipped. On macOS locally: 262 pass (218 unit + 44 Chrome CLI), 1 NER test skipped (requires `--features ner` build + model). NER live tests pass with model at `~/.pagerunner/models/ner.onnx`.
+None currently. On CI (Linux): 244 tests pass (218 unit + 26 non-Chrome CLI), 23 skipped. On macOS locally: 265 pass (218 unit + 47 Chrome CLI), 1 NER test skipped (requires `--features ner` build + model). NER live tests pass with model at `~/.pagerunner/models/ner.onnx`.
 
 ## Testing
 
@@ -183,18 +183,20 @@ Test runs are saved in `docs/test-runs/`. Run naming: `YYYY-MM-DD-run-N.md`.
 
 ### CLI Integration Tests (`tests/cli_tools_integration.rs`)
 
-23 non-Chrome tests cover subcommands without a live browser:
+26 non-Chrome tests cover subcommands without a live browser:
 - `list-profiles`, `list-sessions`, `list-snapshots` — happy-path output shape
 - KV store — full lifecycle (set, get, list, prefix filter, keys-only, delete, clear)
+- `init --json` — flag acceptance, CLAUDE.md snippet return, AGENTS.md snippet return
 - Error cases — all session-requiring subcommands return non-zero for invalid sessions
 - Help text — `screenshot --base64`, `open-session --anonymize`, `wait-for` modes
 
 Tests use `PAGERUNNER_DB_PATH=/tmp/pagerunner_integration_test.db` automatically, so they never conflict with a running `pagerunner mcp` process. Session-based Chrome tests spin up a per-test daemon (also using the test DB) so session state persists across separate CLI invocations.
 
-### Last CLI Test Run: 2026-03-21 (`cargo test --test cli_tools_integration`)
+### Last CLI Test Run: 2026-03-26 (`cargo test --test cli_tools_integration`)
 | Category | Pass | Notes |
 |----------|------|-------|
 | Non-Chrome (profiles, sessions, KV, errors, help) | 23/23 | |
+| Non-Chrome: init --json | 3/3 | |
 | Chrome: sessions + tabs | 4/4 | |
 | Chrome: screenshot, evaluate | 3/3 | |
 | Chrome: interactions (click, fill, type, select, scroll) | 8/8 | |
@@ -203,7 +205,7 @@ Tests use `PAGERUNNER_DB_PATH=/tmp/pagerunner_integration_test.db` automatically
 | Chrome: security (allowed-domains) | 1/1 | |
 | Chrome: NER CLI | 1/1 | `#[ignore]` — requires `--features ner` + model |
 | Chrome: kv-roundtrip, snapshots, tab-state | 3/3 | |
-| **Total** | **45/45** | macOS: 44 pass + 1 ignored; Linux CI: 23 pass + 22 cfg_attr-ignored + 1 ignored |
+| **Total** | **48/48** | macOS: 47 pass + 1 ignored; Linux CI: 26 pass + 22 cfg_attr-ignored + 1 ignored |
 
 ### Last Full Live Test Run: [2026-03-21-run-6](docs/test-runs/2026-03-21-run-6.md)
 | Category | Pass | Notes |

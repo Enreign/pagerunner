@@ -45,6 +45,9 @@ enum Commands {
         /// Overwrite existing config
         #[arg(long)]
         force: bool,
+        /// Output JSON result instead of interactive prompts
+        #[arg(long)]
+        json: bool,
     },
     /// Show config, daemon, and database status
     Status,
@@ -448,9 +451,13 @@ async fn main() -> anyhow::Result<()> {
             println!("{}", include_str!("../config.example.toml"));
         }
         Commands::Daemon => daemon::run().await?,
-        Commands::Init { force } => {
-            if let Err(e) = crate::init::run(force) {
-                eprintln!("Error: {}", e);
+        Commands::Init { force, json } => {
+            if let Err(e) = crate::init::run(force, json) {
+                if json {
+                    println!("{}", serde_json::json!({ "ok": false, "error": e.to_string() }));
+                } else {
+                    eprintln!("Error: {}", e);
+                }
                 std::process::exit(1);
             }
         }
