@@ -1374,6 +1374,7 @@ async fn dispatch_tool_inner(
                         "profile": s.profile_name,
                         "display_name": s.profile_display_name,
                         "stealth": s.stealth,
+                        "status": if s.alive { "alive" } else { "crashed" },
                     })
                 })
                 .collect();
@@ -1385,9 +1386,7 @@ async fn dispatch_tool_inner(
                 crate::error::PagerunnerError::Config("Missing session_id".into())
             })?;
             let mut mgr = sessions.lock().await;
-            let session = mgr
-                .get_mut(id)
-                .ok_or_else(|| crate::error::PagerunnerError::SessionNotFound(id.into()))?;
+            let session = mgr.get_live(id)?;
             let tabs = browser::list_tabs(&mut session.cdp).await?;
             let has_policy = session
                 .security_policy
@@ -1445,9 +1444,7 @@ async fn dispatch_tool_inner(
                 .ok_or_else(|| PagerunnerError::Config("Missing session_id".into()))?;
             let url = args["url"].as_str().unwrap_or("about:blank");
             let mut mgr = sessions.lock().await;
-            let session = mgr
-                .get_mut(sid)
-                .ok_or_else(|| PagerunnerError::SessionNotFound(sid.into()))?;
+            let session = mgr.get_live(sid)?;
 
             // Check non-blank URLs against the session policy.
             if url != "about:blank" {
@@ -1485,9 +1482,7 @@ async fn dispatch_tool_inner(
                 .as_str()
                 .ok_or_else(|| PagerunnerError::Config("Missing url".into()))?;
             let mut mgr = sessions.lock().await;
-            let session = mgr
-                .get_mut(sid)
-                .ok_or_else(|| PagerunnerError::SessionNotFound(sid.into()))?;
+            let session = mgr.get_live(sid)?;
 
             // Policy checks: URL allowed + nav budget not exceeded.
             // NLL field borrows: `policy` borrows `session.security_policy`; reading
@@ -1532,9 +1527,7 @@ async fn dispatch_tool_inner(
                 .as_str()
                 .ok_or_else(|| PagerunnerError::Config("Missing target_id".into()))?;
             let mut mgr = sessions.lock().await;
-            let session = mgr
-                .get_mut(sid)
-                .ok_or_else(|| PagerunnerError::SessionNotFound(sid.into()))?;
+            let session = mgr.get_live(sid)?;
             let raw = browser::get_content(session, tid).await?;
 
             // Use the URL recorded at navigate time for the untrusted-content domain label.
@@ -1654,9 +1647,7 @@ async fn dispatch_tool_inner(
                 .as_str()
                 .ok_or_else(|| crate::error::PagerunnerError::Config("Missing target_id".into()))?;
             let mut mgr = sessions.lock().await;
-            let session = mgr
-                .get_mut(sid)
-                .ok_or_else(|| crate::error::PagerunnerError::SessionNotFound(sid.into()))?;
+            let session = mgr.get_live(sid)?;
             // Block screenshot when anonymization is active to prevent PII leakage via image.
             if session.anon_config.is_some() {
                 return Ok(serde_json::json!({
@@ -1679,9 +1670,7 @@ async fn dispatch_tool_inner(
                 crate::error::PagerunnerError::Config("Missing expression".into())
             })?;
             let mut mgr = sessions.lock().await;
-            let session = mgr
-                .get_mut(sid)
-                .ok_or_else(|| crate::error::PagerunnerError::SessionNotFound(sid.into()))?;
+            let session = mgr.get_live(sid)?;
             let result = browser::evaluate(session, tid, expr).await?;
             let raw = serde_json::to_string_pretty(&result)?;
 
@@ -1757,9 +1746,7 @@ async fn dispatch_tool_inner(
                 .as_str()
                 .ok_or_else(|| crate::error::PagerunnerError::Config("Missing selector".into()))?;
             let mut mgr = sessions.lock().await;
-            let session = mgr
-                .get_mut(sid)
-                .ok_or_else(|| crate::error::PagerunnerError::SessionNotFound(sid.into()))?;
+            let session = mgr.get_live(sid)?;
             browser::click(session, tid, selector).await?;
             Ok(format!("Clicked: {}", selector))
         }
@@ -1776,9 +1763,7 @@ async fn dispatch_tool_inner(
                 .ok_or_else(|| crate::error::PagerunnerError::Config("Missing text".into()))?;
             let selector = args["selector"].as_str();
             let mut mgr = sessions.lock().await;
-            let session = mgr
-                .get_mut(sid)
-                .ok_or_else(|| crate::error::PagerunnerError::SessionNotFound(sid.into()))?;
+            let session = mgr.get_live(sid)?;
             // De-tokenize if anonymization is active and value looks like a token
             let type_text_value = if session.anon_config.is_some()
                 && crate::anonymizer::is_token(text)
@@ -1821,9 +1806,7 @@ async fn dispatch_tool_inner(
                 .ok_or_else(|| crate::error::PagerunnerError::Config("Missing target_id".into()))?;
             let timeout_ms = args["timeout_ms"].as_u64().unwrap_or(10_000);
             let mut mgr = sessions.lock().await;
-            let session = mgr
-                .get_mut(sid)
-                .ok_or_else(|| crate::error::PagerunnerError::SessionNotFound(sid.into()))?;
+            let session = mgr.get_live(sid)?;
 
             if let Some(selector) = args["selector"].as_str() {
                 browser::wait_for_selector(session, tid, selector, timeout_ms).await?;
@@ -1895,9 +1878,7 @@ async fn dispatch_tool_inner(
                 .as_str()
                 .ok_or_else(|| crate::error::PagerunnerError::Config("Missing value".into()))?;
             let mut mgr = sessions.lock().await;
-            let session = mgr
-                .get_mut(sid)
-                .ok_or_else(|| crate::error::PagerunnerError::SessionNotFound(sid.into()))?;
+            let session = mgr.get_live(sid)?;
             // De-tokenize if anonymization is active and value looks like a token
             let fill_value = if session.anon_config.is_some() && crate::anonymizer::is_token(value)
             {
@@ -1931,9 +1912,7 @@ async fn dispatch_tool_inner(
                 .as_str()
                 .ok_or_else(|| crate::error::PagerunnerError::Config("Missing value".into()))?;
             let mut mgr = sessions.lock().await;
-            let session = mgr
-                .get_mut(sid)
-                .ok_or_else(|| crate::error::PagerunnerError::SessionNotFound(sid.into()))?;
+            let session = mgr.get_live(sid)?;
             browser::select_option(session, tid, selector, value).await?;
             Ok(format!("Selected '{}' in {}", value, selector))
         }
@@ -1949,9 +1928,7 @@ async fn dispatch_tool_inner(
             let y = args["y"].as_i64().unwrap_or(300);
             let selector = args["selector"].as_str();
             let mut mgr = sessions.lock().await;
-            let session = mgr
-                .get_mut(sid)
-                .ok_or_else(|| crate::error::PagerunnerError::SessionNotFound(sid.into()))?;
+            let session = mgr.get_live(sid)?;
             browser::scroll(session, tid, x, y, selector).await?;
             match selector {
                 Some(sel) => Ok(format!("Scrolled {} into view", sel)),
@@ -1967,9 +1944,7 @@ async fn dispatch_tool_inner(
                 .as_str()
                 .ok_or_else(|| crate::error::PagerunnerError::Config("Missing target_id".into()))?;
             let mut mgr = sessions.lock().await;
-            let session = mgr
-                .get_mut(sid)
-                .ok_or_else(|| crate::error::PagerunnerError::SessionNotFound(sid.into()))?;
+            let session = mgr.get_live(sid)?;
             if let Some(origin) = args["origin"].as_str() {
                 crate::snapshot::save_snapshot(session, tid, origin, &db).await?;
                 Ok(format!("Snapshot saved for {}", origin))
@@ -1999,9 +1974,7 @@ async fn dispatch_tool_inner(
                 .ok_or_else(|| crate::error::PagerunnerError::Config("Missing origin".into()))?;
             let from_profile = args["from_profile"].as_str();
             let mut mgr = sessions.lock().await;
-            let session = mgr
-                .get_mut(sid)
-                .ok_or_else(|| crate::error::PagerunnerError::SessionNotFound(sid.into()))?;
+            let session = mgr.get_live(sid)?;
             crate::snapshot::restore_snapshot(session, tid, origin, from_profile, &db).await?;
             let msg = match from_profile {
                 Some(p) => format!("Snapshot restored for {} (from profile '{}')", origin, p),
@@ -2041,9 +2014,7 @@ async fn dispatch_tool_inner(
                 crate::error::PagerunnerError::Config("Missing session_id".into())
             })?;
             let mut mgr = sessions.lock().await;
-            let session = mgr
-                .get_mut(sid)
-                .ok_or_else(|| crate::error::PagerunnerError::SessionNotFound(sid.into()))?;
+            let session = mgr.get_live(sid)?;
             let n = crate::snapshot::save_tab_state(session, &db).await?;
             Ok(format!("Saved state for {} tab(s)", n))
         }
@@ -2053,9 +2024,7 @@ async fn dispatch_tool_inner(
                 crate::error::PagerunnerError::Config("Missing session_id".into())
             })?;
             let mut mgr = sessions.lock().await;
-            let session = mgr
-                .get_mut(sid)
-                .ok_or_else(|| crate::error::PagerunnerError::SessionNotFound(sid.into()))?;
+            let session = mgr.get_live(sid)?;
             let urls = crate::snapshot::restore_tab_state(session, &db).await?;
             if urls.is_empty() {
                 Ok(

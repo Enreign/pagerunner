@@ -4,6 +4,8 @@ use thiserror::Error;
 pub enum PagerunnerError {
     #[error("Session not found: {0}")]
     SessionNotFound(String),
+    #[error("Session {0} has crashed (Chrome process is no longer running)")]
+    SessionDead(String),
     #[error("Chrome error: {0}")]
     Chrome(String),
     #[error("CDP error: {0}")]
