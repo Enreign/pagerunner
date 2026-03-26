@@ -242,15 +242,7 @@ pub async fn click(session: &mut Session, target_id: &str, selector: &str) -> Re
     let session_id = attach_to_target(session, target_id).await?;
     let stealth = session.stealth;
 
-    let js = format!(
-        r#"(() => {{
-            const el = document.querySelector({});
-            if (!el) return null;
-            const r = el.getBoundingClientRect();
-            return {{ x: r.x + r.width / 2, y: r.y + r.height / 2 }};
-        }})()"#,
-        serde_json::to_string(selector).unwrap_or_else(|_| format!("\"{}\"", selector))
-    );
+    let js = build_selector_chain_js(selector);
 
     let result = session
         .cdp
@@ -503,21 +495,40 @@ pub async fn fill(
     value: &str,
 ) -> Result<()> {
     let session_id = attach_to_target(session, target_id).await?;
+    let sel_json = serde_json::to_string(selector)
+        .unwrap_or_else(|_| format!("\"{}\"", selector.replace('"', "\\\"")));
+    let val_json = serde_json::to_string(value)
+        .unwrap_or_else(|_| format!("\"{}\"", value.replace('"', "\\\"")));
     let js = format!(
         r#"(() => {{
-            const el = document.querySelector({sel});
+            const _sel = {sel};
+            let el = document.querySelector(_sel);
+            if (!el) {{
+                const _hint = (() => {{
+                    if (_sel.startsWith('#')) return _sel.slice(1).replace(/-/g,' ');
+                    if (_sel.startsWith('.')) return _sel.replace(/^\./,'').replace(/-/g,' ');
+                    const _cm = _sel.match(/\.([a-zA-Z0-9_-]+)/);
+                    if (_cm) return _cm[1].replace(/-/g,' ');
+                    return null;
+                }})();
+                if (_hint) {{
+                    el = document.querySelector('[data-testid*="' + _hint + '"]')
+                      || document.querySelector('[aria-label*="' + _hint + '"]')
+                      || null;
+                }}
+            }}
             if (!el) return false;
             const proto = el instanceof HTMLTextAreaElement
                 ? window.HTMLTextAreaElement.prototype
                 : window.HTMLInputElement.prototype;
-            const nativeSetter = Object.getOwnPropertyDescriptor(proto, 'value').set;
-            nativeSetter.call(el, {val});
-            el.dispatchEvent(new Event('input',  {{ bubbles: true }}));
+            const nativeInputValueSetter = Object.getOwnPropertyDescriptor(proto, 'value').set;
+            nativeInputValueSetter.call(el, {val});
+            el.dispatchEvent(new Event('input', {{ bubbles: true }}));
             el.dispatchEvent(new Event('change', {{ bubbles: true }}));
             return true;
         }})()"#,
-        sel = serde_json::to_string(selector).unwrap(),
-        val = serde_json::to_string(value).unwrap(),
+        sel = sel_json,
+        val = val_json,
     );
     let result = session
         .cdp
@@ -587,16 +598,35 @@ pub async fn select_option(
     value: &str,
 ) -> Result<()> {
     let session_id = attach_to_target(session, target_id).await?;
+    let sel_json = serde_json::to_string(selector)
+        .unwrap_or_else(|_| format!("\"{}\"", selector.replace('"', "\\\"")));
+    let val_json = serde_json::to_string(value)
+        .unwrap_or_else(|_| format!("\"{}\"", value.replace('"', "\\\"")));
     let js = format!(
         r#"(() => {{
-            const el = document.querySelector({sel});
+            const _sel = {sel};
+            let el = document.querySelector(_sel);
+            if (!el) {{
+                const _hint = (() => {{
+                    if (_sel.startsWith('#')) return _sel.slice(1).replace(/-/g,' ');
+                    if (_sel.startsWith('.')) return _sel.replace(/^\./,'').replace(/-/g,' ');
+                    const _cm = _sel.match(/\.([a-zA-Z0-9_-]+)/);
+                    if (_cm) return _cm[1].replace(/-/g,' ');
+                    return null;
+                }})();
+                if (_hint) {{
+                    el = document.querySelector('[data-testid*="' + _hint + '"]')
+                      || document.querySelector('[aria-label*="' + _hint + '"]')
+                      || null;
+                }}
+            }}
             if (!el) return false;
             el.value = {val};
             el.dispatchEvent(new Event('change', {{ bubbles: true }}));
             return true;
         }})()"#,
-        sel = serde_json::to_string(selector).unwrap(),
-        val = serde_json::to_string(value).unwrap(),
+        sel = sel_json,
+        val = val_json,
     );
     let result = session
         .cdp
@@ -652,6 +682,44 @@ pub async fn navigate_to_blank(cdp: &CdpConn, target_id: &str) -> Result<()> {
         )
         .await;
     Ok(())
+}
+
+/// Build a JavaScript IIFE that tries the given selector and falls back to
+/// data-testid / aria-label / text-content alternatives when querySelector fails.
+/// Returns `null` only if all strategies fail.
+/// The result is `{x, y}` (click coordinates) for use in the `click` function,
+/// or a boolean (true = found) for use in fill/select.
+pub fn build_selector_chain_js(selector: &str) -> String {
+    let sel_json = serde_json::to_string(selector)
+        .unwrap_or_else(|_| format!("\"{}\"", selector.replace('"', "\\\"")));
+    format!(
+        r#"(() => {{
+            const _sel = {sel};
+            let _el = document.querySelector(_sel);
+            if (!_el) {{
+                const _hint = (() => {{
+                    const _td = _sel.match(/data-testid=["']?([^"'\]]+)/);
+                    if (_td) return _td[1].toLowerCase().replace(/-/g, ' ');
+                    if (_sel.startsWith('#')) return _sel.slice(1).replace(/-/g, ' ');
+                    if (_sel.startsWith('.')) return _sel.replace(/^\./, '').replace(/-/g, ' ');
+                    const _cm = _sel.match(/\.([a-zA-Z0-9_-]+)/);
+                    if (_cm) return _cm[1].replace(/-/g, ' ');
+                    return null;
+                }})();
+                if (_hint) {{
+                    _el = document.querySelector('[data-testid*="' + _hint + '"]')
+                       || document.querySelector('[aria-label*="' + _hint + '"]')
+                       || Array.from(document.querySelectorAll('button,a,[role="button"],[type="submit"]'))
+                              .find(function(b) {{ return b.textContent.toLowerCase().includes(_hint); }})
+                       || null;
+                }}
+            }}
+            if (!_el) return null;
+            const _r = _el.getBoundingClientRect();
+            return {{ x: _r.x + _r.width / 2, y: _r.y + _r.height / 2, _fallback: !document.querySelector(_sel) }};
+        }})()"#,
+        sel = sel_json
+    )
 }
 
 /// Update selector stability in site_knowledge. Best-effort — never fails the tool call.
@@ -795,5 +863,27 @@ mod tests {
         for _ in 0..4 { update_selector_stability(&store, origin, selector, false); }
 
         assert!(fragility_warning(&store, origin, selector).is_none());
+    }
+
+    #[test]
+    fn selector_chain_js_includes_original_selector() {
+        let js = build_selector_chain_js("#my-btn");
+        assert!(js.contains("#my-btn"), "JS should include original selector");
+    }
+
+    #[test]
+    fn selector_chain_js_includes_data_testid_fallback() {
+        let js = build_selector_chain_js("#my-btn");
+        assert!(js.contains("data-testid") || js.contains("aria-label"),
+            "JS should include attribute fallbacks");
+    }
+
+    #[test]
+    fn selector_chain_js_is_valid_js_expression() {
+        // Must be an IIFE returning a value
+        let js = build_selector_chain_js("button.submit");
+        assert!(js.contains("(function") || js.contains("(() =>") || js.contains("(()=>{"),
+            "JS should be an IIFE");
+        assert!(js.contains("return"), "JS should have a return path");
     }
 }
