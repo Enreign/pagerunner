@@ -221,12 +221,6 @@ fn test_list_profiles_exits_ok() {
     assert!(
         envelope["data"].is_array(),
         "expected data array in: {}",
-    // Either a JSON array/object or the "No profiles" hint
-    assert!(
-    // Either valid JSON or the "No profiles" hint
-    assert!(
-        serde_json::from_str::<serde_json::Value>(s.trim()).is_ok() || s.contains("No profiles"),
-        "unexpected output: {}",
         s
     );
 }
@@ -1891,4 +1885,210 @@ fn test_init_json_with_agents_md_returns_snippet() {
         "AGENTS.md",
         "project_file must be AGENTS.md: {v}"
     );
+}
+
+// ─────────────────────────────────────────────────────────────
+// Site intelligence tier tests (LNY-184, 185, 187, 188, 191)
+// ─────────────────────────────────────────────────────────────
+
+#[test]
+#[serial]
+fn test_get_site_knowledge_unknown_origin_returns_null() {
+    let out = run(&["get-site-knowledge", "https://unknown.example.com"]);
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    let s = stdout(&out);
+    let v: serde_json::Value = serde_json::from_str(s.trim()).expect("valid JSON");
+    assert!(v.is_null(), "expected null, got: {}", s);
+}
+
+#[test]
+#[serial]
+fn test_register_adapter_js_code_too_large_returns_error() {
+    let big_code = "x".repeat(64 * 1024 + 1);
+    let out = run(&[
+        "register-adapter",
+        "https://example.com",
+        "test-adapter",
+        "Test",
+        &big_code,
+    ]);
+    assert!(!out.status.success());
+    let err = stderr(&out);
+    assert!(err.contains("64KB"), "expected 64KB error, got: {}", err);
+}
+
+#[test]
+#[serial]
+fn test_call_site_api_invalid_session_returns_error() {
+    let out = run(&[
+        "call-site-api",
+        "invalid-session",
+        "T0",
+        "https://linear.app",
+        "create-comment",
+    ]);
+    assert!(!out.status.success());
+}
+
+#[test]
+#[cfg_attr(not(target_os = "macos"), ignore)]
+#[serial]
+fn test_register_and_call_adapter_roundtrip() {
+    let _daemon = start_test_daemon();
+
+    let session_out = run_live(&["open-session", "personal"]);
+    assert!(session_out.status.success(), "open-session failed: {}", stderr(&session_out));
+    let sid = parse_json_field(&stdout(&session_out), "session_id");
+
+    let tabs_out = run_live(&["list-tabs", &sid]);
+    let tabs: serde_json::Value = serde_json::from_str(&stdout(&tabs_out)).unwrap();
+    let tid = tabs[0]["target_id"].as_str().unwrap().to_string();
+
+    run_live(&["navigate", &sid, &tid, "https://example.com"]);
+
+    // Register a simple adapter
+    let js_code = "return document.title;";
+    let reg_out = run_live(&[
+        "register-adapter",
+        "https://example.com",
+        "get-title",
+        "Get page title",
+        js_code,
+    ]);
+    assert!(reg_out.status.success(), "register-adapter failed: {}", stderr(&reg_out));
+
+    // Call the adapter
+    let call_out = run_live(&[
+        "call-site-api",
+        &sid,
+        &tid,
+        "https://example.com",
+        "get-title",
+    ]);
+    assert!(call_out.status.success(), "call-site-api failed: {}", stderr(&call_out));
+    let out_str = stdout(&call_out);
+    assert!(
+        out_str.contains("Example Domain") || out_str.contains("UNTRUSTED_WEB_CONTENT"),
+        "unexpected output: {}",
+        out_str
+    );
+
+    // Verify get_site_knowledge shows the adapter
+    let sk_out = run_live(&["get-site-knowledge", "https://example.com"]);
+    assert!(sk_out.status.success(), "get-site-knowledge failed: {}", stderr(&sk_out));
+    let sk_json: serde_json::Value =
+        serde_json::from_str(stdout(&sk_out).trim()).expect("valid JSON from get-site-knowledge");
+    assert!(
+        sk_json["adapters"]["get-title"].is_object(),
+        "expected get-title adapter in site knowledge: {}",
+        stdout(&sk_out)
+    );
+
+    run_live(&["close-session", &sid]);
+}
+
+#[test]
+#[cfg_attr(not(target_os = "macos"), ignore)]
+#[serial]
+fn test_call_site_api_origin_mismatch_returns_error() {
+    let _daemon = start_test_daemon();
+
+    let session_out = run_live(&["open-session", "personal"]);
+    assert!(session_out.status.success(), "open-session failed: {}", stderr(&session_out));
+    let sid = parse_json_field(&stdout(&session_out), "session_id");
+
+    let tabs_out = run_live(&["list-tabs", &sid]);
+    let tabs: serde_json::Value = serde_json::from_str(&stdout(&tabs_out)).unwrap();
+    let tid = tabs[0]["target_id"].as_str().unwrap().to_string();
+
+    // Navigate to example.com but try to call a linear.app adapter
+    run_live(&["navigate", &sid, &tid, "https://example.com"]);
+
+    // Register adapter for linear.app
+    run_live(&[
+        "register-adapter",
+        "https://linear.app",
+        "test",
+        "test",
+        "return 1;",
+    ]);
+
+    // Call with mismatched origin — should error
+    let call_out = run_live(&[
+        "call-site-api",
+        &sid,
+        &tid,
+        "https://linear.app",
+        "test",
+    ]);
+    assert!(!call_out.status.success(), "expected non-zero exit for origin mismatch");
+    let err = stderr(&call_out);
+    assert!(
+        err.contains("does not match") || err.contains("origin") || err.contains("mismatch"),
+        "expected origin mismatch error, got: {}",
+        err
+    );
+
+    run_live(&["close-session", &sid]);
+}
+
+#[test]
+#[cfg_attr(not(target_os = "macos"), ignore)]
+#[serial]
+fn test_selector_fragility_warning_appears() {
+    let _daemon = start_test_daemon();
+
+    let session_out = run_live(&["open-session", "personal"]);
+    assert!(session_out.status.success(), "open-session failed: {}", stderr(&session_out));
+    let sid = parse_json_field(&stdout(&session_out), "session_id");
+
+    let tabs_out = run_live(&["list-tabs", &sid]);
+    let tabs: serde_json::Value = serde_json::from_str(&stdout(&tabs_out)).unwrap();
+    let tid = tabs[0]["target_id"].as_str().unwrap().to_string();
+
+    run_live(&["navigate", &sid, &tid, "https://example.com"]);
+
+    // Click a non-existent selector 6 times to accumulate failures
+    let nonexistent_selector = "#totally-does-not-exist-fragility-test-btn";
+    for _ in 0..6 {
+        let _ = run_live(&["click", &sid, &tid, nonexistent_selector]);
+    }
+
+    // The 7th click should include the fragility warning
+    let click_out = run_live(&["click", &sid, &tid, nonexistent_selector]);
+    let out_str = stdout(&click_out);
+    let err_str = stderr(&click_out);
+    let combined = format!("{}{}", out_str, err_str);
+
+    assert!(
+        combined.contains("failure rate")
+            || combined.contains("fragile")
+            || combined.contains("_warning"),
+        "expected fragility warning after 6 failures, got stdout: {} stderr: {}",
+        out_str,
+        err_str
+    );
+
+    // Verify get_site_knowledge shows the selector
+    let sk_out = run_live(&["get-site-knowledge", "https://example.com"]);
+    assert!(sk_out.status.success(), "get-site-knowledge failed: {}", stderr(&sk_out));
+    let sk_json: serde_json::Value =
+        serde_json::from_str(stdout(&sk_out).trim()).expect("valid JSON from get-site-knowledge");
+    let selectors = sk_json["selectors"].as_array().unwrap_or_else(|| {
+        panic!("expected selectors array in site knowledge: {}", stdout(&sk_out))
+    });
+    let our_selector = selectors.iter().find(|s| {
+        s["selector"].as_str().unwrap_or("") == nonexistent_selector
+    });
+    assert!(
+        our_selector.is_some(),
+        "expected selector '{}' in site_knowledge selectors",
+        nonexistent_selector
+    );
+    assert!(
+        our_selector.unwrap()["failures"].as_u64().unwrap_or(0) >= 6,
+        "expected at least 6 failures for selector"
+    );
+
+    run_live(&["close-session", &sid]);
 }
