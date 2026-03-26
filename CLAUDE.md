@@ -19,7 +19,7 @@ cargo test --test cli_tools_integration   # run CLI integration tests only
 - `src/cli_tools.rs` — CLI tool runner, screenshot output handling
 - `src/audit.rs` — AuditLog, AuditEvent types, build_args_summary
 - `src/security.rs` — SecurityPolicy, PolicySummary
-- `src/main.rs` — CLI entry (30 subcommands + mcp, daemon, audit)
+- `src/main.rs` — CLI entry (32 subcommands + mcp, daemon, audit)
 - `~/.pagerunner/config.toml` — profile config (Chrome user data dirs)
 - `~/.pagerunner/state.db` — encrypted ReDB (sessions, KV, snapshots, audit)
 - `~/.pagerunner/audit.log` — append-only JSON-lines audit log (0600)
@@ -125,7 +125,7 @@ Disable globally with `[ner] enabled = false` in `config.toml`.
 
 ## CLI Subcommands
 
-All 30 MCP tools are exposed as direct CLI subcommands — no MCP registration required:
+All 32 MCP tools are exposed as direct CLI subcommands — no MCP registration required:
 
 ```bash
 pagerunner list-profiles
@@ -155,6 +155,8 @@ pagerunner kv-get <namespace> <key>
 pagerunner kv-delete <namespace> <key>
 pagerunner kv-list <namespace> [--prefix <pfx>] [--keys-only]
 pagerunner kv-clear <namespace>
+pagerunner get-network-log <session-id> [--target-id <tid>] [--limit <n>]
+pagerunner get-console-log <session-id> [--target-id <tid>] [--limit <n>]
 pagerunner get-site-knowledge <origin>
 pagerunner register-adapter <origin> <name> <description> <js-code>
 pagerunner call-site-api <session-id> <target-id> <origin> <name> [--params <json>]

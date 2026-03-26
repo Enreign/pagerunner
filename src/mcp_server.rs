@@ -2065,16 +2065,22 @@ async fn dispatch_tool_inner(
                     browser::update_selector_stability(&site_store, &origin, selector, success);
                 }
             }
-            click_result?;
+            // Compute fragility warning before propagating error — useful on both paths
+            let fragility = tab_url.as_deref()
+                .and_then(|u| crate::network_log::url_to_origin(u))
+                .and_then(|origin| browser::fragility_warning(&site_store, &origin, selector));
+            if let Err(e) = click_result {
+                if let Some(ref warning) = fragility {
+                    let warn_text = warning.get("_warning").and_then(|v| v.as_str()).unwrap_or("");
+                    return Err(crate::error::PagerunnerError::Config(format!("{e}. {warn_text}")));
+                }
+                return Err(e);
+            }
             let mut resp = serde_json::json!({"ok": true, "selector": selector});
-            if let Some(ref tab_url) = tab_url {
-                if let Some(origin) = crate::network_log::url_to_origin(tab_url) {
-                    if let Some(warning) = browser::fragility_warning(&site_store, &origin, selector) {
-                        if let (Some(obj), Some(warn_obj)) = (resp.as_object_mut(), warning.as_object()) {
-                            for (k, v) in warn_obj {
-                                obj.insert(k.clone(), v.clone());
-                            }
-                        }
+            if let Some(ref warning) = fragility {
+                if let (Some(obj), Some(warn_obj)) = (resp.as_object_mut(), warning.as_object()) {
+                    for (k, v) in warn_obj {
+                        obj.insert(k.clone(), v.clone());
                     }
                 }
             }
@@ -2262,16 +2268,22 @@ async fn dispatch_tool_inner(
                     browser::update_selector_stability(&site_store, &origin, selector, success);
                 }
             }
-            fill_result?;
+            // Compute fragility warning before propagating error — useful on both paths
+            let fragility = tab_url.as_deref()
+                .and_then(|u| crate::network_log::url_to_origin(u))
+                .and_then(|origin| browser::fragility_warning(&site_store, &origin, selector));
+            if let Err(e) = fill_result {
+                if let Some(ref warning) = fragility {
+                    let warn_text = warning.get("_warning").and_then(|v| v.as_str()).unwrap_or("");
+                    return Err(crate::error::PagerunnerError::Config(format!("{e}. {warn_text}")));
+                }
+                return Err(e);
+            }
             let mut resp = serde_json::json!({"ok": true, "selector": selector});
-            if let Some(ref tab_url) = tab_url {
-                if let Some(origin) = crate::network_log::url_to_origin(tab_url) {
-                    if let Some(warning) = browser::fragility_warning(&site_store, &origin, selector) {
-                        if let (Some(obj), Some(warn_obj)) = (resp.as_object_mut(), warning.as_object()) {
-                            for (k, v) in warn_obj {
-                                obj.insert(k.clone(), v.clone());
-                            }
-                        }
+            if let Some(ref warning) = fragility {
+                if let (Some(obj), Some(warn_obj)) = (resp.as_object_mut(), warning.as_object()) {
+                    for (k, v) in warn_obj {
+                        obj.insert(k.clone(), v.clone());
                     }
                 }
             }
@@ -2302,16 +2314,22 @@ async fn dispatch_tool_inner(
                     browser::update_selector_stability(&site_store, &origin, selector, success);
                 }
             }
-            select_result?;
+            // Compute fragility warning before propagating error — useful on both paths
+            let fragility = tab_url.as_deref()
+                .and_then(|u| crate::network_log::url_to_origin(u))
+                .and_then(|origin| browser::fragility_warning(&site_store, &origin, selector));
+            if let Err(e) = select_result {
+                if let Some(ref warning) = fragility {
+                    let warn_text = warning.get("_warning").and_then(|v| v.as_str()).unwrap_or("");
+                    return Err(crate::error::PagerunnerError::Config(format!("{e}. {warn_text}")));
+                }
+                return Err(e);
+            }
             let mut resp = serde_json::json!({"ok": true, "selector": selector, "value": value});
-            if let Some(ref tab_url) = tab_url {
-                if let Some(origin) = crate::network_log::url_to_origin(tab_url) {
-                    if let Some(warning) = browser::fragility_warning(&site_store, &origin, selector) {
-                        if let (Some(obj), Some(warn_obj)) = (resp.as_object_mut(), warning.as_object()) {
-                            for (k, v) in warn_obj {
-                                obj.insert(k.clone(), v.clone());
-                            }
-                        }
+            if let Some(ref warning) = fragility {
+                if let (Some(obj), Some(warn_obj)) = (resp.as_object_mut(), warning.as_object()) {
+                    for (k, v) in warn_obj {
+                        obj.insert(k.clone(), v.clone());
                     }
                 }
             }
