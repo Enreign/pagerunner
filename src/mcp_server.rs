@@ -1574,7 +1574,9 @@ async fn dispatch_tool_inner(
 
             browser::navigate(session, tid, url).await?;
             // Record URL after successful navigation for untrusted-content domain labeling.
-            session.tab_urls.insert(tid.to_string(), url.to_string());
+            if let Ok(mut map) = session.tab_urls.write() {
+                map.insert(tid.to_string(), url.to_string());
+            }
             Ok(serde_json::json!({"ok": true, "url": url, "target_id": tid}).to_string())
         }
 
@@ -1592,8 +1594,10 @@ async fn dispatch_tool_inner(
             // Use the URL recorded at navigate time for the untrusted-content domain label.
             let domain = session
                 .tab_urls
-                .get(tid)
-                .and_then(|u| url::Url::parse(u).ok())
+                .read()
+                .ok()
+                .and_then(|map| map.get(tid).cloned())
+                .and_then(|u| url::Url::parse(&u).ok())
                 .and_then(|u| u.host_str().map(|h| h.to_string()))
                 .unwrap_or_else(|| "unknown".to_string());
 
@@ -1786,8 +1790,10 @@ async fn dispatch_tool_inner(
                 if policy.sanitize_content {
                     let domain = session
                         .tab_urls
-                        .get(tid)
-                        .and_then(|u| url::Url::parse(u).ok())
+                        .read()
+                        .ok()
+                        .and_then(|map| map.get(tid).cloned())
+                        .and_then(|u| url::Url::parse(&u).ok())
                         .and_then(|u| u.host_str().map(|h| h.to_string()))
                         .unwrap_or_else(|| "unknown".to_string());
                     let sanitized =
@@ -1933,9 +1939,9 @@ async fn dispatch_tool_inner(
                         let _ = browser::navigate_to_blank(&session.cdp, tid).await;
                         // Evict stale cdp_sessions entry so next attach goes through fresh_attach cleanly.
                         session.cdp_sessions.remove(tid);
-                        session
-                            .tab_urls
-                            .insert(tid.to_string(), "about:blank".to_string());
+                        if let Ok(mut map) = session.tab_urls.write() {
+                            map.insert(tid.to_string(), "about:blank".to_string());
+                        }
                         record_security(
                             audit,
                             sec_violation,
@@ -1950,7 +1956,9 @@ async fn dispatch_tool_inner(
                         )));
                     }
                     // Update tab_urls with the actual URL for correct domain labeling in get_content.
-                    session.tab_urls.insert(tid.to_string(), actual.clone());
+                    if let Ok(mut map) = session.tab_urls.write() {
+                        map.insert(tid.to_string(), actual.clone());
+                    }
                 }
 
                 Ok(serde_json::json!({

@@ -3,9 +3,13 @@ use crate::chrome::ChromeProcess;
 use crate::config::ChromeProfile;
 use crate::error::{PagerunnerError, Result};
 use std::collections::HashMap;
+use std::sync::{Arc, RwLock};
+use tokio::sync::broadcast;
 use uuid::Uuid;
 
 pub type SessionId = String;
+/// Shared map of target_id → current URL, updated on navigate and Page.frameNavigated.
+pub type TabUrlMap = Arc<RwLock<HashMap<String, String>>>;
 
 pub struct Session {
     pub id: SessionId,
@@ -19,8 +23,8 @@ pub struct Session {
     pub cdp_sessions: HashMap<String, String>,
     pub security_policy: Option<crate::security::SecurityPolicy>,
     pub nav_count: u32,
-    /// Last navigated URL per target_id — used for untrusted-content domain labeling
-    pub tab_urls: HashMap<String, String>,
+    /// Current URL per target_id — updated on navigate and Page.frameNavigated events.
+    pub tab_urls: TabUrlMap,
     pub anon_config: Option<crate::anonymizer::AnonConfig>,
     pub _reader_task: tokio::task::JoinHandle<()>,
     /// Reverse map: CDP sessionId → target_id (populated by fresh_attach)
@@ -33,6 +37,8 @@ pub struct Session {
     pub console_buffer: crate::console_log::ConsoleBuffer,
     /// Console event processor task handle
     pub _console_processor: Option<tokio::task::JoinHandle<()>>,
+    /// Frame navigation event processor task handle
+    pub _frame_nav_processor: Option<tokio::task::JoinHandle<()>>,
 }
 
 impl Session {
@@ -104,6 +110,17 @@ impl SessionManager {
             rev_map2,
         ));
 
+        let tab_urls: TabUrlMap = Arc::new(RwLock::new(HashMap::new()));
+        let events_rx3 = cdp.subscribe_events();
+        let rev_map3 = cdp_sessions_rev.clone();
+        let tab_urls_for_proc = tab_urls.clone();
+
+        let frame_nav_processor_handle = tokio::spawn(frame_nav_processor(
+            events_rx3,
+            rev_map3,
+            tab_urls_for_proc,
+        ));
+
         self.sessions.insert(
             id.clone(),
             Session {
@@ -117,7 +134,7 @@ impl SessionManager {
                 cdp_sessions: HashMap::new(),
                 security_policy,
                 nav_count: 0,
-                tab_urls: HashMap::new(),
+                tab_urls,
                 anon_config: None,
                 _reader_task: reader_task,
                 cdp_sessions_rev,
@@ -125,6 +142,7 @@ impl SessionManager {
                 network_enabled: false,
                 console_buffer,
                 _console_processor: Some(console_processor_handle),
+                _frame_nav_processor: Some(frame_nav_processor_handle),
             },
         );
         Ok(id)
@@ -239,7 +257,7 @@ impl SessionManager {
                 cdp_sessions: HashMap::new(),
                 security_policy,
                 nav_count: 0,
-                tab_urls: HashMap::new(),
+                tab_urls: Arc::new(RwLock::new(HashMap::new())),
                 anon_config: None,
                 _reader_task: tokio::spawn(async {}),
                 cdp_sessions_rev: std::sync::Arc::new(std::sync::RwLock::new(HashMap::new())),
@@ -247,9 +265,60 @@ impl SessionManager {
                 network_enabled: false,
                 console_buffer: crate::console_log::new_buffer(),
                 _console_processor: None,
+                _frame_nav_processor: None,
             },
         );
         id
+    }
+}
+
+/// Async task that watches CDP events for `Page.frameNavigated` and updates
+/// `tab_urls` for the main frame (no `parentId`) so SPA and OAuth redirects
+/// are reflected without requiring an explicit `navigate` call.
+pub async fn frame_nav_processor(
+    mut events: broadcast::Receiver<serde_json::Value>,
+    cdp_sessions_rev: Arc<RwLock<HashMap<String, String>>>,
+    tab_urls: TabUrlMap,
+) {
+    loop {
+        match events.recv().await {
+            Ok(event) => {
+                if event.get("method").and_then(|m| m.as_str()) != Some("Page.frameNavigated") {
+                    continue;
+                }
+                let params = &event["params"];
+                // Only update for the main frame — no parentId means it's the top-level frame.
+                if !params["frame"]["parentId"].is_null() {
+                    continue;
+                }
+                let url = match params["frame"]["url"].as_str() {
+                    Some(u) => u.to_string(),
+                    None => continue,
+                };
+                let cdp_session = event
+                    .get("sessionId")
+                    .and_then(|s| s.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                let target_id = cdp_sessions_rev
+                    .read()
+                    .ok()
+                    .and_then(|m| m.get(&cdp_session).cloned())
+                    .unwrap_or_else(|| cdp_session.clone());
+                if let Ok(mut map) = tab_urls.write() {
+                    map.insert(target_id, url);
+                }
+            }
+            Err(broadcast::error::RecvError::Lagged(n)) => {
+                tracing::warn!(
+                    "Frame nav processor lagged, dropped {} events",
+                    n
+                );
+            }
+            Err(broadcast::error::RecvError::Closed) => {
+                break;
+            }
+        }
     }
 }
 
