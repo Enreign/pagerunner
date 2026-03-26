@@ -33,7 +33,10 @@ pub struct InFlightRequest {
     pub method: String,
     pub request_headers: HashMap<String, String>,
     pub request_body: Option<String>,
+    /// Wall-clock Unix timestamp in ms (from CDP `wallTime`). Used as entry timestamp_ms.
     pub start_timestamp_ms: u64,
+    /// Monotonic timestamp in ms (from CDP `timestamp`). Used only for duration calculation.
+    pub start_monotonic_ms: u64,
     pub status: Option<u16>,
 }
 
@@ -284,7 +287,18 @@ pub async fn network_event_processor(
                             .as_str()
                             .unwrap_or("GET")
                             .to_string();
-                        let timestamp_ms = params["timestamp"]
+                        // wallTime is a Unix epoch timestamp (seconds); timestamp is monotonic.
+                        // Use wallTime for the stored entry timestamp so TTL works correctly.
+                        let start_timestamp_ms = params["wallTime"]
+                            .as_f64()
+                            .map(|t| (t * 1000.0) as u64)
+                            .unwrap_or_else(|| {
+                                std::time::SystemTime::now()
+                                    .duration_since(std::time::UNIX_EPOCH)
+                                    .unwrap_or_default()
+                                    .as_millis() as u64
+                            });
+                        let start_monotonic_ms = params["timestamp"]
                             .as_f64()
                             .map(|t| (t * 1000.0) as u64)
                             .unwrap_or(0);
@@ -310,7 +324,8 @@ pub async fn network_event_processor(
                                 method: req_method,
                                 request_headers,
                                 request_body,
-                                start_timestamp_ms: timestamp_ms,
+                                start_timestamp_ms,
+                                start_monotonic_ms,
                                 status: None,
                             },
                         );
@@ -348,10 +363,13 @@ pub async fn network_event_processor(
                                 .ok()
                                 .and_then(|r| r["body"].as_str().map(String::from));
 
-                            let finish_ms = params["timestamp"]
+                            // Use monotonic timestamps for duration (consistent units).
+                            let finish_monotonic_ms = params["timestamp"]
                                 .as_f64()
                                 .map(|t| (t * 1000.0) as u64)
-                                .unwrap_or(req.start_timestamp_ms);
+                                .unwrap_or(req.start_monotonic_ms);
+                            let duration_ms = finish_monotonic_ms
+                                .saturating_sub(req.start_monotonic_ms);
 
                             let mut headers = req.request_headers.clone();
                             strip_sensitive_headers(&mut headers);
@@ -361,8 +379,7 @@ pub async fn network_event_processor(
                                 url: req.url.clone(),
                                 method: req.method.clone(),
                                 status: req.status.unwrap_or(0),
-                                duration_ms: finish_ms
-                                    .saturating_sub(req.start_timestamp_ms),
+                                duration_ms,
                                 timestamp_ms: req.start_timestamp_ms,
                                 request_headers: headers,
                                 request_body: req.request_body.clone(),
@@ -659,6 +676,7 @@ mod tests {
             },
             request_body: None,
             start_timestamp_ms: 1000,
+            start_monotonic_ms: 500,
             status: Some(200),
         };
 
