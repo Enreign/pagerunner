@@ -69,7 +69,6 @@ pub struct EndpointSchema {
 pub struct EndpointEntry {
     pub method: String,
     pub path_pattern: String,
-    #[serde(default)]
     pub api_kind: ApiKind,
     pub crud_op: Option<CrudOp>,
     pub observation_count: u32,
