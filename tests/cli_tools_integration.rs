@@ -133,9 +133,9 @@ fn test_list_profiles_exits_ok() {
     let out = run(&["list-profiles"]);
     assert!(out.status.success(), "stderr: {}", stderr(&out));
     let s = stdout(&out);
-    // Either a JSON array of profiles or the "No profiles" hint
+    // Either a JSON array/object or the "No profiles" hint
     assert!(
-        s.trim_start().starts_with('[') || s.contains("No profiles"),
+        serde_json::from_str::<serde_json::Value>(s.trim()).is_ok() || s.contains("No profiles"),
         "unexpected output: {}",
         s
     );
@@ -157,10 +157,10 @@ fn test_list_snapshots_returns_json() {
     let out = run(&["list-snapshots"]);
     assert!(out.status.success(), "stderr: {}", stderr(&out));
     let s = stdout(&out);
-    // JSON array (may be empty)
+    // JSON array or object (may be empty)
     assert!(
-        s.trim_start().starts_with('['),
-        "expected JSON array, got: {}",
+        serde_json::from_str::<serde_json::Value>(s.trim()).is_ok(),
+        "expected JSON, got: {}",
         s
     );
 }
@@ -172,8 +172,8 @@ fn test_list_snapshots_all_flag() {
     assert!(out.status.success(), "stderr: {}", stderr(&out));
     let s = stdout(&out);
     assert!(
-        s.trim_start().starts_with('['),
-        "expected JSON array, got: {}",
+        serde_json::from_str::<serde_json::Value>(s.trim()).is_ok(),
+        "expected JSON, got: {}",
         s
     );
 }
@@ -717,8 +717,8 @@ fn test_snapshot_save_list_delete() {
     );
     let s = stdout(&list);
     assert!(
-        s.trim_start().starts_with('['),
-        "expected JSON array: {}",
+        serde_json::from_str::<serde_json::Value>(s.trim()).is_ok(),
+        "expected JSON: {}",
         s
     );
 
