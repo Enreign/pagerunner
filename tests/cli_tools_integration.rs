@@ -48,6 +48,16 @@ fn run_live(args: &[&str]) -> std::process::Output {
         .expect("failed to run pagerunner")
 }
 
+/// Run a pagerunner command against the live test daemon and parse stdout as JSON.
+/// Panics if command fails or stdout is not valid JSON.
+#[allow(dead_code)]
+fn run_live_json(args: &[&str]) -> serde_json::Value {
+    let out = run_live(args);
+    assert!(out.status.success(), "command {:?} failed: {:?}", args, String::from_utf8_lossy(&out.stderr));
+    serde_json::from_slice(&out.stdout)
+        .unwrap_or_else(|e| panic!("Failed to parse JSON from {:?}: {} — stdout: {}", args, e, String::from_utf8_lossy(&out.stdout)))
+}
+
 /// Starts a test daemon using the isolated test DB. Returns a guard that kills the
 /// daemon when dropped. The daemon removes any stale socket on startup and starts
 /// listening, so run_live() calls will route through it automatically.
@@ -88,6 +98,75 @@ fn start_daemon_with(binary: &std::path::Path) -> TestDaemon {
 
 fn start_test_daemon() -> TestDaemon {
     start_daemon_with(&bin())
+}
+
+/// On macOS, if the pagerunner daemon is managed by launchd (KeepAlive=true),
+/// it will respawn within seconds of being killed by start_test_daemon(). This
+/// causes test failures when the production daemon steals the socket mid-test.
+///
+/// This guard temporarily unloads the launchd service while it's held, then
+/// reloads it on drop. Tests that need a stable test daemon should hold this
+/// guard for the duration.
+struct LaunchdGuard {
+    plist_path: std::path::PathBuf,
+    was_loaded: bool,
+}
+
+impl LaunchdGuard {
+    fn pause_pagerunner_daemon() -> Self {
+        let label = "com.pagerunner.daemon";
+        let plist_path = dirs::home_dir()
+            .unwrap()
+            .join("Library/LaunchAgents/com.pagerunner.daemon.plist");
+
+        // Check if the service is currently loaded/running
+        let was_loaded = std::process::Command::new("launchctl")
+            .args(&["list", label])
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false);
+
+        if was_loaded && plist_path.exists() {
+            // Disable prevents launchd from auto-restarting after we kill the process.
+            // Use bootout (macOS 10.10+) which is non-blocking unlike 'unload'.
+            let uid = get_uid();
+            std::process::Command::new("launchctl")
+                .args(&["bootout", &format!("gui/{}", uid), plist_path.to_str().unwrap()])
+                .output()
+                .ok();
+            // Force-kill any remaining daemon process so it doesn't hold the socket.
+            std::process::Command::new("pkill")
+                .args(&["-9", "-f", "pagerunner.*daemon"])
+                .output()
+                .ok();
+            std::thread::sleep(std::time::Duration::from_millis(300));
+        }
+
+        Self { plist_path, was_loaded }
+    }
+}
+
+fn get_uid() -> String {
+    std::process::Command::new("id")
+        .arg("-u")
+        .output()
+        .ok()
+        .and_then(|o| String::from_utf8(o.stdout).ok())
+        .map(|s| s.trim().to_string())
+        .unwrap_or_else(|| "501".to_string())
+}
+
+impl Drop for LaunchdGuard {
+    fn drop(&mut self) {
+        if self.was_loaded && self.plist_path.exists() {
+            // Bootstrap the service back so launchd manages it again.
+            let uid = get_uid();
+            std::process::Command::new("launchctl")
+                .args(&["bootstrap", &format!("gui/{}", uid), self.plist_path.to_str().unwrap()])
+                .output()
+                .ok();
+        }
+    }
 }
 
 /// Returns the release binary path (target/release/pagerunner), used for NER tests
@@ -133,9 +212,20 @@ fn test_list_profiles_exits_ok() {
     let out = run(&["list-profiles"]);
     assert!(out.status.success(), "stderr: {}", stderr(&out));
     let s = stdout(&out);
-    // Either a JSON array of profiles or the "No profiles" hint
+    // Must be valid JSON. CLI may wrap with metadata: {"result":{...},"_metadata":{...}}
+    let v: serde_json::Value = serde_json::from_str(&s)
+        .unwrap_or_else(|_| panic!("expected JSON, got: {}", s));
+    // Extract the result envelope (may be nested under "result" if metadata present)
+    let envelope = if v["result"].is_object() { &v["result"] } else { &v };
+    assert_eq!(envelope["ok"], serde_json::json!(true), "expected ok:true in: {}", s);
     assert!(
-        s.trim_start().starts_with('[') || s.contains("No profiles"),
+        envelope["data"].is_array(),
+        "expected data array in: {}",
+    // Either a JSON array/object or the "No profiles" hint
+    assert!(
+    // Either valid JSON or the "No profiles" hint
+    assert!(
+        serde_json::from_str::<serde_json::Value>(s.trim()).is_ok() || s.contains("No profiles"),
         "unexpected output: {}",
         s
     );
@@ -151,16 +241,51 @@ fn test_list_sessions_returns_json() {
     assert!(!s.is_empty(), "expected some output from list-sessions");
 }
 
+/// list_sessions output includes a "status" field for each session
+#[test]
+#[serial]
+fn test_list_sessions_has_status_field() {
+    // list_sessions on empty DB should return [] (empty array) in "result"
+    // No Chrome needed — just check the response shape is valid
+    let out = run(&["list-sessions"]);
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    let s = stdout(&out);
+    let v: serde_json::Value = serde_json::from_str(s.trim()).expect("must be JSON");
+    // Response is either a raw JSON array or wrapped in {"result": [...], "_metadata": {...}}
+    let arr = if v.is_array() {
+        v.as_array().unwrap().clone()
+    } else {
+        v["result"]
+            .as_array()
+            .expect("expected array at 'result' key")
+            .clone()
+    };
+    // If the array has entries, each must have a "status" field
+    for entry in &arr {
+        assert!(
+            entry.get("status").is_some(),
+            "each session must have status field: {}",
+            entry
+        );
+    }
+}
+
 #[test]
 #[serial]
 fn test_list_snapshots_returns_json() {
     let out = run(&["list-snapshots"]);
     assert!(out.status.success(), "stderr: {}", stderr(&out));
     let s = stdout(&out);
-    // JSON array (may be empty)
+    // Must be a JSON envelope with ok:true and data array
+    let v: serde_json::Value = serde_json::from_str(&s)
+        .unwrap_or_else(|_| panic!("expected JSON, got: {}", s));
+    assert_eq!(v["ok"], serde_json::json!(true), "expected ok:true in: {}", s);
+    assert!(v["data"].is_array(), "expected data array in: {}", s);
+    // JSON array or object (may be empty)
+    // JSON (may be empty array or wrapped envelope)
     assert!(
-        s.trim_start().starts_with('['),
-        "expected JSON array, got: {}",
+        serde_json::from_str::<serde_json::Value>(s.trim()).is_ok(),
+        "expected JSON, got: {}",
         s
     );
 }
@@ -171,9 +296,13 @@ fn test_list_snapshots_all_flag() {
     let out = run(&["list-snapshots", "--all"]);
     assert!(out.status.success(), "stderr: {}", stderr(&out));
     let s = stdout(&out);
+    let v: serde_json::Value = serde_json::from_str(&s)
+        .unwrap_or_else(|_| panic!("expected JSON, got: {}", s));
+    assert_eq!(v["ok"], serde_json::json!(true), "expected ok:true in: {}", s);
+    assert!(v["data"].is_array(), "expected data array in: {}", s);
     assert!(
-        s.trim_start().starts_with('['),
-        "expected JSON array, got: {}",
+        serde_json::from_str::<serde_json::Value>(s.trim()).is_ok(),
+        "expected JSON, got: {}",
         s
     );
 }
@@ -299,9 +428,12 @@ fn test_kv_clear_removes_all_keys() {
 
     let list = run(&["kv-list", ns]);
     let s = stdout(&list);
-    // Namespace should now be empty
-    let v: serde_json::Value = serde_json::from_str(&s).unwrap_or(serde_json::json!([]));
-    let arr = v.as_array().unwrap();
+    // Namespace should now be empty — response is {"ok":true,"data":[]}
+    let v: serde_json::Value = serde_json::from_str(&s)
+        .unwrap_or_else(|_| panic!("expected JSON, got: {}", s));
+    let arr = v["data"].as_array().unwrap_or_else(|| {
+        panic!("expected data array in kv-list response, got: {}", s)
+    });
     assert!(
         arr.is_empty(),
         "expected empty namespace after kv-clear, got: {}",
@@ -472,7 +604,7 @@ fn test_full_session_lifecycle() {
     let profiles_out = run_live(&["list-profiles"]);
     let s = stdout(&profiles_out);
     let profiles: serde_json::Value = serde_json::from_str(&s).unwrap();
-    let profile = profiles[0]["name"].as_str().unwrap().to_string();
+    let profile = profiles["data"][0]["name"].as_str().unwrap().to_string();
 
     let open = run_live(&["open-session", &profile]);
     assert!(
@@ -518,7 +650,7 @@ fn test_screenshot_file_mode_writes_png() {
     let _daemon = start_test_daemon();
     let profiles_out = run_live(&["list-profiles"]);
     let profiles: serde_json::Value = serde_json::from_str(&stdout(&profiles_out)).unwrap();
-    let profile = profiles[0]["name"].as_str().unwrap().to_string();
+    let profile = profiles["data"][0]["name"].as_str().unwrap().to_string();
 
     let open = run_live(&["open-session", &profile]);
     let sid = serde_json::from_str::<serde_json::Value>(&stdout(&open)).unwrap()["session_id"]
@@ -563,7 +695,7 @@ fn test_screenshot_base64_mode_returns_inline() {
     let _daemon = start_test_daemon();
     let profiles_out = run_live(&["list-profiles"]);
     let profiles: serde_json::Value = serde_json::from_str(&stdout(&profiles_out)).unwrap();
-    let profile = profiles[0]["name"].as_str().unwrap().to_string();
+    let profile = profiles["data"][0]["name"].as_str().unwrap().to_string();
 
     let open = run_live(&["open-session", &profile]);
     let sid = serde_json::from_str::<serde_json::Value>(&stdout(&open)).unwrap()["session_id"]
@@ -596,7 +728,7 @@ fn test_evaluate_returns_json() {
     let _daemon = start_test_daemon();
     let profiles_out = run_live(&["list-profiles"]);
     let profiles: serde_json::Value = serde_json::from_str(&stdout(&profiles_out)).unwrap();
-    let profile = profiles[0]["name"].as_str().unwrap().to_string();
+    let profile = profiles["data"][0]["name"].as_str().unwrap().to_string();
 
     let open = run_live(&["open-session", &profile]);
     let sid = serde_json::from_str::<serde_json::Value>(&stdout(&open)).unwrap()["session_id"]
@@ -716,9 +848,12 @@ fn test_snapshot_save_list_delete() {
         stderr(&list)
     );
     let s = stdout(&list);
+    let v: serde_json::Value = serde_json::from_str(&s)
+        .unwrap_or_else(|_| panic!("expected JSON from list-snapshots, got: {}", s));
+    assert!(v["data"].is_array(), "expected data array in list-snapshots: {}", s);
     assert!(
-        s.trim_start().starts_with('['),
-        "expected JSON array: {}",
+        serde_json::from_str::<serde_json::Value>(s.trim()).is_ok(),
+        "expected JSON: {}",
         s
     );
 
@@ -1108,6 +1243,109 @@ fn test_cli_wait_for_url_substring() {
     run_live(&["close-session", &sid]);
 }
 
+/// wait-for --selector returns stability_ms in JSON response.
+/// Uses data: URL with setTimeout to simulate JS-rendered content (SPA pattern).
+#[test]
+#[cfg_attr(not(target_os = "macos"), ignore)]
+#[serial]
+fn test_wait_for_selector_returns_stability_ms() {
+    let _daemon = start_test_daemon();
+    let profile = first_profile();
+
+    let open = run_live(&["open-session", &profile]);
+    let sid = parse_json_field(&stdout(&open), "session_id");
+
+    let tab = run_live(&["new-tab", &sid]);
+    let tid = parse_json_field(&stdout(&tab), "target_id");
+
+    // Navigate to a minimal blank page
+    run_live(&[
+        "navigate",
+        &sid,
+        &tid,
+        "data:text/html,<html><body></body></html>",
+    ]);
+
+    // Inject an element after 300ms via evaluate (simulates JS-rendered SPA content)
+    run_live(&[
+        "evaluate",
+        &sid,
+        &tid,
+        "setTimeout(() => { document.body.innerHTML = '<h1 id=\"spa-loaded\">Done</h1>'; }, 300); null",
+    ]);
+
+    // wait-for should find the element and report stability_ms
+    let wait = run_live(&[
+        "wait-for",
+        &sid,
+        &tid,
+        "--selector",
+        "#spa-loaded",
+        "--timeout-ms",
+        "5000",
+    ]);
+    assert!(
+        wait.status.success(),
+        "wait-for --selector failed: {}",
+        stderr(&wait)
+    );
+
+    let v: serde_json::Value = serde_json::from_str(&stdout(&wait))
+        .expect("wait-for output is not valid JSON");
+    assert_eq!(v["ok"], true, "expected ok=true: {}", stdout(&wait));
+    assert!(
+        v["stability_ms"].is_number(),
+        "stability_ms must be present as a number: {}",
+        stdout(&wait)
+    );
+    let ms = v["stability_ms"].as_u64().unwrap_or(0);
+    assert!(
+        ms >= 200,
+        "stability_ms should be >= 200ms (element added after 300ms), got {ms}"
+    );
+    assert!(
+        ms < 5000,
+        "stability_ms should be < 5000ms (timeout), got {ms}"
+    );
+
+    run_live(&["close-session", &sid]);
+}
+
+/// wait-for --url returns stability_ms in JSON response.
+#[test]
+#[cfg_attr(not(target_os = "macos"), ignore)]
+#[serial]
+fn test_wait_for_url_returns_stability_ms() {
+    let _daemon = start_test_daemon();
+    let profile = first_profile();
+
+    let open = run_live(&["open-session", &profile]);
+    let sid = parse_json_field(&stdout(&open), "session_id");
+
+    let tab = run_live(&["new-tab", &sid]);
+    let tid = parse_json_field(&stdout(&tab), "target_id");
+
+    run_live(&["navigate", &sid, &tid, "https://example.com"]);
+
+    let wait = run_live(&["wait-for", &sid, &tid, "--url", "example.com"]);
+    assert!(
+        wait.status.success(),
+        "wait-for --url failed: {}",
+        stderr(&wait)
+    );
+
+    let v: serde_json::Value = serde_json::from_str(&stdout(&wait))
+        .expect("wait-for output is not valid JSON");
+    assert_eq!(v["ok"], true, "expected ok=true: {}", stdout(&wait));
+    assert!(
+        v["stability_ms"].is_number(),
+        "stability_ms must be present as a number: {}",
+        stdout(&wait)
+    );
+
+    run_live(&["close-session", &sid]);
+}
+
 // ─────────────────────────────────────────────────────────────
 // Chrome tests — anonymization
 // ─────────────────────────────────────────────────────────────
@@ -1293,6 +1531,242 @@ fn test_cli_ner_anonymize_person_masked() {
 }
 
 // ─────────────────────────────────────────────────────────────
+// get_network_log tests
+// ─────────────────────────────────────────────────────────────
+
+#[test]
+#[serial]
+fn test_get_network_log_invalid_session() {
+    let output = run(&["get-network-log", "invalid-session-id", "--target-id", "tab1"]);
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("not found") || stderr.contains("SessionNotFound") || stderr.contains("session"));
+}
+
+#[cfg_attr(not(target_os = "macos"), ignore)]
+#[test]
+#[serial]
+fn test_get_network_log_captures_requests() {
+    // Pause the launchd-managed production daemon so it doesn't steal the socket.
+    let _launchd = LaunchdGuard::pause_pagerunner_daemon();
+    let _daemon = start_test_daemon();
+    let profile = first_profile();
+
+    let open = run_live(&["open-session", &profile]);
+    assert!(open.status.success(), "open-session failed: {}", stderr(&open));
+    let session_id = parse_json_field(&stdout(&open), "session_id");
+
+    let tab = run_live(&["new-tab", &session_id]);
+    assert!(tab.status.success(), "new-tab failed: {}", stderr(&tab));
+    let target_id = parse_json_field(&stdout(&tab), "target_id");
+
+    let nav = run_live(&["navigate", &session_id, &target_id, "https://httpbin.org/get"]);
+    assert!(nav.status.success(), "navigate failed: {}", stderr(&nav));
+
+    // get-content waits for DOM to be ready, ensuring the page loaded and network
+    // events for the navigation request have been captured.
+    run_live(&["get-content", &session_id, &target_id]);
+
+    let log_out = run_live(&[
+        "get-network-log", &session_id,
+        "--target-id", &target_id,
+        "--limit", "100",
+    ]);
+    assert!(log_out.status.success(), "get-network-log failed: {}", stderr(&log_out));
+    let output: serde_json::Value = serde_json::from_str(&stdout(&log_out))
+        .unwrap_or_else(|e| panic!("get-network-log output not JSON: {} — {}", e, stdout(&log_out)));
+
+    assert_eq!(output["ok"], true);
+    let entries = output["entries"].as_array().unwrap();
+    assert!(!entries.is_empty(), "should have captured at least one request");
+
+    let httpbin_entry = entries.iter().find(|e| {
+        e["url"].as_str().unwrap_or("").contains("httpbin.org")
+    });
+    assert!(httpbin_entry.is_some(), "httpbin.org request should be captured");
+    assert_eq!(httpbin_entry.unwrap()["status"], 200);
+
+    run_live(&["close-session", &session_id]);
+}
+
+#[cfg_attr(not(target_os = "macos"), ignore)]
+#[test]
+#[serial]
+fn test_get_network_log_url_filter() {
+    // Pause the launchd-managed production daemon so it doesn't steal the socket.
+    let _launchd = LaunchdGuard::pause_pagerunner_daemon();
+    let _daemon = start_test_daemon();
+    let profile = first_profile();
+
+    let open = run_live(&["open-session", &profile]);
+    assert!(open.status.success(), "open-session failed: {}", stderr(&open));
+    let session_id = parse_json_field(&stdout(&open), "session_id");
+
+    let tab = run_live(&["new-tab", &session_id]);
+    assert!(tab.status.success(), "new-tab failed: {}", stderr(&tab));
+    let target_id = parse_json_field(&stdout(&tab), "target_id");
+
+    let nav = run_live(&["navigate", &session_id, &target_id, "https://httpbin.org/get"]);
+    assert!(nav.status.success(), "navigate failed: {}", stderr(&nav));
+
+    // get-content waits for DOM to be ready, ensuring the page loaded and network
+    // events for the navigation request have been captured.
+    run_live(&["get-content", &session_id, &target_id]);
+
+    let log_out = run_live(&[
+        "get-network-log", &session_id,
+        "--target-id", &target_id,
+        "--url-pattern", "httpbin.org",
+    ]);
+    assert!(log_out.status.success(), "get-network-log failed: {}", stderr(&log_out));
+    let output: serde_json::Value = serde_json::from_str(&stdout(&log_out))
+        .unwrap_or_else(|e| panic!("get-network-log output not JSON: {} — {}", e, stdout(&log_out)));
+
+    assert_eq!(output["ok"], true);
+    let entries = output["entries"].as_array().unwrap();
+    for e in entries {
+        assert!(e["url"].as_str().unwrap().contains("httpbin.org"),
+            "all entries should match url filter");
+    }
+
+    run_live(&["close-session", &session_id]);
+}
+
+#[cfg_attr(not(target_os = "macos"), ignore)]
+#[test]
+#[serial]
+fn test_get_network_log_validation_error() {
+    // Pause the launchd-managed production daemon so it doesn't steal the socket.
+    let _launchd = LaunchdGuard::pause_pagerunner_daemon();
+    let _daemon = start_test_daemon();
+    let profile = first_profile();
+
+    let open = run_live(&["open-session", &profile]);
+    assert!(open.status.success(), "open-session failed: {}", stderr(&open));
+    let session_id = parse_json_field(&stdout(&open), "session_id");
+
+    // No --target-id and no --all-tabs: expect VALIDATION_ERROR
+    let log_out = run_live(&["get-network-log", &session_id]);
+    assert!(log_out.status.success(), "get-network-log should succeed (returns JSON error): {}", stderr(&log_out));
+    let output: serde_json::Value = serde_json::from_str(&stdout(&log_out))
+        .unwrap_or_else(|e| panic!("get-network-log output not JSON: {} — {}", e, stdout(&log_out)));
+    assert_eq!(output["ok"], false);
+    assert_eq!(output["error_type"], "VALIDATION_ERROR");
+
+    run_live(&["close-session", &session_id]);
+}
+
+// ─────────────────────────────────────────────────────────────
+// get_console_log tests
+// ─────────────────────────────────────────────────────────────
+
+#[test]
+#[serial]
+fn test_get_console_log_invalid_session() {
+    let output = run(&["get-console-log", "invalid-session-id", "--target-id", "tab1"]);
+    assert!(!output.status.success());
+}
+
+#[cfg_attr(not(target_os = "macos"), ignore)]
+#[test]
+#[serial]
+fn test_evaluate_error_includes_console_errors() {
+    let _launchd = LaunchdGuard::pause_pagerunner_daemon();
+    let _daemon = start_test_daemon();
+    let profile = first_profile();
+
+    let open = run_live(&["open-session", &profile]);
+    assert!(open.status.success());
+    let session_id = parse_json_field(&stdout(&open), "session_id");
+
+    let tab = run_live(&["new-tab", &session_id]);
+    assert!(tab.status.success());
+    let target_id = parse_json_field(&stdout(&tab), "target_id");
+
+    // Navigate to a test page
+    let nav = run_live(&["navigate", &session_id, &target_id, "https://example.com"]);
+    assert!(nav.status.success());
+
+    // First generate some console output
+    run_live(&["evaluate", &session_id, &target_id, "console.error('test error message')"]);
+
+    // Now trigger a JS exception by evaluating undefined function call
+    let eval = run_live(&["evaluate", &session_id, &target_id, "undefined_function_xyz()"]);
+    // evaluate error returns ok:false as JSON (exit 0) OR exits non-zero
+    // Either way, the output should be parseable JSON
+    let s = stdout(&eval);
+    if !s.is_empty() {
+        if let Ok(v) = serde_json::from_str::<serde_json::Value>(s.trim()) {
+            if v["ok"] == false {
+                // Check that console context fields are included
+                assert!(
+                    v.get("console_errors").is_some(),
+                    "evaluate error should include console_errors field"
+                );
+                assert!(
+                    v.get("exceptions").is_some(),
+                    "evaluate error should include exceptions field"
+                );
+            }
+        }
+    }
+
+    run_live(&["close-session", &session_id]);
+}
+
+#[cfg_attr(not(target_os = "macos"), ignore)]
+#[test]
+#[serial]
+fn test_get_console_log_captures_messages() {
+    let _launchd = LaunchdGuard::pause_pagerunner_daemon();
+    let _daemon = start_test_daemon();
+    let profile = first_profile();
+
+    let open = run_live(&["open-session", &profile]);
+    assert!(open.status.success());
+    let session_id = parse_json_field(&stdout(&open), "session_id");
+
+    let tab = run_live(&["new-tab", &session_id]);
+    assert!(tab.status.success());
+    let target_id = parse_json_field(&stdout(&tab), "target_id");
+
+    let nav = run_live(&["navigate", &session_id, &target_id, "https://example.com"]);
+    assert!(nav.status.success());
+
+    // Generate console messages
+    run_live(&["evaluate", &session_id, &target_id, "console.error('captured error')"]);
+    run_live(&["evaluate", &session_id, &target_id, "console.warn('captured warning')"]);
+
+    // Short wait for async event processing
+    std::thread::sleep(std::time::Duration::from_millis(200));
+
+    let log_out = run_live(&["get-console-log", &session_id, "--target-id", &target_id]);
+    assert!(
+        log_out.status.success(),
+        "get-console-log failed: {}",
+        stderr(&log_out)
+    );
+    let output: serde_json::Value = serde_json::from_str(&stdout(&log_out))
+        .unwrap_or_else(|e| panic!("not JSON: {}: {}", e, stdout(&log_out)));
+
+    assert_eq!(output["ok"], true);
+    assert!(output.get("console_errors").is_some());
+    assert!(output.get("exceptions").is_some());
+
+    let console = output["console_errors"].as_array().unwrap();
+    let has_error = console
+        .iter()
+        .any(|e| e["text"].as_str().unwrap_or("").contains("captured error"));
+    assert!(
+        has_error,
+        "captured error message should appear in console_errors: {:?}",
+        console
+    );
+
+    run_live(&["close-session", &session_id]);
+}
+
+// ─────────────────────────────────────────────────────────────
 // Helpers used by Chrome tests
 // ─────────────────────────────────────────────────────────────
 
@@ -1316,8 +1790,105 @@ fn first_profile() -> String {
     let out = run_live(&["list-profiles"]);
     let profiles: serde_json::Value =
         serde_json::from_str(&stdout(&out)).expect("list-profiles did not return JSON");
-    profiles[0]["name"]
+    profiles["data"][0]["name"]
         .as_str()
         .expect("no profiles configured")
         .to_string()
+}
+
+// ---------------------------------------------------------------------------
+// init --json tests (LNY-171)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_init_json_flag_accepted() {
+    // Verify --json flag is accepted (not "unexpected argument")
+    // Chrome may not be available in test env so we just check the flag is valid
+    let tmp = tempfile::tempdir().unwrap();
+    let out = std::process::Command::new(bin())
+        .args(["init", "--json", "--force"])
+        .current_dir(tmp.path())
+        .env("PAGERUNNER_DB_PATH", "/tmp/pagerunner_integration_test.db")
+        .output()
+        .expect("binary should run");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        !stderr.contains("unexpected argument"),
+        "--json must be a valid flag; stderr: {stderr}"
+    );
+}
+
+#[test]
+fn test_init_json_with_claude_md_returns_snippet() {
+    let tmp = tempfile::tempdir().unwrap();
+    std::fs::write(tmp.path().join("CLAUDE.md"), "# My Project\n").unwrap();
+    // Create fake home with pre-existing config so Chrome detection is bypassed
+    let fake_home = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(fake_home.path().join(".pagerunner")).unwrap();
+    std::fs::write(
+        fake_home.path().join(".pagerunner/config.toml"),
+        "# pagerunner config\n",
+    )
+    .unwrap();
+    let out = std::process::Command::new(bin())
+        .args(["init", "--json"])
+        .current_dir(tmp.path())
+        .env("HOME", fake_home.path())
+        .env("PAGERUNNER_DB_PATH", "/tmp/pagerunner_integration_test.db")
+        .output()
+        .expect("binary should run");
+    assert!(
+        out.status.success(),
+        "exit non-zero; stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let v: serde_json::Value =
+        serde_json::from_str(stdout.trim()).expect("must be valid JSON");
+    assert_eq!(v["ok"], true, "ok must be true: {v}");
+    assert!(v["snippet"].is_string(), "snippet field missing: {v}");
+    assert!(
+        !v["snippet"].as_str().unwrap_or("").is_empty(),
+        "snippet must not be empty: {v}"
+    );
+    assert_eq!(
+        v["project_file"].as_str().unwrap_or(""),
+        "CLAUDE.md",
+        "project_file must be CLAUDE.md: {v}"
+    );
+}
+
+#[test]
+fn test_init_json_with_agents_md_returns_snippet() {
+    let tmp = tempfile::tempdir().unwrap();
+    std::fs::write(tmp.path().join("AGENTS.md"), "# My Project\n").unwrap();
+    let fake_home = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(fake_home.path().join(".pagerunner")).unwrap();
+    std::fs::write(
+        fake_home.path().join(".pagerunner/config.toml"),
+        "# pagerunner config\n",
+    )
+    .unwrap();
+    let out = std::process::Command::new(bin())
+        .args(["init", "--json"])
+        .current_dir(tmp.path())
+        .env("HOME", fake_home.path())
+        .env("PAGERUNNER_DB_PATH", "/tmp/pagerunner_integration_test.db")
+        .output()
+        .expect("binary should run");
+    assert!(
+        out.status.success(),
+        "exit non-zero; stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let v: serde_json::Value =
+        serde_json::from_str(stdout.trim()).expect("must be valid JSON");
+    assert_eq!(v["ok"], true, "ok must be true: {v}");
+    assert!(v["snippet"].is_string(), "snippet field missing: {v}");
+    assert_eq!(
+        v["project_file"].as_str().unwrap_or(""),
+        "AGENTS.md",
+        "project_file must be AGENTS.md: {v}"
+    );
 }

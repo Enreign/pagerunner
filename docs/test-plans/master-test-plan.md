@@ -300,6 +300,52 @@ NER detects names and organisations using a BERT-based ONNX model.
 
 ---
 
+## 15. CDP Event System
+
+Added in LNY-166/167/168. Tests in `src/cdp.rs` and `src/network_log.rs` (unit, no Chrome), plus `tests/cli_tools_integration.rs` (live CLI).
+
+### Approach: pipe-pair mocking
+
+Unit tests simulate Chrome's CDP pipe interface by creating Unix pipe pairs. One end drives the `CdpConn` under test; the other end plays the role of Chrome, writing fake responses and events. No process spawning, no networking, no Chrome required.
+
+### CdpConn (src/cdp.rs)
+
+| ID | Test | Unit | Live CLI |
+|----|------|------|---------|
+| CDP1 | `send()` framing: message serialized with null terminator, id assigned | ✅ | — |
+| CDP2 | `send()` roundtrip: response routed to correct pending oneshot by id | ✅ | — |
+| CDP3 | `subscribe_events()`: CDP event broadcast to subscriber | ✅ | — |
+| CDP4 | Events not confused with command responses (has-id vs no-id routing) | ✅ | — |
+
+### NetworkLog (src/network_log.rs)
+
+| ID | Test | Unit | Live CLI |
+|----|------|------|---------|
+| NL1 | Sensitive headers stripped (Authorization, Cookie, Set-Cookie, X-Auth-Token) | ✅ | — |
+| NL2 | Response body truncated at 2 KB by default | ✅ | — |
+| NL3 | `full_response: true` skips body truncation | ✅ | — |
+| NL4 | `None` body passes through unchanged | ✅ | — |
+| NL5 | URL substring match | ✅ | — |
+| NL6 | URL glob path match (`/api/v1/*`, `/api/v1/**`) | ✅ | — |
+| NL7 | URL glob host match (`*.example.com/**`) | ✅ | — |
+| NL8 | Write + query entries, results newest-first | ✅ | — |
+| NL9 | URL filter applied during query | ✅ | — |
+| NL10 | Status range filter (min/max) | ✅ | — |
+| NL11 | `limit` cap + `result_truncated` flag | ✅ | — |
+| NL12 | Ring buffer eviction: oldest entries removed when capacity exceeded | ✅ | — |
+| NL13 | `delete_session_entries` removes all entries for a session | ✅ | — |
+
+### get_network_log tool (tests/cli_tools_integration.rs)
+
+| ID | Test | Unit | Live CLI |
+|----|------|------|---------|
+| GNL1 | Invalid session → non-zero exit with error message | ✅ | — |
+| GNL2 | Navigate to URL → entries captured with correct status and URL | — | ✅ |
+| GNL3 | `--url-pattern` filter: only matching entries returned | — | ✅ |
+| GNL4 | No `--target-id` and no `--all-tabs` → `ok: false`, `error_type: VALIDATION_ERROR` | — | ✅ |
+
+---
+
 ## Coverage Summary
 
 | Surface | Unit | Live MCP | Live CLI |
@@ -318,9 +364,11 @@ NER detects names and organisations using a BERT-based ONNX model.
 | Anon Phase 2 (NER) | 22/22 | 0/22 | 2/22 |
 | Error handling | 4/4 | 0/4 | 0/4 |
 | Help / flags | 3/3 | 0/3 | 0/3 |
+| CDP event system | 17/17 | — | 3/4 |
 
 **Automated Chrome tests (`#[ignore]`):** 22 in `tests/cli_tools_integration.rs`
 - Original 9: session lifecycle, screenshot (file + base64), evaluate, kv roundtrip, list-tabs, wait-for ms, snapshot save/list/delete, tab state save/restore
 - New 13: click, fill (input), fill (textarea), type-text, select, scroll-y, invalid-selector error, wait-for selector, wait-for url, anonymize get-content, anonymize screenshot blocked, allowed-domains blocks nav, NER anonymize person masked
+- CDP event system 3: get-network-log captures requests, url-filter, validation-error
 
 Last updated: 2026-03-21 (added 13 new `#[ignore]` Chrome CLI tests; 3-column coverage format; 22 total Chrome tests; 23 non-Chrome pass; 237 unit tests passing)

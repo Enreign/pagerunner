@@ -12,6 +12,7 @@ pub struct Session {
     pub profile_name: String,
     pub profile_display_name: String,
     pub stealth: bool,
+    pub alive: bool,
     chrome: ChromeProcess,
     pub cdp: CdpConn,
     /// Cache of target_id → CDP sessionId to reuse attached sessions
@@ -21,6 +22,24 @@ pub struct Session {
     /// Last navigated URL per target_id — used for untrusted-content domain labeling
     pub tab_urls: HashMap<String, String>,
     pub anon_config: Option<crate::anonymizer::AnonConfig>,
+    pub _reader_task: tokio::task::JoinHandle<()>,
+    /// Reverse map: CDP sessionId → target_id (populated by fresh_attach)
+    pub cdp_sessions_rev: std::sync::Arc<std::sync::RwLock<HashMap<String, String>>>,
+    /// Network event processor task handle
+    pub _network_processor: Option<tokio::task::JoinHandle<()>>,
+    /// True once Network.enable has been successfully called for at least one tab in this session.
+    pub network_enabled: bool,
+    /// In-memory ring buffer for Runtime console/exception events (no persistence needed).
+    pub console_buffer: crate::console_log::ConsoleBuffer,
+    /// Console event processor task handle
+    pub _console_processor: Option<tokio::task::JoinHandle<()>>,
+}
+
+impl Session {
+    /// Check if the underlying Chrome process is still running (non-blocking).
+    pub fn is_chrome_running(&mut self) -> bool {
+        self.chrome.is_running()
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -29,6 +48,7 @@ pub struct SessionInfo {
     pub profile_name: String,
     pub profile_display_name: String,
     pub stealth: bool,
+    pub alive: bool,
 }
 
 pub struct SessionManager {
@@ -47,10 +67,41 @@ impl SessionManager {
         profile: &ChromeProfile,
         stealth: bool,
         security_policy: Option<crate::security::SecurityPolicy>,
+        db: std::sync::Arc<crate::db::Db>,
+        network_config: &crate::config::NetworkConfig,
     ) -> Result<SessionId> {
         let result = crate::chrome::ChromeProcess::spawn(&profile.user_data_dir, stealth).await?;
-        let cdp = CdpConn::new(result.cmd_write, result.evt_read);
+        let (cdp, reader_task) = CdpConn::new(result.cmd_write, result.evt_read);
         let id = Uuid::new_v4().to_string();
+        let cdp_sessions_rev = std::sync::Arc::new(std::sync::RwLock::new(HashMap::new()));
+
+        let events_rx = cdp.subscribe_events();
+        let cdp_for_processor = cdp.clone();
+        let session_id_for_processor = id.clone();
+        let db_for_processor = db;
+        let rev_map = cdp_sessions_rev.clone();
+        let capacity = network_config.buffer_capacity;
+
+        let processor_handle = tokio::spawn(crate::network_log::network_event_processor(
+            events_rx,
+            cdp_for_processor,
+            session_id_for_processor,
+            db_for_processor,
+            rev_map,
+            capacity,
+        ));
+
+        let events_rx2 = cdp.subscribe_events();
+        let console_buffer = crate::console_log::new_buffer();
+        let console_buffer_for_proc = console_buffer.clone();
+        let rev_map2 = cdp_sessions_rev.clone();
+
+        let console_processor_handle = tokio::spawn(crate::console_log::console_event_processor(
+            events_rx2,
+            console_buffer_for_proc,
+            rev_map2,
+        ));
+
         self.sessions.insert(
             id.clone(),
             Session {
@@ -58,6 +109,7 @@ impl SessionManager {
                 profile_name: profile.name.clone(),
                 profile_display_name: profile.display_name.clone(),
                 stealth,
+                alive: true,
                 chrome: result.process,
                 cdp,
                 cdp_sessions: HashMap::new(),
@@ -65,27 +117,38 @@ impl SessionManager {
                 nav_count: 0,
                 tab_urls: HashMap::new(),
                 anon_config: None,
+                _reader_task: reader_task,
+                cdp_sessions_rev,
+                _network_processor: Some(processor_handle),
+                network_enabled: false,
+                console_buffer,
+                _console_processor: Some(console_processor_handle),
             },
         );
         Ok(id)
     }
 
-    pub async fn close(&mut self, id: &str) -> Result<()> {
+    pub async fn close(&mut self, id: &str, db: &crate::db::Db) -> Result<()> {
         let mut session = self
             .sessions
             .remove(id)
             .ok_or_else(|| PagerunnerError::SessionNotFound(id.into()))?;
-        // Graceful shutdown: Browser.close lets Chrome write session state cleanly.
-        // Fall back to kill if it doesn't exit within 3 seconds.
-        let _ = session
-            .cdp
-            .send("Browser.close", serde_json::json!({}))
-            .await;
-        let graceful =
-            tokio::time::timeout(std::time::Duration::from_secs(3), session.chrome.wait()).await;
-        if graceful.is_err() {
-            session.chrome.kill().await?;
+        // If Chrome has already crashed, skip the Browser.close CDP call (pipe is dead).
+        if session.alive && session.is_chrome_running() {
+            // Graceful shutdown: Browser.close lets Chrome write session state cleanly.
+            // Fall back to kill if it doesn't exit within 3 seconds.
+            let _ = session
+                .cdp
+                .send("Browser.close", serde_json::json!({}))
+                .await;
+            let graceful =
+                tokio::time::timeout(std::time::Duration::from_secs(3), session.chrome.wait())
+                    .await;
+            if graceful.is_err() {
+                session.chrome.kill().await?;
+            }
         }
+        let _ = crate::network_log::delete_session_entries(db, id);
         Ok(())
     }
 
@@ -105,8 +168,33 @@ impl SessionManager {
                 profile_name: s.profile_name.clone(),
                 profile_display_name: s.profile_display_name.clone(),
                 stealth: s.stealth,
+                alive: s.alive,
             })
             .collect()
+    }
+
+    /// Look up a session and verify it's alive.
+    /// Returns `SessionNotFound` if the ID doesn't exist.
+    /// Returns `SessionDead` if Chrome has crashed.
+    /// Marks the session `alive = false` when Chrome is detected as dead.
+    pub fn get_live(&mut self, id: &str) -> crate::error::Result<&mut Session> {
+        let session = self
+            .sessions
+            .get_mut(id)
+            .ok_or_else(|| crate::error::PagerunnerError::SessionNotFound(id.into()))?;
+
+        // Already marked dead
+        if !session.alive {
+            return Err(crate::error::PagerunnerError::SessionDead(id.into()));
+        }
+
+        // Lazy check: is Chrome still running?
+        if !session.is_chrome_running() {
+            session.alive = false;
+            return Err(crate::error::PagerunnerError::SessionDead(id.into()));
+        }
+
+        Ok(session)
     }
 
     /// Insert a stub session (no real browser) for use in unit tests.
@@ -133,7 +221,7 @@ impl SessionManager {
             .spawn()
             .expect("spawn /usr/bin/true");
         let chrome = crate::chrome::ChromeProcess::from_child_for_test(child);
-        let cdp = crate::cdp::CdpConn::new(cmd_write, evt_read);
+        let (cdp, _reader_handle) = crate::cdp::CdpConn::new(cmd_write, evt_read);
 
         let id = uuid::Uuid::new_v4().to_string();
         self.sessions.insert(
@@ -143,6 +231,7 @@ impl SessionManager {
                 profile_name: "stub".into(),
                 profile_display_name: "Stub".into(),
                 stealth: false,
+                alive: true,
                 chrome,
                 cdp,
                 cdp_sessions: HashMap::new(),
@@ -150,6 +239,12 @@ impl SessionManager {
                 nav_count: 0,
                 tab_urls: HashMap::new(),
                 anon_config: None,
+                _reader_task: tokio::spawn(async {}),
+                cdp_sessions_rev: std::sync::Arc::new(std::sync::RwLock::new(HashMap::new())),
+                _network_processor: None,
+                network_enabled: false,
+                console_buffer: crate::console_log::new_buffer(),
+                _console_processor: None,
             },
         );
         id

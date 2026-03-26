@@ -14,6 +14,8 @@ mod init;
 mod ipc;
 mod mcp_server;
 mod network_guard;
+mod console_log;
+mod network_log;
 mod sanitizer;
 mod security;
 mod session;
@@ -45,6 +47,9 @@ enum Commands {
         /// Overwrite existing config
         #[arg(long)]
         force: bool,
+        /// Output JSON result instead of interactive prompts
+        #[arg(long)]
+        json: bool,
     },
     /// Show config, daemon, and database status
     Status,
@@ -242,6 +247,40 @@ enum Commands {
     },
     /// Delete all keys in a namespace
     KvClear { namespace: String },
+    /// Query network requests captured during a session
+    #[command(name = "get-network-log")]
+    GetNetworkLog {
+        session_id: String,
+        #[arg(long)]
+        target_id: Option<String>,
+        #[arg(long)]
+        url_pattern: Option<String>,
+        #[arg(long)]
+        method: Option<String>,
+        #[arg(long)]
+        status_min: Option<u16>,
+        #[arg(long)]
+        status_max: Option<u16>,
+        #[arg(long)]
+        lookback_ms: Option<u64>,
+        #[arg(long, default_value = "50")]
+        limit: usize,
+        #[arg(long)]
+        include_request_body: bool,
+        #[arg(long)]
+        full_response: bool,
+        #[arg(long)]
+        all_tabs: bool,
+    },
+    /// Query captured browser console messages and JS exceptions for a tab
+    #[command(name = "get-console-log")]
+    GetConsoleLog {
+        session_id: String,
+        #[arg(long)]
+        target_id: String,
+        #[arg(long, default_value = "10")]
+        limit: u64,
+    },
     /// Download the NER model for PERSON/ORG name detection (requires --features ner build)
     DownloadModel,
 }
@@ -429,7 +468,20 @@ fn format_audit_event(event: &crate::audit::AuditEvent) -> String {
 }
 
 #[tokio::main]
-async fn main() -> anyhow::Result<()> {
+async fn main() {
+    if let Err(e) = run().await {
+        if let Some(pe) = e.downcast_ref::<crate::error::PagerunnerError>() {
+            eprintln!("Error: {}", pe);
+            eprintln!("error_type: {}", pe.error_type());
+            eprintln!("recovery_hint: {}", pe.recovery_hint());
+        } else {
+            eprintln!("Error: {}", e);
+        }
+        std::process::exit(1);
+    }
+}
+
+async fn run() -> anyhow::Result<()> {
     tracing_subscriber::fmt()
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
         .with_writer(std::io::stderr)
@@ -448,9 +500,13 @@ async fn main() -> anyhow::Result<()> {
             println!("{}", include_str!("../config.example.toml"));
         }
         Commands::Daemon => daemon::run().await?,
-        Commands::Init { force } => {
-            if let Err(e) = crate::init::run(force) {
-                eprintln!("Error: {}", e);
+        Commands::Init { force, json } => {
+            if let Err(e) = crate::init::run(force, json) {
+                if json {
+                    println!("{}", serde_json::json!({ "ok": false, "error": e.to_string() }));
+                } else {
+                    eprintln!("Error: {}", e);
+                }
                 std::process::exit(1);
             }
         }
@@ -957,6 +1013,50 @@ async fn main() -> anyhow::Result<()> {
             crate::cli_tools::run_tool(
                 "kv_clear",
                 serde_json::json!({"namespace": namespace}),
+                crate::cli_tools::ScreenshotMode::File,
+                &config,
+            )
+            .await?;
+        }
+        Commands::GetNetworkLog {
+            session_id, target_id, url_pattern, method, status_min,
+            status_max, lookback_ms, limit, include_request_body,
+            full_response, all_tabs,
+        } => {
+            let config = config::PagerunnerConfig::load()?;
+            crate::cli_tools::run_tool(
+                "get_network_log",
+                serde_json::json!({
+                    "session_id": session_id,
+                    "target_id": target_id,
+                    "url_pattern": url_pattern,
+                    "method": method,
+                    "status_min": status_min,
+                    "status_max": status_max,
+                    "lookback_ms": lookback_ms,
+                    "limit": limit,
+                    "include_request_body": include_request_body,
+                    "full_response": full_response,
+                    "all_tabs": all_tabs
+                }),
+                crate::cli_tools::ScreenshotMode::File,
+                &config,
+            )
+            .await?;
+        }
+        Commands::GetConsoleLog {
+            session_id,
+            target_id,
+            limit,
+        } => {
+            let config = config::PagerunnerConfig::load()?;
+            crate::cli_tools::run_tool(
+                "get_console_log",
+                serde_json::json!({
+                    "session_id": session_id,
+                    "target_id": target_id,
+                    "limit": limit,
+                }),
                 crate::cli_tools::ScreenshotMode::File,
                 &config,
             )

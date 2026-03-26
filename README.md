@@ -103,7 +103,17 @@ For Claude Desktop, add to `~/Library/Application Support/Claude/claude_desktop_
 >
 > **Note:** Chrome locks profile directories. Close any Chrome window using a profile before opening a Pagerunner session on it.
 
-**4. (Optional, `--features ner` builds only) Download the NER model**
+**4. Set up in your project (optional)**
+
+In any project directory with a `CLAUDE.md` or `AGENTS.md`:
+
+```bash
+pagerunner init
+```
+
+Pagerunner prints a ready-to-use usage snippet and offers to append it to your project file automatically. For scripting: `pagerunner init --json`.
+
+**5. (Optional, `--features ner` builds only) Download the NER model**
 
 ```bash
 pagerunner download-model   # ~65MB, enables PERSON/ORG name detection
