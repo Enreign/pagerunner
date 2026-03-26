@@ -142,6 +142,10 @@ fn test_list_profiles_exits_ok() {
     assert!(
         envelope["data"].is_array(),
         "expected data array in: {}",
+    // Either a JSON array/object or the "No profiles" hint
+    assert!(
+        serde_json::from_str::<serde_json::Value>(s.trim()).is_ok() || s.contains("No profiles"),
+        "unexpected output: {}",
         s
     );
 }
@@ -196,6 +200,12 @@ fn test_list_snapshots_returns_json() {
         .unwrap_or_else(|_| panic!("expected JSON, got: {}", s));
     assert_eq!(v["ok"], serde_json::json!(true), "expected ok:true in: {}", s);
     assert!(v["data"].is_array(), "expected data array in: {}", s);
+    // JSON array or object (may be empty)
+    assert!(
+        serde_json::from_str::<serde_json::Value>(s.trim()).is_ok(),
+        "expected JSON, got: {}",
+        s
+    );
 }
 
 #[test]
@@ -208,6 +218,11 @@ fn test_list_snapshots_all_flag() {
         .unwrap_or_else(|_| panic!("expected JSON, got: {}", s));
     assert_eq!(v["ok"], serde_json::json!(true), "expected ok:true in: {}", s);
     assert!(v["data"].is_array(), "expected data array in: {}", s);
+    assert!(
+        serde_json::from_str::<serde_json::Value>(s.trim()).is_ok(),
+        "expected JSON, got: {}",
+        s
+    );
 }
 
 #[test]
@@ -754,6 +769,11 @@ fn test_snapshot_save_list_delete() {
     let v: serde_json::Value = serde_json::from_str(&s)
         .unwrap_or_else(|_| panic!("expected JSON from list-snapshots, got: {}", s));
     assert!(v["data"].is_array(), "expected data array in list-snapshots: {}", s);
+    assert!(
+        serde_json::from_str::<serde_json::Value>(s.trim()).is_ok(),
+        "expected JSON: {}",
+        s
+    );
 
     run_live(&["close-session", &sid]);
 }
@@ -1136,6 +1156,109 @@ fn test_cli_wait_for_url_substring() {
         wait.status.success(),
         "wait-for --url 'example' failed: {}",
         stderr(&wait)
+    );
+
+    run_live(&["close-session", &sid]);
+}
+
+/// wait-for --selector returns stability_ms in JSON response.
+/// Uses data: URL with setTimeout to simulate JS-rendered content (SPA pattern).
+#[test]
+#[cfg_attr(not(target_os = "macos"), ignore)]
+#[serial]
+fn test_wait_for_selector_returns_stability_ms() {
+    let _daemon = start_test_daemon();
+    let profile = first_profile();
+
+    let open = run_live(&["open-session", &profile]);
+    let sid = parse_json_field(&stdout(&open), "session_id");
+
+    let tab = run_live(&["new-tab", &sid]);
+    let tid = parse_json_field(&stdout(&tab), "target_id");
+
+    // Navigate to a minimal blank page
+    run_live(&[
+        "navigate",
+        &sid,
+        &tid,
+        "data:text/html,<html><body></body></html>",
+    ]);
+
+    // Inject an element after 300ms via evaluate (simulates JS-rendered SPA content)
+    run_live(&[
+        "evaluate",
+        &sid,
+        &tid,
+        "setTimeout(() => { document.body.innerHTML = '<h1 id=\"spa-loaded\">Done</h1>'; }, 300); null",
+    ]);
+
+    // wait-for should find the element and report stability_ms
+    let wait = run_live(&[
+        "wait-for",
+        &sid,
+        &tid,
+        "--selector",
+        "#spa-loaded",
+        "--timeout-ms",
+        "5000",
+    ]);
+    assert!(
+        wait.status.success(),
+        "wait-for --selector failed: {}",
+        stderr(&wait)
+    );
+
+    let v: serde_json::Value = serde_json::from_str(&stdout(&wait))
+        .expect("wait-for output is not valid JSON");
+    assert_eq!(v["ok"], true, "expected ok=true: {}", stdout(&wait));
+    assert!(
+        v["stability_ms"].is_number(),
+        "stability_ms must be present as a number: {}",
+        stdout(&wait)
+    );
+    let ms = v["stability_ms"].as_u64().unwrap_or(0);
+    assert!(
+        ms >= 200,
+        "stability_ms should be >= 200ms (element added after 300ms), got {ms}"
+    );
+    assert!(
+        ms < 5000,
+        "stability_ms should be < 5000ms (timeout), got {ms}"
+    );
+
+    run_live(&["close-session", &sid]);
+}
+
+/// wait-for --url returns stability_ms in JSON response.
+#[test]
+#[cfg_attr(not(target_os = "macos"), ignore)]
+#[serial]
+fn test_wait_for_url_returns_stability_ms() {
+    let _daemon = start_test_daemon();
+    let profile = first_profile();
+
+    let open = run_live(&["open-session", &profile]);
+    let sid = parse_json_field(&stdout(&open), "session_id");
+
+    let tab = run_live(&["new-tab", &sid]);
+    let tid = parse_json_field(&stdout(&tab), "target_id");
+
+    run_live(&["navigate", &sid, &tid, "https://example.com"]);
+
+    let wait = run_live(&["wait-for", &sid, &tid, "--url", "example.com"]);
+    assert!(
+        wait.status.success(),
+        "wait-for --url failed: {}",
+        stderr(&wait)
+    );
+
+    let v: serde_json::Value = serde_json::from_str(&stdout(&wait))
+        .expect("wait-for output is not valid JSON");
+    assert_eq!(v["ok"], true, "expected ok=true: {}", stdout(&wait));
+    assert!(
+        v["stability_ms"].is_number(),
+        "stability_ms must be present as a number: {}",
+        stdout(&wait)
     );
 
     run_live(&["close-session", &sid]);

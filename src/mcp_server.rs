@@ -658,13 +658,18 @@ fn build_tool_metadata(tool: &str, args: &Value, result: &str) -> Option<Value> 
 
         // P0: wait_for — clarify what actually happened (condition met vs. timeout)
         "wait_for" => {
-            let condition_type = if args["selector"].is_string() {
-                "selector"
-            } else if args["url"].is_string() {
-                "url"
-            } else {
-                "fixed_delay"
-            };
+            let result_val: Value = serde_json::from_str(result).unwrap_or(Value::Null);
+            let condition_type = result_val["condition"]
+                .as_str()
+                .unwrap_or_else(|| {
+                    if args["selector"].is_string() {
+                        "selector"
+                    } else if args["url"].is_string() {
+                        "url"
+                    } else {
+                        "fixed_delay"
+                    }
+                });
             let condition_met = condition_type != "fixed_delay";
             Some(json!({
                 "_tool": "wait_for",
@@ -1842,10 +1847,18 @@ async fn dispatch_tool_inner(
             let session = mgr.get_live(sid)?;
 
             if let Some(selector) = args["selector"].as_str() {
-                browser::wait_for_selector(session, tid, selector, timeout_ms).await?;
-                Ok(serde_json::json!({"ok": true, "condition_met": true}).to_string())
+                let stability_ms =
+                    browser::wait_for_selector(session, tid, selector, timeout_ms).await?;
+                Ok(serde_json::json!({
+                    "ok": true,
+                    "condition": "selector",
+                    "selector": selector,
+                    "stability_ms": stability_ms,
+                })
+                .to_string())
             } else if let Some(url_pattern) = args["url"].as_str() {
-                browser::wait_for_url(session, tid, url_pattern, timeout_ms).await?;
+                let stability_ms =
+                    browser::wait_for_url(session, tid, url_pattern, timeout_ms).await?;
 
                 // After the URL pattern matched, validate the actual current URL against policy.
                 // wait_for_url uses substring matching, so the actual URL may be different from
@@ -1886,10 +1899,23 @@ async fn dispatch_tool_inner(
                     session.tab_urls.insert(tid.to_string(), actual.clone());
                 }
 
-                Ok(serde_json::json!({"ok": true, "condition_met": true}).to_string())
+                Ok(serde_json::json!({
+                    "ok": true,
+                    "condition": "url",
+                    "url_pattern": url_pattern,
+                    "stability_ms": stability_ms,
+                })
+                .to_string())
             } else if let Some(ms) = args["ms"].as_u64() {
                 tokio::time::sleep(std::time::Duration::from_millis(ms)).await;
-                Ok(serde_json::json!({"ok": true, "condition_met": false}).to_string())
+                Ok(serde_json::json!({
+                    "ok": true,
+                    "condition": "fixed_delay",
+                    "waited_ms": ms,
+                    "stability_ms": ms,
+                    "condition_met": false,
+                })
+                .to_string())
             } else {
                 Err(crate::error::PagerunnerError::Config(
                     "wait_for requires one of: selector, url, ms".into(),
@@ -3109,7 +3135,8 @@ mod metadata_tests {
     #[test]
     fn test_wait_for_selector_condition_met() {
         let args = json!({"selector": ".btn"});
-        let meta = build_tool_metadata("wait_for", &args, "Selector found: .btn").unwrap();
+        let result = r#"{"ok":true,"condition":"selector","selector":".btn","stability_ms":42}"#;
+        let meta = build_tool_metadata("wait_for", &args, result).unwrap();
         assert_eq!(meta["_condition_type"], "selector");
         assert_eq!(meta["_condition_met"], true);
     }
@@ -3117,7 +3144,8 @@ mod metadata_tests {
     #[test]
     fn test_wait_for_url_condition_met() {
         let args = json!({"url": "https://example.com"});
-        let meta = build_tool_metadata("wait_for", &args, "URL matched").unwrap();
+        let result = r#"{"ok":true,"condition":"url","url_pattern":"https://example.com","stability_ms":5}"#;
+        let meta = build_tool_metadata("wait_for", &args, result).unwrap();
         assert_eq!(meta["_condition_type"], "url");
         assert_eq!(meta["_condition_met"], true);
     }
@@ -3125,7 +3153,8 @@ mod metadata_tests {
     #[test]
     fn test_wait_for_ms_is_fixed_delay() {
         let args = json!({"ms": 2000});
-        let meta = build_tool_metadata("wait_for", &args, "Waited 2000ms").unwrap();
+        let result = r#"{"ok":true,"condition":"fixed_delay","waited_ms":2000,"stability_ms":2000,"condition_met":false}"#;
+        let meta = build_tool_metadata("wait_for", &args, result).unwrap();
         assert_eq!(meta["_condition_type"], "fixed_delay");
         assert_eq!(meta["_condition_met"], false);
     }

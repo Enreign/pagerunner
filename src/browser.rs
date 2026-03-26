@@ -366,12 +366,14 @@ pub async fn type_text(
 }
 
 /// Wait until `selector` exists in the DOM, or `timeout_ms` elapses.
+/// Returns the elapsed time in milliseconds from call start to condition met.
 pub async fn wait_for_selector(
     session: &mut Session,
     target_id: &str,
     selector: &str,
     timeout_ms: u64,
-) -> Result<()> {
+) -> Result<u64> {
+    let start = std::time::Instant::now();
     let mut session_id = attach_to_target(session, target_id).await?;
     let deadline = tokio::time::Instant::now() + std::time::Duration::from_millis(timeout_ms);
     let js = format!(
@@ -399,7 +401,7 @@ pub async fn wait_for_selector(
             Err(e) => return Err(e),
         };
         if result["result"]["value"].as_bool() == Some(true) {
-            return Ok(());
+            return Ok(start.elapsed().as_millis() as u64);
         }
         if tokio::time::Instant::now() >= deadline {
             return Err(PagerunnerError::Cdp(format!(
@@ -412,12 +414,14 @@ pub async fn wait_for_selector(
 }
 
 /// Wait until the current URL contains `pattern`, or `timeout_ms` elapses.
+/// Returns the elapsed time in milliseconds from call start to condition met.
 pub async fn wait_for_url(
     session: &mut Session,
     target_id: &str,
     pattern: &str,
     timeout_ms: u64,
-) -> Result<()> {
+) -> Result<u64> {
+    let start = std::time::Instant::now();
     let mut session_id = attach_to_target(session, target_id).await?;
     let deadline = tokio::time::Instant::now() + std::time::Duration::from_millis(timeout_ms);
     let js = format!(
@@ -445,7 +449,7 @@ pub async fn wait_for_url(
             Err(e) => return Err(e),
         };
         if result["result"]["value"].as_bool() == Some(true) {
-            return Ok(());
+            return Ok(start.elapsed().as_millis() as u64);
         }
         if tokio::time::Instant::now() >= deadline {
             return Err(PagerunnerError::Cdp(format!(

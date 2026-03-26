@@ -8,6 +8,7 @@ Rust MCP server that drives Chrome via CDP for AI agents. Serves Claude Code via
 cargo build --release          # build release binary
 cargo test                     # run all tests (239 unit + 45 CLI integration)
 cargo test                     # run all tests (232 unit + 46 CLI integration)
+cargo test                     # run all tests (232 unit + 47 CLI integration)
 cargo test --test cli_tools_integration   # run CLI integration tests only
 ```
 
@@ -162,6 +163,7 @@ CLI calls try the daemon socket first (`~/.pagerunner/daemon.sock`), then fall b
 ## Known Issues
 None currently. On CI (Linux): 262 tests pass (239 unit + 23 non-Chrome CLI), 23 skipped. On macOS locally: 283 pass (239 unit + 44 Chrome CLI), 1 NER test skipped (requires `--features ner` build + model). NER live tests pass with model at `~/.pagerunner/models/ner.onnx`.
 None currently. On CI (Linux): 255 tests pass (232 unit + 23 non-Chrome CLI), 23 skipped. On macOS locally: 276 pass (232 unit + 44 Chrome CLI), 1 NER test skipped (requires `--features ner` build + model). NER live tests pass with model at `~/.pagerunner/models/ner.onnx`.
+None currently. On CI (Linux): 255 tests pass (232 unit + 23 non-Chrome CLI), 25 skipped. On macOS locally: 278 pass (232 unit + 46 Chrome CLI), 1 NER test skipped (requires `--features ner` build + model). NER live tests pass with model at `~/.pagerunner/models/ner.onnx`.
 
 ## Testing
 
@@ -203,13 +205,14 @@ Tests use `PAGERUNNER_DB_PATH=/tmp/pagerunner_integration_test.db` automatically
 | Chrome: sessions + tabs | 4/4 | |
 | Chrome: screenshot, evaluate | 3/3 | |
 | Chrome: interactions (click, fill, type, select, scroll) | 8/8 | |
-| Chrome: wait-for | 2/2 | |
+| Chrome: wait-for | 4/4 | +2 new: stability_ms (selector + url) |
 | Chrome: anonymization | 2/2 | |
 | Chrome: security (allowed-domains) | 1/1 | |
 | Chrome: NER CLI | 1/1 | `#[ignore]` — requires `--features ner` + model |
 | Chrome: kv-roundtrip, snapshots, tab-state | 3/3 | |
 | **Total** | **48/48** | macOS: 47 pass + 1 ignored; Linux CI: 26 pass + 22 cfg_attr-ignored + 1 ignored |
 | **Total** | **46/46** | macOS: 45 pass + 1 ignored; Linux CI: 24 pass + 21 cfg_attr-ignored + 1 ignored |
+| **Total** | **47/47** | macOS: 46 pass + 1 ignored; Linux CI: 23 pass + 24 cfg_attr-ignored + 1 ignored |
 
 ### Last Full Live Test Run: [2026-03-21-run-6](docs/test-runs/2026-03-21-run-6.md)
 | Category | Pass | Notes |
