@@ -393,6 +393,19 @@ pub fn all_tools() -> Vec<Value> {
             }
         }),
         json!({
+            "name": "get_console_log",
+            "description": "Query captured browser console messages and JS exceptions for a tab. Returns console_errors (all console.error/warn/log) and exceptions (uncaught JS exceptions). Use after evaluate errors to see what went wrong.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "session_id": { "type": "string", "description": "Session ID" },
+                    "target_id": { "type": "string", "description": "Tab/target ID to filter by" },
+                    "limit": { "type": "integer", "description": "Max entries per type (default 10, max 100)" }
+                },
+                "required": ["session_id", "target_id"]
+            }
+        }),
+        json!({
             "name": "get_network_log",
             "description": "Return captured network requests for a tab (or all tabs in a session). Filter by URL pattern, HTTP method, status code range, or lookback window. Response bodies are truncated to 2KB by default — use full_response: true for the complete body. Requires a session opened after network subscriptions are enabled.",
             "inputSchema": {
@@ -1722,7 +1735,27 @@ async fn dispatch_tool_inner(
             })?;
             let mut mgr = sessions.lock().await;
             let session = mgr.get_live(sid)?;
-            let result = browser::evaluate(session, tid, expr).await?;
+            // Clone buffer Arc before evaluate (which mutably borrows session)
+            let console_buffer = session.console_buffer.clone();
+            let eval_result = browser::evaluate(session, tid, expr).await;
+            let result = match eval_result {
+                Err(e) => {
+                    let console_errors =
+                        crate::console_log::get_tab_console(&console_buffer, tid, 10);
+                    let exceptions =
+                        crate::console_log::get_tab_exceptions(&console_buffer, tid, 10);
+                    return Ok(serde_json::json!({
+                        "ok": false,
+                        "error": e.to_string(),
+                        "error_type": e.error_type(),
+                        "recovery_hint": e.recovery_hint(),
+                        "console_errors": console_errors,
+                        "exceptions": exceptions,
+                    })
+                    .to_string());
+                }
+                Ok(v) => v,
+            };
             let raw = serde_json::to_string_pretty(&result)?;
 
             // Anonymization path: entity decode → anonymize (no truncation for evaluate results).
@@ -2264,6 +2297,33 @@ async fn dispatch_tool_inner(
                 "total_captured": result.total_captured,
                 "result_truncated": result.result_truncated
             }).to_string())
+        }
+
+        "get_console_log" => {
+            let sid = args["session_id"].as_str().ok_or_else(|| {
+                crate::error::PagerunnerError::Config("Missing session_id".into())
+            })?;
+            let tid = args["target_id"].as_str().ok_or_else(|| {
+                crate::error::PagerunnerError::Config("Missing target_id".into())
+            })?;
+            let limit = args["limit"].as_u64().unwrap_or(10).min(100) as usize;
+
+            let mut mgr = sessions.lock().await;
+            let session = mgr
+                .get_mut(sid)
+                .ok_or_else(|| crate::error::PagerunnerError::SessionNotFound(sid.into()))?;
+
+            let console_errors =
+                crate::console_log::get_tab_console(&session.console_buffer, tid, limit);
+            let exceptions =
+                crate::console_log::get_tab_exceptions(&session.console_buffer, tid, limit);
+
+            Ok(json!({
+                "ok": true,
+                "console_errors": console_errors,
+                "exceptions": exceptions,
+            })
+            .to_string())
         }
 
         _ => Err(crate::error::PagerunnerError::Cdp(format!(

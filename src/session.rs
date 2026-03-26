@@ -29,6 +29,10 @@ pub struct Session {
     pub _network_processor: Option<tokio::task::JoinHandle<()>>,
     /// True once Network.enable has been successfully called for at least one tab in this session.
     pub network_enabled: bool,
+    /// In-memory ring buffer for Runtime console/exception events (no persistence needed).
+    pub console_buffer: crate::console_log::ConsoleBuffer,
+    /// Console event processor task handle
+    pub _console_processor: Option<tokio::task::JoinHandle<()>>,
 }
 
 impl Session {
@@ -87,6 +91,17 @@ impl SessionManager {
             capacity,
         ));
 
+        let events_rx2 = cdp.subscribe_events();
+        let console_buffer = crate::console_log::new_buffer();
+        let console_buffer_for_proc = console_buffer.clone();
+        let rev_map2 = cdp_sessions_rev.clone();
+
+        let console_processor_handle = tokio::spawn(crate::console_log::console_event_processor(
+            events_rx2,
+            console_buffer_for_proc,
+            rev_map2,
+        ));
+
         self.sessions.insert(
             id.clone(),
             Session {
@@ -106,6 +121,8 @@ impl SessionManager {
                 cdp_sessions_rev,
                 _network_processor: Some(processor_handle),
                 network_enabled: false,
+                console_buffer,
+                _console_processor: Some(console_processor_handle),
             },
         );
         Ok(id)
@@ -226,6 +243,8 @@ impl SessionManager {
                 cdp_sessions_rev: std::sync::Arc::new(std::sync::RwLock::new(HashMap::new())),
                 _network_processor: None,
                 network_enabled: false,
+                console_buffer: crate::console_log::new_buffer(),
+                _console_processor: None,
             },
         );
         id
