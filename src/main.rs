@@ -320,6 +320,17 @@ enum Commands {
         #[arg(long, default_value = "{}")]
         params: String,
     },
+    /// Generate a JS adapter for a site using the Claude API
+    #[command(name = "generate-adapter")]
+    GenerateAdapter {
+        /// Site origin, e.g. https://linear.app
+        origin: String,
+        /// Adapter name
+        name: String,
+        /// Optional description
+        #[arg(long)]
+        description: Option<String>,
+    },
     /// Download the NER model for PERSON/ORG name detection (requires --features ner build)
     DownloadModel,
 }
@@ -1145,6 +1156,11 @@ async fn run() -> anyhow::Result<()> {
                 &config,
             )
             .await?;
+        }
+        Commands::GenerateAdapter { origin, name, description } => {
+            let config = config::PagerunnerConfig::load()?;
+            crate::cli_tools::run_generate_adapter(&origin, &name, description.as_deref(), &config)
+                .await?;
         }
         Commands::DownloadModel => {
             #[cfg(not(feature = "ner"))]

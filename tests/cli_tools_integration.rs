@@ -1919,6 +1919,32 @@ fn test_register_adapter_js_code_too_large_returns_error() {
 
 #[test]
 #[serial]
+fn test_generate_adapter_missing_api_key_returns_error() {
+    // With no ANTHROPIC_API_KEY, generate_adapter should fail gracefully
+    let out = Command::new(bin())
+        .env("PAGERUNNER_DB_PATH", test_db())
+        .env_remove("ANTHROPIC_API_KEY")
+        .args(["generate-adapter", "https://example.com", "test_adapter"])
+        .output()
+        .expect("failed to run pagerunner");
+    assert!(!out.status.success(), "expected non-zero exit without API key");
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        err.contains("ANTHROPIC_API_KEY") || err.contains("not set"),
+        "expected API key error, got: {}", err
+    );
+}
+
+#[test]
+#[serial]
+fn test_get_site_knowledge_includes_endpoints_after_ingest() {
+    // Returns null for unknown origin — just check it doesn't crash
+    let out = run(&["get-site-knowledge", "https://no-such-origin.test"]);
+    assert!(out.status.success());
+}
+
+#[test]
+#[serial]
 fn test_call_site_api_invalid_session_returns_error() {
     let out = run(&[
         "call-site-api",

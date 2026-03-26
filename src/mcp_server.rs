@@ -479,6 +479,28 @@ pub fn all_tools() -> Vec<Value> {
                 "required": ["session_id", "target_id", "origin", "name"]
             }
         }),
+        json!({
+            "name": "generate_adapter",
+            "description": "Generate a JavaScript adapter for a site using the Claude API, based on observed network traffic and endpoint knowledge. Requires ANTHROPIC_API_KEY env var. The generated adapter is stored and immediately available via call_site_api.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "origin": {
+                        "type": "string",
+                        "description": "Site origin to generate adapter for, e.g. 'https://linear.app'"
+                    },
+                    "name": {
+                        "type": "string",
+                        "description": "Adapter name, e.g. 'create_issue'"
+                    },
+                    "description": {
+                        "type": "string",
+                        "description": "Optional description of what the adapter should do. If omitted, Claude infers from observed endpoints."
+                    }
+                },
+                "required": ["origin", "name"]
+            }
+        }),
     ]
 }
 
@@ -1462,11 +1484,24 @@ fn build_site_knowledge_response(
         .map(|(k, v)| (k.clone(), serde_json::Value::String(v.vault_ref.clone())))
         .collect::<serde_json::Map<_, _>>().into();
 
+    let endpoints: Vec<serde_json::Value> = entry.endpoints.iter().map(|(key, ep)| {
+        serde_json::json!({
+            "key": key,
+            "method": ep.method,
+            "path_pattern": ep.path_pattern,
+            "api_kind": format!("{:?}", ep.api_kind),
+            "crud_op": ep.crud_op.as_ref().map(|c| format!("{:?}", c)),
+            "observations": ep.observation_count,
+            "has_schema": ep.schema.is_some(),
+        })
+    }).collect();
+
     serde_json::json!({
         "origin": origin,
         "adapters": adapters,
         "selectors": selectors,
         "auth_tokens": auth_tokens,
+        "endpoints": endpoints,
     })
 }
 
@@ -2808,6 +2843,50 @@ async fn dispatch_tool_inner(
             }
 
             Ok(wrap_untrusted_web_content(&result_text))
+        }
+
+        "generate_adapter" => {
+            let origin = args["origin"].as_str()
+                .ok_or_else(|| PagerunnerError::Config("origin required".into()))?;
+            let adapter_name = args["name"].as_str()
+                .ok_or_else(|| PagerunnerError::Config("name required".into()))?;
+
+            ensure_seed_adapters_loaded(&site_store, origin)?;
+
+            let sk_entry = site_store.get(origin)?.unwrap_or_default();
+            let js_code = crate::adapter_generator::generate(origin, &sk_entry, adapter_name).await?;
+
+            // Validate size (same 64KB limit as register_adapter)
+            if js_code.len() > 65_536 {
+                return Err(PagerunnerError::Config(
+                    "Generated adapter exceeds 64KB limit — try requesting a more focused adapter".into()
+                ));
+            }
+
+            // Store the generated adapter
+            let mut entry = site_store.get(origin)?.unwrap_or_default();
+            let now = crate::site_knowledge::now_micros();
+            entry.adapters.insert(adapter_name.to_string(), crate::site_knowledge::AdapterEntry {
+                js_code: js_code.clone(),
+                description: args["description"].as_str()
+                    .unwrap_or("Auto-generated adapter")
+                    .to_string(),
+                params_schema: None,
+                trusted: false,
+                created_at: now,
+                last_used: 0,
+                last_error: None,
+                ..Default::default()
+            });
+            entry.last_updated = now;
+            site_store.put(origin, &entry)?;
+
+            Ok(serde_json::to_string(&serde_json::json!({
+                "ok": true,
+                "origin": origin,
+                "name": adapter_name,
+                "js_code_preview": &js_code[..js_code.len().min(200)]
+            }))?)
         }
 
         _ => Err(crate::error::PagerunnerError::Cdp(format!(
