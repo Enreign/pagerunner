@@ -426,6 +426,59 @@ pub fn all_tools() -> Vec<Value> {
                 "required": ["session_id"]
             }
         }),
+        json!({
+            "name": "get_site_knowledge",
+            "description": "Return what pagerunner has learned about a site: registered adapters (JS code for direct API calls), selector reliability scores, and detected auth token kinds. Use this before registering a new adapter to avoid duplicates.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "origin": {
+                        "type": "string",
+                        "description": "Site origin, e.g. 'https://linear.app'"
+                    }
+                },
+                "required": ["origin"]
+            }
+        }),
+        json!({
+            "name": "register_adapter",
+            "description": "Store a JS adapter for direct API calls to a site (bypasses DOM). The adapter body is executed via AsyncFunction in the browser tab. Use get_network_log to observe API calls, then write an adapter that replicates them with fetch().",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "origin": { "type": "string", "description": "Site origin, e.g. 'https://linear.app'" },
+                    "name": { "type": "string", "description": "Unique name for this adapter, e.g. 'create-comment'" },
+                    "description": { "type": "string", "description": "Human-readable description of what this adapter does" },
+                    "js_code": {
+                        "type": "string",
+                        "description": "JS function body. Receives 'params' (object from call_site_api) and 'session' ({origin}). Must return a value (use return or top-level await). Browser context provides cookies/auth automatically."
+                    },
+                    "params_schema": {
+                        "type": "object",
+                        "description": "Optional JSON schema describing the params this adapter expects. Informational only — not validated at runtime."
+                    }
+                },
+                "required": ["origin", "name", "description", "js_code"]
+            }
+        }),
+        json!({
+            "name": "call_site_api",
+            "description": "Execute a registered adapter by name, passing params. The adapter runs in the browser tab via AsyncFunction — it has full access to the session's cookies and auth. Faster and more reliable than DOM interactions for sites with stable APIs.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "session_id": { "type": "string" },
+                    "target_id": { "type": "string" },
+                    "origin": { "type": "string", "description": "Site origin the adapter is registered for" },
+                    "name": { "type": "string", "description": "Adapter name" },
+                    "params": {
+                        "type": "object",
+                        "description": "Parameters to pass to the adapter function"
+                    }
+                },
+                "required": ["session_id", "target_id", "origin", "name"]
+            }
+        }),
     ]
 }
 
@@ -1260,6 +1313,48 @@ fn check_ner_model(
         ))
     })?;
     Ok(model_path)
+}
+
+fn build_site_knowledge_response(
+    entry: &crate::site_knowledge::SiteKnowledgeEntry,
+    origin: &str,
+) -> serde_json::Value {
+    let adapters: serde_json::Value = entry.adapters.iter().map(|(name, adapter)| {
+        (name.clone(), serde_json::json!({
+            "description": adapter.description,
+            "trusted": adapter.trusted,
+            "js_code": format!("<<<ADAPTER_CODE>>>\n{}\n<<<ADAPTER_CODE>>>", adapter.js_code),
+            "params_schema": adapter.params_schema,
+            "last_used": adapter.last_used,
+        }))
+    }).collect::<serde_json::Map<_, _>>().into();
+
+    let selectors: serde_json::Value = {
+        let mut sel_list: Vec<_> = entry.selectors.iter().collect();
+        sel_list.sort_by(|(_, a), (_, b)| {
+            let score_a = crate::site_knowledge::SiteKnowledgeStore::reliability_score(a).unwrap_or(0.5);
+            let score_b = crate::site_knowledge::SiteKnowledgeStore::reliability_score(b).unwrap_or(0.5);
+            score_b.partial_cmp(&score_a).unwrap_or(std::cmp::Ordering::Equal)
+        });
+        sel_list.iter().map(|(sel, s)| serde_json::json!({
+            "selector": sel,
+            "successes": s.successes,
+            "failures": s.failures,
+            "reliability": crate::site_knowledge::SiteKnowledgeStore::reliability_score(s),
+        })).collect::<Vec<_>>().into()
+    };
+
+    // Auth tokens: vault refs only (never raw values)
+    let auth_tokens: serde_json::Value = entry.auth_tokens.iter()
+        .map(|(k, v)| (k.clone(), serde_json::Value::String(v.vault_ref.clone())))
+        .collect::<serde_json::Map<_, _>>().into();
+
+    serde_json::json!({
+        "origin": origin,
+        "adapters": adapters,
+        "selectors": selectors,
+        "auth_tokens": auth_tokens,
+    })
 }
 
 async fn dispatch_tool_inner(
@@ -2404,6 +2499,26 @@ async fn dispatch_tool_inner(
             .to_string())
         }
 
+        "get_site_knowledge" => {
+            let origin = args["origin"].as_str()
+                .ok_or_else(|| PagerunnerError::Config("origin required".into()))?;
+            let now = crate::site_knowledge::now_micros();
+            match site_store.get(origin)? {
+                None => Ok(serde_json::to_string(&serde_json::Value::Null)?),
+                Some(mut entry) => {
+                    // Lazy TTL: if entry is expired, delete and return null
+                    if crate::site_knowledge::SiteKnowledgeStore::is_expired(&entry, now) {
+                        let _ = site_store.delete(origin);
+                        return Ok(serde_json::to_string(&serde_json::Value::Null)?);
+                    }
+                    // Prune stale adapters
+                    crate::site_knowledge::SiteKnowledgeStore::prune_stale_adapters(&mut entry, now);
+                    let response = build_site_knowledge_response(&entry, origin);
+                    Ok(serde_json::to_string(&response)?)
+                }
+            }
+        }
+
         _ => Err(crate::error::PagerunnerError::Cdp(format!(
             "Unknown tool: {}",
             tool
@@ -3529,5 +3644,66 @@ mod anon_detokenize_tests {
         vault.purge_session("sess1").unwrap();
         // Confirm it's gone
         assert!(vault.lookup_token("sess1", &token).unwrap().is_none());
+    }
+}
+
+#[cfg(test)]
+mod site_knowledge_response_tests {
+    use super::*;
+
+    #[test]
+    fn build_site_knowledge_response_wraps_js_code_in_adapter_code_markers() {
+        let mut entry = crate::site_knowledge::SiteKnowledgeEntry::default();
+        entry.adapters.insert("test-adapter".into(), crate::site_knowledge::AdapterEntry {
+            js_code: "return fetch('https://api.example.com').then(r => r.json());".into(),
+            description: "Test adapter".into(),
+            params_schema: None,
+            trusted: false,
+            created_at: 0,
+            last_used: 0,
+            last_error: None,
+        });
+
+        let response = build_site_knowledge_response(&entry, "https://example.com");
+        let js_code_field = response["adapters"]["test-adapter"]["js_code"].as_str().unwrap();
+        assert!(js_code_field.contains("<<<ADAPTER_CODE>>>"),
+            "js_code must be wrapped in ADAPTER_CODE markers, got: {}", js_code_field);
+        // Markers appear twice (open and close)
+        assert_eq!(js_code_field.matches("<<<ADAPTER_CODE>>>").count(), 2);
+        // Raw JS is still present between the markers
+        assert!(js_code_field.contains("fetch("));
+    }
+
+    #[test]
+    fn build_site_knowledge_response_returns_vault_refs_not_raw_tokens() {
+        let mut entry = crate::site_knowledge::SiteKnowledgeEntry::default();
+        entry.auth_tokens.insert("bearer".into(), crate::site_knowledge::AuthTokenEntry {
+            vault_ref: "site_vault:a3f9b2".into(),
+        });
+
+        let response = build_site_knowledge_response(&entry, "https://example.com");
+        let bearer = response["auth_tokens"]["bearer"].as_str().unwrap();
+        assert_eq!(bearer, "site_vault:a3f9b2");
+        // No raw token value
+        assert!(!bearer.contains("raw_") && !bearer.starts_with("Bearer "));
+    }
+
+    #[test]
+    fn build_site_knowledge_response_sorts_selectors_by_reliability_descending() {
+        let mut entry = crate::site_knowledge::SiteKnowledgeEntry::default();
+        // good selector: 9/10 success = 0.9
+        entry.selectors.insert("#good-btn".into(), crate::site_knowledge::SelectorEntry {
+            successes: 9, failures: 1, last_seen: 0,
+        });
+        // bad selector: 4/10 = 0.4
+        entry.selectors.insert(".bad-btn".into(), crate::site_knowledge::SelectorEntry {
+            successes: 4, failures: 6, last_seen: 0,
+        });
+
+        let response = build_site_knowledge_response(&entry, "https://example.com");
+        let selectors = response["selectors"].as_array().unwrap();
+        assert_eq!(selectors.len(), 2);
+        // First entry should be the more reliable one
+        assert_eq!(selectors[0]["selector"].as_str().unwrap(), "#good-btn");
     }
 }

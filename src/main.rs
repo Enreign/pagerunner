@@ -283,6 +283,39 @@ enum Commands {
         #[arg(long, default_value = "10")]
         limit: u64,
     },
+    /// Get what pagerunner knows about a site
+    #[command(name = "get-site-knowledge")]
+    GetSiteKnowledge {
+        /// Site origin, e.g. 'https://linear.app'
+        origin: String,
+    },
+    /// Register a JS adapter for direct API calls to a site
+    #[command(name = "register-adapter")]
+    RegisterAdapter {
+        /// Site origin
+        origin: String,
+        /// Unique adapter name
+        name: String,
+        /// Description of what this adapter does
+        description: String,
+        /// JS function body (receives 'params' and 'session' args)
+        js_code: String,
+    },
+    /// Call a registered site adapter
+    #[command(name = "call-site-api")]
+    CallSiteApi {
+        /// Session ID
+        session_id: String,
+        /// Target (tab) ID
+        target_id: String,
+        /// Site origin
+        origin: String,
+        /// Adapter name
+        name: String,
+        /// JSON params to pass to adapter
+        #[arg(long, default_value = "{}")]
+        params: String,
+    },
     /// Download the NER model for PERSON/ORG name detection (requires --features ner build)
     DownloadModel,
 }
@@ -1074,6 +1107,36 @@ async fn run() -> anyhow::Result<()> {
                     "target_id": target_id,
                     "limit": limit,
                 }),
+                crate::cli_tools::ScreenshotMode::File,
+                &config,
+            )
+            .await?;
+        }
+        Commands::GetSiteKnowledge { origin } => {
+            let config = config::PagerunnerConfig::load()?;
+            crate::cli_tools::run_tool(
+                "get_site_knowledge",
+                serde_json::json!({"origin": origin}),
+                crate::cli_tools::ScreenshotMode::File,
+                &config,
+            )
+            .await?;
+        }
+        Commands::RegisterAdapter { origin, name, description, js_code } => {
+            let config = config::PagerunnerConfig::load()?;
+            crate::cli_tools::run_tool(
+                "register_adapter",
+                serde_json::json!({"origin": origin, "name": name, "description": description, "js_code": js_code}),
+                crate::cli_tools::ScreenshotMode::File,
+                &config,
+            )
+            .await?;
+        }
+        Commands::CallSiteApi { session_id, target_id, origin, name, params } => {
+            let config = config::PagerunnerConfig::load()?;
+            crate::cli_tools::run_tool(
+                "call_site_api",
+                serde_json::json!({"session_id": session_id, "target_id": target_id, "origin": origin, "name": name, "params": serde_json::from_str::<serde_json::Value>(&params).unwrap_or(serde_json::json!({}))}),
                 crate::cli_tools::ScreenshotMode::File,
                 &config,
             )
