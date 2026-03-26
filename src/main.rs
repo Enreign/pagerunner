@@ -20,6 +20,8 @@ mod console_log;
 mod network_log;
 mod sanitizer;
 mod security;
+mod endpoint_mapper;
+mod schema_inference;
 mod site_knowledge;
 mod session;
 mod snapshot;
