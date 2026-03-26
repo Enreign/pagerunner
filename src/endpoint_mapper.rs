@@ -4,7 +4,7 @@ use crate::site_knowledge::{ApiKind, CrudOp, EndpointEntry, SiteKnowledgeStore};
 
 const SKIP_EXTENSIONS: &[&str] = &[
     ".js", ".css", ".png", ".jpg", ".jpeg", ".gif", ".svg",
-    ".ico", ".woff", ".woff2", ".ttf", ".map", ".json", ".xml",
+    ".ico", ".woff", ".woff2", ".ttf", ".map", ".xml",
 ];
 
 const SKIP_PREFIXES: &[&str] = &[
@@ -48,7 +48,9 @@ fn looks_like_id(s: &str) -> bool {
             return true;
         }
     }
-    // Short hex ID: 8-32 hex chars
+    // Short hex ID: 8-32 hex chars. Known limitation: English words that are
+    // valid hex (e.g. "deadbeef") will be parameterized. Lower bound of 8
+    // makes common short words safe in practice.
     if s.len() >= 8 && s.len() <= 32 && s.chars().all(|c| c.is_ascii_hexdigit()) {
         return true;
     }
@@ -284,5 +286,41 @@ mod tests {
         let sk = store.get("https://api.example.com").unwrap().unwrap();
         assert!(sk.endpoints.contains_key("GET /users/{id}"),
             "endpoints: {:?}", sk.endpoints.keys().collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn ingest_increments_observation_count() {
+        use std::sync::Arc;
+        use tempfile::tempdir;
+        use crate::db::Db;
+        use crate::site_knowledge::SiteKnowledgeStore;
+        use crate::network_log::NetworkEntry;
+        use std::collections::HashMap;
+
+        let dir = tempdir().unwrap();
+        let key = Db::generate_key();
+        let db = Arc::new(Db::open_with_key(dir.path().join("t.db").to_str().unwrap(), key).unwrap());
+        let store = SiteKnowledgeStore::new(db, key);
+
+        let make_entry = || NetworkEntry {
+            request_id: "1".into(),
+            url: "https://api.example.com/users/42".into(),
+            method: "GET".into(),
+            status: 200,
+            duration_ms: 50,
+            timestamp_ms: 0,
+            request_headers: HashMap::new(),
+            request_body: None,
+            response_body: None,
+            response_truncated: false,
+            tab_id: "t1".into(),
+        };
+
+        ingest(&make_entry(), &store);
+        ingest(&make_entry(), &store);
+
+        let sk = store.get("https://api.example.com").unwrap().unwrap();
+        let ep = sk.endpoints.get("GET /users/{id}").unwrap();
+        assert_eq!(ep.observation_count, 2);
     }
 }
