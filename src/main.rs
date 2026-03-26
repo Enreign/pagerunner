@@ -432,7 +432,20 @@ fn format_audit_event(event: &crate::audit::AuditEvent) -> String {
 }
 
 #[tokio::main]
-async fn main() -> anyhow::Result<()> {
+async fn main() {
+    if let Err(e) = run().await {
+        if let Some(pe) = e.downcast_ref::<crate::error::PagerunnerError>() {
+            eprintln!("Error: {}", pe);
+            eprintln!("error_type: {}", pe.error_type());
+            eprintln!("recovery_hint: {}", pe.recovery_hint());
+        } else {
+            eprintln!("Error: {}", e);
+        }
+        std::process::exit(1);
+    }
+}
+
+async fn run() -> anyhow::Result<()> {
     tracing_subscriber::fmt()
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
         .with_writer(std::io::stderr)

@@ -6,7 +6,7 @@ Rust MCP server that drives Chrome via CDP for AI agents. Serves Claude Code via
 ## Build & Test
 ```bash
 cargo build --release          # build release binary
-cargo test                     # run all tests (218 unit + 45 CLI integration)
+cargo test                     # run all tests (239 unit + 45 CLI integration)
 cargo test --test cli_tools_integration   # run CLI integration tests only
 ```
 
@@ -159,7 +159,7 @@ All commands output JSON to stdout. Errors go to stderr with exit 1.
 CLI calls try the daemon socket first (`~/.pagerunner/daemon.sock`), then fall back to opening the DB directly. If a live MCP server is running standalone, start the daemon mode first to avoid DB lock conflicts.
 
 ## Known Issues
-None currently. On CI (Linux): 244 tests pass (218 unit + 26 non-Chrome CLI), 23 skipped. On macOS locally: 265 pass (218 unit + 47 Chrome CLI), 1 NER test skipped (requires `--features ner` build + model). NER live tests pass with model at `~/.pagerunner/models/ner.onnx`.
+None currently. On CI (Linux): 262 tests pass (239 unit + 23 non-Chrome CLI), 23 skipped. On macOS locally: 283 pass (239 unit + 44 Chrome CLI), 1 NER test skipped (requires `--features ner` build + model). NER live tests pass with model at `~/.pagerunner/models/ner.onnx`.
 
 ## Testing
 

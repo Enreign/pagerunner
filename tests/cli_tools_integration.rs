@@ -133,10 +133,15 @@ fn test_list_profiles_exits_ok() {
     let out = run(&["list-profiles"]);
     assert!(out.status.success(), "stderr: {}", stderr(&out));
     let s = stdout(&out);
-    // Either a JSON array of profiles or the "No profiles" hint
+    // Must be valid JSON. CLI may wrap with metadata: {"result":{...},"_metadata":{...}}
+    let v: serde_json::Value = serde_json::from_str(&s)
+        .unwrap_or_else(|_| panic!("expected JSON, got: {}", s));
+    // Extract the result envelope (may be nested under "result" if metadata present)
+    let envelope = if v["result"].is_object() { &v["result"] } else { &v };
+    assert_eq!(envelope["ok"], serde_json::json!(true), "expected ok:true in: {}", s);
     assert!(
-        s.trim_start().starts_with('[') || s.contains("No profiles"),
-        "unexpected output: {}",
+        envelope["data"].is_array(),
+        "expected data array in: {}",
         s
     );
 }
@@ -157,12 +162,11 @@ fn test_list_snapshots_returns_json() {
     let out = run(&["list-snapshots"]);
     assert!(out.status.success(), "stderr: {}", stderr(&out));
     let s = stdout(&out);
-    // JSON array (may be empty)
-    assert!(
-        s.trim_start().starts_with('['),
-        "expected JSON array, got: {}",
-        s
-    );
+    // Must be a JSON envelope with ok:true and data array
+    let v: serde_json::Value = serde_json::from_str(&s)
+        .unwrap_or_else(|_| panic!("expected JSON, got: {}", s));
+    assert_eq!(v["ok"], serde_json::json!(true), "expected ok:true in: {}", s);
+    assert!(v["data"].is_array(), "expected data array in: {}", s);
 }
 
 #[test]
@@ -171,11 +175,10 @@ fn test_list_snapshots_all_flag() {
     let out = run(&["list-snapshots", "--all"]);
     assert!(out.status.success(), "stderr: {}", stderr(&out));
     let s = stdout(&out);
-    assert!(
-        s.trim_start().starts_with('['),
-        "expected JSON array, got: {}",
-        s
-    );
+    let v: serde_json::Value = serde_json::from_str(&s)
+        .unwrap_or_else(|_| panic!("expected JSON, got: {}", s));
+    assert_eq!(v["ok"], serde_json::json!(true), "expected ok:true in: {}", s);
+    assert!(v["data"].is_array(), "expected data array in: {}", s);
 }
 
 #[test]
@@ -299,9 +302,12 @@ fn test_kv_clear_removes_all_keys() {
 
     let list = run(&["kv-list", ns]);
     let s = stdout(&list);
-    // Namespace should now be empty
-    let v: serde_json::Value = serde_json::from_str(&s).unwrap_or(serde_json::json!([]));
-    let arr = v.as_array().unwrap();
+    // Namespace should now be empty — response is {"ok":true,"data":[]}
+    let v: serde_json::Value = serde_json::from_str(&s)
+        .unwrap_or_else(|_| panic!("expected JSON, got: {}", s));
+    let arr = v["data"].as_array().unwrap_or_else(|| {
+        panic!("expected data array in kv-list response, got: {}", s)
+    });
     assert!(
         arr.is_empty(),
         "expected empty namespace after kv-clear, got: {}",
@@ -472,7 +478,7 @@ fn test_full_session_lifecycle() {
     let profiles_out = run_live(&["list-profiles"]);
     let s = stdout(&profiles_out);
     let profiles: serde_json::Value = serde_json::from_str(&s).unwrap();
-    let profile = profiles[0]["name"].as_str().unwrap().to_string();
+    let profile = profiles["data"][0]["name"].as_str().unwrap().to_string();
 
     let open = run_live(&["open-session", &profile]);
     assert!(
@@ -518,7 +524,7 @@ fn test_screenshot_file_mode_writes_png() {
     let _daemon = start_test_daemon();
     let profiles_out = run_live(&["list-profiles"]);
     let profiles: serde_json::Value = serde_json::from_str(&stdout(&profiles_out)).unwrap();
-    let profile = profiles[0]["name"].as_str().unwrap().to_string();
+    let profile = profiles["data"][0]["name"].as_str().unwrap().to_string();
 
     let open = run_live(&["open-session", &profile]);
     let sid = serde_json::from_str::<serde_json::Value>(&stdout(&open)).unwrap()["session_id"]
@@ -563,7 +569,7 @@ fn test_screenshot_base64_mode_returns_inline() {
     let _daemon = start_test_daemon();
     let profiles_out = run_live(&["list-profiles"]);
     let profiles: serde_json::Value = serde_json::from_str(&stdout(&profiles_out)).unwrap();
-    let profile = profiles[0]["name"].as_str().unwrap().to_string();
+    let profile = profiles["data"][0]["name"].as_str().unwrap().to_string();
 
     let open = run_live(&["open-session", &profile]);
     let sid = serde_json::from_str::<serde_json::Value>(&stdout(&open)).unwrap()["session_id"]
@@ -596,7 +602,7 @@ fn test_evaluate_returns_json() {
     let _daemon = start_test_daemon();
     let profiles_out = run_live(&["list-profiles"]);
     let profiles: serde_json::Value = serde_json::from_str(&stdout(&profiles_out)).unwrap();
-    let profile = profiles[0]["name"].as_str().unwrap().to_string();
+    let profile = profiles["data"][0]["name"].as_str().unwrap().to_string();
 
     let open = run_live(&["open-session", &profile]);
     let sid = serde_json::from_str::<serde_json::Value>(&stdout(&open)).unwrap()["session_id"]
@@ -716,11 +722,9 @@ fn test_snapshot_save_list_delete() {
         stderr(&list)
     );
     let s = stdout(&list);
-    assert!(
-        s.trim_start().starts_with('['),
-        "expected JSON array: {}",
-        s
-    );
+    let v: serde_json::Value = serde_json::from_str(&s)
+        .unwrap_or_else(|_| panic!("expected JSON from list-snapshots, got: {}", s));
+    assert!(v["data"].is_array(), "expected data array in list-snapshots: {}", s);
 
     run_live(&["close-session", &sid]);
 }
@@ -1316,7 +1320,7 @@ fn first_profile() -> String {
     let out = run_live(&["list-profiles"]);
     let profiles: serde_json::Value =
         serde_json::from_str(&stdout(&out)).expect("list-profiles did not return JSON");
-    profiles[0]["name"]
+    profiles["data"][0]["name"]
         .as_str()
         .expect("no profiles configured")
         .to_string()
