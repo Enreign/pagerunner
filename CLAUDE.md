@@ -6,12 +6,23 @@ Rust MCP server that drives Chrome via CDP for AI agents. Serves Claude Code via
 ## Build & Test
 ```bash
 cargo build --release          # build release binary
-cargo test                     # run all tests (239 unit + 45 CLI integration)
-cargo test                     # run all tests (232 unit + 46 CLI integration)
-cargo test                     # run all tests (232 unit + 47 CLI integration)
-cargo test                     # run all tests (256 unit + 50 CLI integration)
-cargo test --test cli_tools_integration   # run CLI integration tests only
+cargo build                    # debug build (use this to verify compilation)
+cargo test <module_name>        # run tests for a specific module (e.g. cargo test site_knowledge)
+cargo test                     # run ALL tests — opens Chrome windows on macOS, use sparingly
+cargo test --test cli_tools_integration   # run CLI integration tests only (also opens Chrome on macOS)
 ```
+
+### ⚠️ When to run `cargo test` (bare, no filter)
+**Do NOT run bare `cargo test` as a routine build/verify step on macOS.**
+On macOS, `#[cfg_attr(not(target_os = "macos"), ignore)]` tests are NOT skipped — they run and open real Chrome browser windows.
+
+Use these instead:
+- **Compilation check:** `cargo build`
+- **Unit tests for a module:** `cargo test <module_name>` (e.g. `cargo test audit`, `cargo test site_knowledge`)
+- **All unit tests without Chrome:** `cargo test --bin pagerunner` won't work (binary target); use module-level filters
+- **Full test suite including Chrome:** only run bare `cargo test` when explicitly testing Chrome integration, and warn the user first
+
+Last known test counts: 256 unit + 50 CLI integration (macOS: 49 pass + 1 ignored; Linux CI: 24 pass + 25 cfg_attr-ignored + 1 ignored)
 
 ## Key Files
 - `src/mcp_server.rs` — main dispatch, session lifecycle, audit recording, `call_tool`
