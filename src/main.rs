@@ -1,5 +1,6 @@
 mod anonymizer;
 mod audit;
+mod auth_token_detector;
 mod browser;
 mod cdp;
 mod chrome;
