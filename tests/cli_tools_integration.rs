@@ -1348,52 +1348,73 @@ fn test_init_json_flag_accepted() {
 fn test_init_json_with_claude_md_returns_snippet() {
     let tmp = tempfile::tempdir().unwrap();
     std::fs::write(tmp.path().join("CLAUDE.md"), "# My Project\n").unwrap();
+    // Create fake home with pre-existing config so Chrome detection is bypassed
+    let fake_home = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(fake_home.path().join(".pagerunner")).unwrap();
+    std::fs::write(
+        fake_home.path().join(".pagerunner/config.toml"),
+        "# pagerunner config\n",
+    )
+    .unwrap();
     let out = std::process::Command::new(bin())
-        .args(["init", "--json", "--force"])
+        .args(["init", "--json"])
         .current_dir(tmp.path())
+        .env("HOME", fake_home.path())
         .env("PAGERUNNER_DB_PATH", "/tmp/pagerunner_integration_test.db")
         .output()
         .expect("binary should run");
-    let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(
-        !stderr.contains("unexpected argument"),
-        "stderr: {stderr}"
+        out.status.success(),
+        "exit non-zero; stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
     );
     let stdout = String::from_utf8_lossy(&out.stdout);
-    if !stdout.trim().is_empty() {
-        if let Ok(v) = serde_json::from_str::<serde_json::Value>(stdout.trim()) {
-            if v["ok"] == true {
-                // When project file found, snippet must be present
-                assert!(v["snippet"].is_string(), "snippet field missing: {v}");
-                assert!(!v["snippet"].as_str().unwrap_or("").is_empty(), "snippet empty: {v}");
-                assert_eq!(v["project_file"].as_str().unwrap_or(""), "CLAUDE.md");
-            }
-        }
-    }
+    let v: serde_json::Value =
+        serde_json::from_str(stdout.trim()).expect("must be valid JSON");
+    assert_eq!(v["ok"], true, "ok must be true: {v}");
+    assert!(v["snippet"].is_string(), "snippet field missing: {v}");
+    assert!(
+        !v["snippet"].as_str().unwrap_or("").is_empty(),
+        "snippet must not be empty: {v}"
+    );
+    assert_eq!(
+        v["project_file"].as_str().unwrap_or(""),
+        "CLAUDE.md",
+        "project_file must be CLAUDE.md: {v}"
+    );
 }
 
 #[test]
 fn test_init_json_with_agents_md_returns_snippet() {
     let tmp = tempfile::tempdir().unwrap();
     std::fs::write(tmp.path().join("AGENTS.md"), "# My Project\n").unwrap();
+    let fake_home = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(fake_home.path().join(".pagerunner")).unwrap();
+    std::fs::write(
+        fake_home.path().join(".pagerunner/config.toml"),
+        "# pagerunner config\n",
+    )
+    .unwrap();
     let out = std::process::Command::new(bin())
-        .args(["init", "--json", "--force"])
+        .args(["init", "--json"])
         .current_dir(tmp.path())
+        .env("HOME", fake_home.path())
         .env("PAGERUNNER_DB_PATH", "/tmp/pagerunner_integration_test.db")
         .output()
         .expect("binary should run");
-    let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(
-        !stderr.contains("unexpected argument"),
-        "stderr: {stderr}"
+        out.status.success(),
+        "exit non-zero; stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
     );
     let stdout = String::from_utf8_lossy(&out.stdout);
-    if !stdout.trim().is_empty() {
-        if let Ok(v) = serde_json::from_str::<serde_json::Value>(stdout.trim()) {
-            if v["ok"] == true {
-                assert!(v["snippet"].is_string(), "snippet field missing: {v}");
-                assert_eq!(v["project_file"].as_str().unwrap_or(""), "AGENTS.md");
-            }
-        }
-    }
+    let v: serde_json::Value =
+        serde_json::from_str(stdout.trim()).expect("must be valid JSON");
+    assert_eq!(v["ok"], true, "ok must be true: {v}");
+    assert!(v["snippet"].is_string(), "snippet field missing: {v}");
+    assert_eq!(
+        v["project_file"].as_str().unwrap_or(""),
+        "AGENTS.md",
+        "project_file must be AGENTS.md: {v}"
+    );
 }

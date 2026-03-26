@@ -183,7 +183,7 @@ pub fn run(force: bool, json: bool) -> crate::error::Result<()> {
                 .to_string_lossy()
                 .to_string();
             let content = std::fs::read_to_string(path).unwrap_or_default();
-            let already_present = content.contains("pagerunner");
+            let already_present = content.to_ascii_lowercase().contains("pagerunner");
 
             json_result.project_file = Some(file_name.clone());
             json_result.already_present = Some(already_present);
@@ -375,5 +375,18 @@ mod tests {
     fn snippet_is_non_empty() {
         assert!(!SNIPPET.is_empty());
         assert!(SNIPPET.contains("pagerunner"));
+    }
+
+    #[test]
+    fn already_present_is_case_insensitive() {
+        let tmp = tempfile::tempdir().unwrap();
+        // File with capital-P Pagerunner
+        std::fs::write(tmp.path().join("CLAUDE.md"), "# Pagerunner instructions\n").unwrap();
+        let result = find_project_file(tmp.path());
+        assert!(result.is_some()); // sanity check
+        // Verify case-insensitive detection
+        let content = std::fs::read_to_string(result.unwrap()).unwrap();
+        let already_present = content.to_ascii_lowercase().contains("pagerunner");
+        assert!(already_present, "should detect 'Pagerunner' (capital P) as already present");
     }
 }
