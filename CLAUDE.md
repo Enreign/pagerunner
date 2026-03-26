@@ -7,6 +7,7 @@ Rust MCP server that drives Chrome via CDP for AI agents. Serves Claude Code via
 ```bash
 cargo build --release          # build release binary
 cargo test                     # run all tests (239 unit + 45 CLI integration)
+cargo test                     # run all tests (232 unit + 46 CLI integration)
 cargo test --test cli_tools_integration   # run CLI integration tests only
 ```
 
@@ -160,6 +161,7 @@ CLI calls try the daemon socket first (`~/.pagerunner/daemon.sock`), then fall b
 
 ## Known Issues
 None currently. On CI (Linux): 262 tests pass (239 unit + 23 non-Chrome CLI), 23 skipped. On macOS locally: 283 pass (239 unit + 44 Chrome CLI), 1 NER test skipped (requires `--features ner` build + model). NER live tests pass with model at `~/.pagerunner/models/ner.onnx`.
+None currently. On CI (Linux): 255 tests pass (232 unit + 23 non-Chrome CLI), 23 skipped. On macOS locally: 276 pass (232 unit + 44 Chrome CLI), 1 NER test skipped (requires `--features ner` build + model). NER live tests pass with model at `~/.pagerunner/models/ner.onnx`.
 
 ## Testing
 
@@ -197,6 +199,7 @@ Tests use `PAGERUNNER_DB_PATH=/tmp/pagerunner_integration_test.db` automatically
 |----------|------|-------|
 | Non-Chrome (profiles, sessions, KV, errors, help) | 23/23 | |
 | Non-Chrome: init --json | 3/3 | |
+| Non-Chrome (profiles, sessions, KV, errors, help) | 24/24 | includes `test_list_sessions_has_status_field` |
 | Chrome: sessions + tabs | 4/4 | |
 | Chrome: screenshot, evaluate | 3/3 | |
 | Chrome: interactions (click, fill, type, select, scroll) | 8/8 | |
@@ -206,6 +209,7 @@ Tests use `PAGERUNNER_DB_PATH=/tmp/pagerunner_integration_test.db` automatically
 | Chrome: NER CLI | 1/1 | `#[ignore]` — requires `--features ner` + model |
 | Chrome: kv-roundtrip, snapshots, tab-state | 3/3 | |
 | **Total** | **48/48** | macOS: 47 pass + 1 ignored; Linux CI: 26 pass + 22 cfg_attr-ignored + 1 ignored |
+| **Total** | **46/46** | macOS: 45 pass + 1 ignored; Linux CI: 24 pass + 21 cfg_attr-ignored + 1 ignored |
 
 ### Last Full Live Test Run: [2026-03-21-run-6](docs/test-runs/2026-03-21-run-6.md)
 | Category | Pass | Notes |

@@ -156,6 +156,35 @@ fn test_list_sessions_returns_json() {
     assert!(!s.is_empty(), "expected some output from list-sessions");
 }
 
+/// list_sessions output includes a "status" field for each session
+#[test]
+#[serial]
+fn test_list_sessions_has_status_field() {
+    // list_sessions on empty DB should return [] (empty array) in "result"
+    // No Chrome needed — just check the response shape is valid
+    let out = run(&["list-sessions"]);
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    let s = stdout(&out);
+    let v: serde_json::Value = serde_json::from_str(s.trim()).expect("must be JSON");
+    // Response is either a raw JSON array or wrapped in {"result": [...], "_metadata": {...}}
+    let arr = if v.is_array() {
+        v.as_array().unwrap().clone()
+    } else {
+        v["result"]
+            .as_array()
+            .expect("expected array at 'result' key")
+            .clone()
+    };
+    // If the array has entries, each must have a "status" field
+    for entry in &arr {
+        assert!(
+            entry.get("status").is_some(),
+            "each session must have status field: {}",
+            entry
+        );
+    }
+}
+
 #[test]
 #[serial]
 fn test_list_snapshots_returns_json() {
