@@ -133,9 +133,9 @@ fn test_list_profiles_exits_ok() {
     let out = run(&["list-profiles"]);
     assert!(out.status.success(), "stderr: {}", stderr(&out));
     let s = stdout(&out);
-    // Either a JSON array of profiles or the "No profiles" hint
+    // Either a JSON array, a wrapped {"result":[...],"_metadata":{...}} object, or a "No profiles" hint
     assert!(
-        s.trim_start().starts_with('[') || s.contains("No profiles"),
+        serde_json::from_str::<serde_json::Value>(s.trim()).is_ok() || s.contains("No profiles"),
         "unexpected output: {}",
         s
     );
