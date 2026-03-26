@@ -466,8 +466,8 @@ fn format_audit_event(event: &crate::audit::AuditEvent) -> String {
                 counts.join(",")
             )
         }
-        crate::audit::AuditEventKind::AdapterRegistered { origin, name } => {
-            format!("[{}] ADAPTER_REGISTERED origin={} name={}", ts, origin, name)
+        crate::audit::AuditEventKind::AdapterRegistered { origin, name, trusted } => {
+            format!("[{}] ADAPTER_REGISTERED origin={} name={} trusted={}", ts, origin, name, trusted)
         }
         crate::audit::AuditEventKind::AuthTokenDetected { origin, kind } => {
             format!("[{}] AUTH_TOKEN_DETECTED origin={} kind={}", ts, origin, kind)

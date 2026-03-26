@@ -61,6 +61,7 @@ pub enum AuditEventKind {
     AdapterRegistered {
         origin: String,
         name: String,
+        trusted: bool,
     },
     AuthTokenDetected {
         origin: String,
@@ -348,11 +349,13 @@ mod tests {
         let kind = AuditEventKind::AdapterRegistered {
             origin: "https://linear.app".into(),
             name: "create-comment".into(),
+            trusted: false,
         };
         let json = serde_json::to_string(&kind).unwrap();
         assert!(json.contains("AdapterRegistered"));
         assert!(json.contains("linear.app"));
         assert!(!json.contains("js_code"));
+        assert!(json.contains("trusted"));
     }
 
     #[test]
@@ -364,6 +367,7 @@ mod tests {
         let json = serde_json::to_string(&kind).unwrap();
         assert!(json.contains("AuthTokenDetected"));
         assert!(!json.contains("token_value"));
+        assert!(json.contains("bearer")); // kind field is present in serialized output
     }
 
     #[test]
