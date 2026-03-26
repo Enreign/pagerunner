@@ -466,6 +466,21 @@ fn format_audit_event(event: &crate::audit::AuditEvent) -> String {
                 counts.join(",")
             )
         }
+        crate::audit::AuditEventKind::AdapterRegistered { origin, name } => {
+            format!("[{}] ADAPTER_REGISTERED origin={} name={}", ts, origin, name)
+        }
+        crate::audit::AuditEventKind::AuthTokenDetected { origin, kind } => {
+            format!("[{}] AUTH_TOKEN_DETECTED origin={} kind={}", ts, origin, kind)
+        }
+        crate::audit::AuditEventKind::SiteApiCalled {
+            origin,
+            adapter_name,
+        } => {
+            format!(
+                "[{}] SITE_API_CALLED origin={} adapter={}",
+                ts, origin, adapter_name
+            )
+        }
     }
 }
 
@@ -1128,6 +1143,9 @@ async fn run() -> anyhow::Result<()> {
                         crate::audit::AuditEventKind::ContentAnonymized { session_id, .. } => {
                             Some(session_id)
                         }
+                        crate::audit::AuditEventKind::AdapterRegistered { .. }
+                        | crate::audit::AuditEventKind::AuthTokenDetected { .. }
+                        | crate::audit::AuditEventKind::SiteApiCalled { .. } => None,
                     };
                     event_sid == Some(sid.as_str())
                 });
