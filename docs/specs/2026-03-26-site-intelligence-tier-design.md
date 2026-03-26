@@ -43,12 +43,13 @@ site_knowledge[origin] = {
   auth_tokens: {
     kind → vault_ref: String,       // e.g. "site_vault:a3f9b2" — never raw
   },
-  ttl: u64,                         // expiry unix micros for entire entry
+  last_updated: u64,                // unix micros; updated on every write to this entry
 }
 ```
 
 **TTL — lazy expiry on read (same pattern as network log ring buffer):**
-- Entire entries expire after 90 days of no `last_used` update; checked and removed on `get_site_knowledge` and `call_site_api`
+- Entire entries expire 90 days after `last_updated`; deadline derived at read time as `last_updated + 90_days`; checked and removed on `get_site_knowledge` and `call_site_api`
+- `last_updated` is refreshed on every write: `register_adapter`, auth token detection, selector stability update
 - Individual adapters with `last_used == 0` (never called) are pruned after 30 days; checked on `get_site_knowledge`
 - No background task required
 
