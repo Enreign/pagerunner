@@ -1315,6 +1315,72 @@ fn check_ner_model(
     Ok(model_path)
 }
 
+fn validate_register_adapter_args(js_code: &str, name: &str, description: &str) -> crate::error::Result<()> {
+    if js_code.len() > 64 * 1024 {
+        return Err(crate::error::PagerunnerError::Config("js_code exceeds 64KB limit".into()));
+    }
+    if name.len() > 128 {
+        return Err(crate::error::PagerunnerError::Config("name exceeds 128 character limit".into()));
+    }
+    if description.len() > 1024 {
+        return Err(crate::error::PagerunnerError::Config("description exceeds 1KB limit".into()));
+    }
+    Ok(())
+}
+
+fn wrap_untrusted_web_content(s: &str) -> String {
+    format!("<<<UNTRUSTED_WEB_CONTENT>>>\n{}\n<<<UNTRUSTED_WEB_CONTENT>>>", s)
+}
+
+fn check_call_site_api_origin(
+    mgr: &crate::session::SessionManager,
+    session_id: &str,
+    target_id: &str,
+    origin: &str,
+) -> crate::error::Result<()> {
+    let session = mgr.get(session_id)
+        .ok_or_else(|| crate::error::PagerunnerError::SessionNotFound(session_id.into()))?;
+    let tab_url = session.tab_urls.read()
+        .map_err(|_| crate::error::PagerunnerError::Config("tab_urls lock poisoned".into()))?
+        .get(target_id)
+        .cloned()
+        .ok_or_else(|| crate::error::PagerunnerError::Config(
+            format!("Target '{}' not found or no URL recorded", target_id)
+        ))?;
+    let tab_origin = crate::network_log::url_to_origin(&tab_url)
+        .ok_or_else(|| crate::error::PagerunnerError::Config("Cannot determine tab origin".into()))?;
+    if tab_origin != origin {
+        return Err(crate::error::PagerunnerError::Config(format!(
+            "Adapter origin '{}' does not match tab origin '{}'. Navigate to the correct origin first.",
+            origin, tab_origin
+        )));
+    }
+    Ok(())
+}
+
+fn check_call_site_api_allowed_domains(
+    mgr: &crate::session::SessionManager,
+    session_id: &str,
+    origin: &str,
+) -> crate::error::Result<()> {
+    let session = mgr.get(session_id)
+        .ok_or_else(|| crate::error::PagerunnerError::SessionNotFound(session_id.into()))?;
+    if let Some(policy) = &session.security_policy {
+        // Use check_navigate which enforces both private-IP blocking and allowed_domains list.
+        // Append "/" so check_navigate can parse it as a valid URL.
+        let check_url = if origin.ends_with('/') {
+            origin.to_string()
+        } else {
+            format!("{}/", origin)
+        };
+        policy.check_navigate(&check_url)
+            .map_err(|e| crate::error::PagerunnerError::Config(format!(
+                "Origin '{}' is not permitted by the session's allowed_domains policy: {}", origin, e
+            )))?;
+    }
+    Ok(())
+}
+
 fn build_site_knowledge_response(
     entry: &crate::site_knowledge::SiteKnowledgeEntry,
     origin: &str,
@@ -2519,6 +2585,162 @@ async fn dispatch_tool_inner(
             }
         }
 
+        "register_adapter" => {
+            let origin = args["origin"].as_str()
+                .ok_or_else(|| PagerunnerError::Config("origin required".into()))?;
+            let name = args["name"].as_str()
+                .ok_or_else(|| PagerunnerError::Config("name required".into()))?;
+            let description = args["description"].as_str()
+                .ok_or_else(|| PagerunnerError::Config("description required".into()))?;
+            let js_code = args["js_code"].as_str()
+                .ok_or_else(|| PagerunnerError::Config("js_code required".into()))?;
+
+            validate_register_adapter_args(js_code, name, description)?;
+
+            let now = crate::site_knowledge::now_micros();
+            let mut entry = site_store.get(origin)?.unwrap_or_default();
+
+            // Block overwrite of trusted adapters
+            if let Some(existing) = entry.adapters.get(name) {
+                if existing.trusted {
+                    return Err(PagerunnerError::Config(format!(
+                        "Cannot overwrite trusted seed adapter '{}'. Use a different name to register a custom adapter for this origin.",
+                        name
+                    )));
+                }
+            }
+
+            entry.adapters.insert(name.to_string(), crate::site_knowledge::AdapterEntry {
+                js_code: js_code.to_string(),
+                description: description.to_string(),
+                params_schema: args.get("params_schema").cloned(),
+                trusted: false,
+                created_at: now,
+                last_used: 0,
+                last_error: None,
+            });
+            entry.last_updated = now;
+            site_store.put(origin, &entry)?;
+
+            if let Some(a) = audit {
+                let _ = a.record(crate::audit::AuditEvent::new(
+                    crate::audit::AuditEventKind::AdapterRegistered {
+                        origin: origin.to_string(),
+                        name: name.to_string(),
+                        trusted: false,
+                    }
+                )).await;
+            }
+
+            Ok(serde_json::to_string(&serde_json::json!({
+                "ok": true,
+                "origin": origin,
+                "name": name,
+            }))?)
+        }
+
+        "call_site_api" => {
+            let session_id = args["session_id"].as_str()
+                .ok_or_else(|| PagerunnerError::Config("session_id required".into()))?;
+            let target_id = args["target_id"].as_str()
+                .ok_or_else(|| PagerunnerError::Config("target_id required".into()))?;
+            let origin = args["origin"].as_str()
+                .ok_or_else(|| PagerunnerError::Config("origin required".into()))?;
+            let adapter_name = args["name"].as_str()
+                .ok_or_else(|| PagerunnerError::Config("name required".into()))?;
+            let params = args.get("params").cloned().unwrap_or(serde_json::json!({}));
+
+            // Get adapter (check it exists before locking session)
+            let sk_entry = site_store.get(origin)?
+                .ok_or_else(|| PagerunnerError::Config(format!(
+                    "No site knowledge for '{}'. Use register_adapter to add adapters, or get_site_knowledge to list available ones.", origin
+                )))?;
+            let js_code = sk_entry.adapters.get(adapter_name)
+                .ok_or_else(|| PagerunnerError::Config(format!(
+                    "Adapter '{}' not found for origin '{}'. Use get_site_knowledge('{}') to list available adapters, or register_adapter to create one.",
+                    adapter_name, origin, origin
+                )))?.js_code.clone();
+
+            // Security checks (non-async, using the sessions lock briefly)
+            {
+                let mgr = sessions.lock().await;
+                check_call_site_api_origin(&mgr, session_id, target_id, origin)?;
+                check_call_site_api_allowed_domains(&mgr, session_id, origin)?;
+            }
+
+            // Build AsyncFunction wrapper
+            let wrapped_js = format!(
+                r#"(async () => {{
+                    const AsyncFunction = Object.getPrototypeOf(async function(){{}}).constructor;
+                    const fn = new AsyncFunction('params', 'session', {js_code_json});
+                    return await fn({params_json}, {{ origin: {origin_json} }});
+                }})()"#,
+                js_code_json = serde_json::to_string(&js_code)?,
+                params_json = serde_json::to_string(&params)?,
+                origin_json = serde_json::to_string(origin)?,
+            );
+
+            // Execute via browser::evaluate
+            let result_value = {
+                let mut mgr = sessions.lock().await;
+                let session = mgr.get_live(session_id)?;
+                browser::evaluate(session, target_id, &wrapped_js).await?
+            };
+
+            let result_text = serde_json::to_string_pretty(&result_value)?;
+
+            // Apply anonymization if session has it enabled
+            let result_text = {
+                let mgr = sessions.lock().await;
+                if let Some(session) = mgr.get(session_id) {
+                    if let Some(anon_config) = session.anon_config.clone() {
+                        let decoded = crate::sanitizer::html_entity_decode(&result_text);
+                        let vault = crate::anonymizer::vault::Vault::new(Arc::clone(&db));
+                        #[cfg(feature = "ner")]
+                        let ner_disabled = config.ner.enabled == Some(false);
+                        let mut engine = {
+                            #[cfg(feature = "ner")]
+                            if ner_disabled {
+                                crate::anonymizer::AnonEngine::new_with_ner_disabled(vault, anon_config)
+                            } else {
+                                crate::anonymizer::AnonEngine::new(vault, anon_config)
+                            }
+                            #[cfg(not(feature = "ner"))]
+                            crate::anonymizer::AnonEngine::new(vault, anon_config)
+                        };
+                        engine.process(session_id, None, &decoded)
+                            .map(|r| r.output)
+                            .map_err(|e| crate::error::PagerunnerError::Config(e.to_string()))?
+                    } else {
+                        result_text
+                    }
+                } else {
+                    result_text
+                }
+            };
+
+            // Update last_used on adapter (best-effort)
+            if let Ok(Some(mut sk_entry)) = site_store.get(origin) {
+                if let Some(adapter) = sk_entry.adapters.get_mut(adapter_name) {
+                    adapter.last_used = crate::site_knowledge::now_micros();
+                    adapter.last_error = None;
+                }
+                sk_entry.last_updated = crate::site_knowledge::now_micros();
+                let _ = site_store.put(origin, &sk_entry);
+            }
+
+            if let Some(a) = audit {
+                let _ = a.record(crate::audit::AuditEvent::new(
+                    crate::audit::AuditEventKind::SiteApiCalled {
+                        origin: origin.to_string(),
+                        adapter_name: adapter_name.to_string(),
+                    }
+                )).await;
+            }
+
+            Ok(wrap_untrusted_web_content(&result_text))
+        }
+
         _ => Err(crate::error::PagerunnerError::Cdp(format!(
             "Unknown tool: {}",
             tool
@@ -3705,5 +3927,127 @@ mod site_knowledge_response_tests {
         assert_eq!(selectors.len(), 2);
         // First entry should be the more reliable one
         assert_eq!(selectors[0]["selector"].as_str().unwrap(), "#good-btn");
+    }
+}
+
+#[cfg(test)]
+mod register_adapter_tests {
+    use super::*;
+
+    #[test]
+    fn register_adapter_rejects_oversized_js_code() {
+        let big = "x".repeat(64 * 1024 + 1);
+        let err = validate_register_adapter_args(&big, "test", "desc").unwrap_err();
+        assert!(err.to_string().contains("64KB"), "error was: {}", err);
+    }
+
+    #[test]
+    fn register_adapter_rejects_long_name() {
+        let long = "a".repeat(129);
+        let err = validate_register_adapter_args("return 1;", &long, "desc").unwrap_err();
+        assert!(err.to_string().contains("128"), "error was: {}", err);
+    }
+
+    #[test]
+    fn register_adapter_rejects_long_description() {
+        let long_desc = "d".repeat(1025);
+        let err = validate_register_adapter_args("return 1;", "name", &long_desc).unwrap_err();
+        assert!(err.to_string().contains("1KB"), "error was: {}", err);
+    }
+
+    #[test]
+    fn register_adapter_accepts_valid_args() {
+        assert!(validate_register_adapter_args("return fetch('/api').then(r=>r.json());", "my-adapter", "Does something").is_ok());
+    }
+
+    #[test]
+    fn wrap_untrusted_web_content_adds_markers() {
+        let raw = r#"{"data":"test"}"#;
+        let wrapped = wrap_untrusted_web_content(raw);
+        assert!(wrapped.starts_with("<<<UNTRUSTED_WEB_CONTENT>>>"));
+        assert!(wrapped.ends_with("<<<UNTRUSTED_WEB_CONTENT>>>"));
+        assert!(wrapped.contains(raw));
+        assert_eq!(wrapped.matches("<<<UNTRUSTED_WEB_CONTENT>>>").count(), 2);
+    }
+
+    #[test]
+    fn build_async_function_wrapper_includes_params_and_session() {
+        let js_code = "return params.foo + session.origin;";
+        let params = serde_json::json!({ "foo": "bar" });
+        let origin = "https://example.com";
+        let wrapped = format!(
+            r#"(async () => {{
+                const AsyncFunction = Object.getPrototypeOf(async function(){{}}).constructor;
+                const fn = new AsyncFunction('params', 'session', {js_code_json});
+                return await fn({params_json}, {{ origin: {origin_json} }});
+            }})()"#,
+            js_code_json = serde_json::to_string(js_code).unwrap(),
+            params_json = serde_json::to_string(&params).unwrap(),
+            origin_json = serde_json::to_string(origin).unwrap(),
+        );
+        assert!(wrapped.contains("AsyncFunction"));
+        assert!(wrapped.contains("params"));
+        assert!(wrapped.contains("session"));
+        assert!(wrapped.contains("example.com"));
+        assert!(wrapped.contains("params.foo"));
+    }
+
+    #[tokio::test]
+    async fn call_site_api_origin_mismatch_returns_error() {
+        let mut mgr = crate::session::SessionManager::new();
+        let sid = mgr.insert_stub(None).await;
+        let target_id = "T1".to_string();
+        // Tab is on example.com, not linear.app
+        {
+            let session = mgr.get_mut(&sid).unwrap();
+            session.tab_urls.write().unwrap().insert(target_id.clone(), "https://example.com/".into());
+        }
+
+        let result = check_call_site_api_origin(&mgr, &sid, &target_id, "https://linear.app");
+        assert!(result.is_err());
+        let msg = result.unwrap_err().to_string();
+        assert!(msg.contains("does not match") || msg.contains("origin"),
+            "unexpected error: {}", msg);
+    }
+
+    #[tokio::test]
+    async fn call_site_api_allowed_domains_blocks_disallowed_origin() {
+        use crate::security::SecurityPolicy;
+        use crate::config::SecurityConfig;
+
+        let policy = SecurityPolicy::from_config_with_overrides(
+            &SecurityConfig::default(),
+            Some(vec!["github.com".into()]),
+            None, None, None, None, None,
+        );
+        let mut mgr = crate::session::SessionManager::new();
+        let sid = mgr.insert_stub(Some(policy)).await;
+
+        // linear.app not in allowed_domains — should be blocked
+        let result = check_call_site_api_allowed_domains(&mgr, &sid, "https://linear.app");
+        assert!(result.is_err());
+        let msg = result.unwrap_err().to_string();
+        assert!(msg.contains("allowed_domains") || msg.contains("not permitted") || msg.contains("not in"),
+            "unexpected error: {}", msg);
+    }
+
+    #[tokio::test]
+    async fn call_site_api_blocked_by_tool_permission() {
+        use crate::security::SecurityPolicy;
+        use crate::config::SecurityConfig;
+
+        let cfg = SecurityConfig {
+            allowed_tools: vec!["navigate".into(), "get_content".into()],
+            ..SecurityConfig::default()
+        };
+        let policy = SecurityPolicy::from_config_with_overrides(
+            &cfg, None, None, None, None, None, None,
+        );
+        let mut mgr = crate::session::SessionManager::new();
+        let sid = mgr.insert_stub(Some(policy)).await;
+
+        let session = mgr.get(&sid).unwrap();
+        let permitted = session.security_policy.as_ref().unwrap().check_tool_permitted("call_site_api");
+        assert!(permitted.is_err(), "call_site_api should be blocked by tool permission policy");
     }
 }
