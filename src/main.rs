@@ -18,6 +18,7 @@ mod console_log;
 mod network_log;
 mod sanitizer;
 mod security;
+mod site_knowledge;
 mod session;
 mod snapshot;
 mod stealth;
