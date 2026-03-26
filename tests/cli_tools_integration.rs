@@ -48,6 +48,16 @@ fn run_live(args: &[&str]) -> std::process::Output {
         .expect("failed to run pagerunner")
 }
 
+/// Run a pagerunner command against the live test daemon and parse stdout as JSON.
+/// Panics if command fails or stdout is not valid JSON.
+#[allow(dead_code)]
+fn run_live_json(args: &[&str]) -> serde_json::Value {
+    let out = run_live(args);
+    assert!(out.status.success(), "command {:?} failed: {:?}", args, String::from_utf8_lossy(&out.stderr));
+    serde_json::from_slice(&out.stdout)
+        .unwrap_or_else(|e| panic!("Failed to parse JSON from {:?}: {} — stdout: {}", args, e, String::from_utf8_lossy(&out.stdout)))
+}
+
 /// Starts a test daemon using the isolated test DB. Returns a guard that kills the
 /// daemon when dropped. The daemon removes any stale socket on startup and starts
 /// listening, so run_live() calls will route through it automatically.
@@ -88,6 +98,75 @@ fn start_daemon_with(binary: &std::path::Path) -> TestDaemon {
 
 fn start_test_daemon() -> TestDaemon {
     start_daemon_with(&bin())
+}
+
+/// On macOS, if the pagerunner daemon is managed by launchd (KeepAlive=true),
+/// it will respawn within seconds of being killed by start_test_daemon(). This
+/// causes test failures when the production daemon steals the socket mid-test.
+///
+/// This guard temporarily unloads the launchd service while it's held, then
+/// reloads it on drop. Tests that need a stable test daemon should hold this
+/// guard for the duration.
+struct LaunchdGuard {
+    plist_path: std::path::PathBuf,
+    was_loaded: bool,
+}
+
+impl LaunchdGuard {
+    fn pause_pagerunner_daemon() -> Self {
+        let label = "com.pagerunner.daemon";
+        let plist_path = dirs::home_dir()
+            .unwrap()
+            .join("Library/LaunchAgents/com.pagerunner.daemon.plist");
+
+        // Check if the service is currently loaded/running
+        let was_loaded = std::process::Command::new("launchctl")
+            .args(&["list", label])
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false);
+
+        if was_loaded && plist_path.exists() {
+            // Disable prevents launchd from auto-restarting after we kill the process.
+            // Use bootout (macOS 10.10+) which is non-blocking unlike 'unload'.
+            let uid = get_uid();
+            std::process::Command::new("launchctl")
+                .args(&["bootout", &format!("gui/{}", uid), plist_path.to_str().unwrap()])
+                .output()
+                .ok();
+            // Force-kill any remaining daemon process so it doesn't hold the socket.
+            std::process::Command::new("pkill")
+                .args(&["-9", "-f", "pagerunner.*daemon"])
+                .output()
+                .ok();
+            std::thread::sleep(std::time::Duration::from_millis(300));
+        }
+
+        Self { plist_path, was_loaded }
+    }
+}
+
+fn get_uid() -> String {
+    std::process::Command::new("id")
+        .arg("-u")
+        .output()
+        .ok()
+        .and_then(|o| String::from_utf8(o.stdout).ok())
+        .map(|s| s.trim().to_string())
+        .unwrap_or_else(|| "501".to_string())
+}
+
+impl Drop for LaunchdGuard {
+    fn drop(&mut self) {
+        if self.was_loaded && self.plist_path.exists() {
+            // Bootstrap the service back so launchd manages it again.
+            let uid = get_uid();
+            std::process::Command::new("launchctl")
+                .args(&["bootstrap", &format!("gui/{}", uid), self.plist_path.to_str().unwrap()])
+                .output()
+                .ok();
+        }
+    }
 }
 
 /// Returns the release binary path (target/release/pagerunner), used for NER tests
@@ -1446,6 +1525,132 @@ fn test_cli_ner_anonymize_person_masked() {
     );
 
     run_live(&["close-session", &sid]);
+}
+
+// ─────────────────────────────────────────────────────────────
+// get_network_log tests
+// ─────────────────────────────────────────────────────────────
+
+#[test]
+#[serial]
+fn test_get_network_log_invalid_session() {
+    let output = run(&["get-network-log", "invalid-session-id", "--target-id", "tab1"]);
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("not found") || stderr.contains("SessionNotFound") || stderr.contains("session"));
+}
+
+#[cfg_attr(not(target_os = "macos"), ignore)]
+#[test]
+#[serial]
+fn test_get_network_log_captures_requests() {
+    // Pause the launchd-managed production daemon so it doesn't steal the socket.
+    let _launchd = LaunchdGuard::pause_pagerunner_daemon();
+    let _daemon = start_test_daemon();
+    let profile = first_profile();
+
+    let open = run_live(&["open-session", &profile]);
+    assert!(open.status.success(), "open-session failed: {}", stderr(&open));
+    let session_id = parse_json_field(&stdout(&open), "session_id");
+
+    let tab = run_live(&["new-tab", &session_id]);
+    assert!(tab.status.success(), "new-tab failed: {}", stderr(&tab));
+    let target_id = parse_json_field(&stdout(&tab), "target_id");
+
+    let nav = run_live(&["navigate", &session_id, &target_id, "https://httpbin.org/get"]);
+    assert!(nav.status.success(), "navigate failed: {}", stderr(&nav));
+
+    // get-content waits for DOM to be ready, ensuring the page loaded and network
+    // events for the navigation request have been captured.
+    run_live(&["get-content", &session_id, &target_id]);
+
+    let log_out = run_live(&[
+        "get-network-log", &session_id,
+        "--target-id", &target_id,
+        "--limit", "100",
+    ]);
+    assert!(log_out.status.success(), "get-network-log failed: {}", stderr(&log_out));
+    let output: serde_json::Value = serde_json::from_str(&stdout(&log_out))
+        .unwrap_or_else(|e| panic!("get-network-log output not JSON: {} — {}", e, stdout(&log_out)));
+
+    assert_eq!(output["ok"], true);
+    let entries = output["entries"].as_array().unwrap();
+    assert!(!entries.is_empty(), "should have captured at least one request");
+
+    let httpbin_entry = entries.iter().find(|e| {
+        e["url"].as_str().unwrap_or("").contains("httpbin.org")
+    });
+    assert!(httpbin_entry.is_some(), "httpbin.org request should be captured");
+    assert_eq!(httpbin_entry.unwrap()["status"], 200);
+
+    run_live(&["close-session", &session_id]);
+}
+
+#[cfg_attr(not(target_os = "macos"), ignore)]
+#[test]
+#[serial]
+fn test_get_network_log_url_filter() {
+    // Pause the launchd-managed production daemon so it doesn't steal the socket.
+    let _launchd = LaunchdGuard::pause_pagerunner_daemon();
+    let _daemon = start_test_daemon();
+    let profile = first_profile();
+
+    let open = run_live(&["open-session", &profile]);
+    assert!(open.status.success(), "open-session failed: {}", stderr(&open));
+    let session_id = parse_json_field(&stdout(&open), "session_id");
+
+    let tab = run_live(&["new-tab", &session_id]);
+    assert!(tab.status.success(), "new-tab failed: {}", stderr(&tab));
+    let target_id = parse_json_field(&stdout(&tab), "target_id");
+
+    let nav = run_live(&["navigate", &session_id, &target_id, "https://httpbin.org/get"]);
+    assert!(nav.status.success(), "navigate failed: {}", stderr(&nav));
+
+    // get-content waits for DOM to be ready, ensuring the page loaded and network
+    // events for the navigation request have been captured.
+    run_live(&["get-content", &session_id, &target_id]);
+
+    let log_out = run_live(&[
+        "get-network-log", &session_id,
+        "--target-id", &target_id,
+        "--url-pattern", "httpbin.org",
+    ]);
+    assert!(log_out.status.success(), "get-network-log failed: {}", stderr(&log_out));
+    let output: serde_json::Value = serde_json::from_str(&stdout(&log_out))
+        .unwrap_or_else(|e| panic!("get-network-log output not JSON: {} — {}", e, stdout(&log_out)));
+
+    assert_eq!(output["ok"], true);
+    let entries = output["entries"].as_array().unwrap();
+    for e in entries {
+        assert!(e["url"].as_str().unwrap().contains("httpbin.org"),
+            "all entries should match url filter");
+    }
+
+    run_live(&["close-session", &session_id]);
+}
+
+#[cfg_attr(not(target_os = "macos"), ignore)]
+#[test]
+#[serial]
+fn test_get_network_log_validation_error() {
+    // Pause the launchd-managed production daemon so it doesn't steal the socket.
+    let _launchd = LaunchdGuard::pause_pagerunner_daemon();
+    let _daemon = start_test_daemon();
+    let profile = first_profile();
+
+    let open = run_live(&["open-session", &profile]);
+    assert!(open.status.success(), "open-session failed: {}", stderr(&open));
+    let session_id = parse_json_field(&stdout(&open), "session_id");
+
+    // No --target-id and no --all-tabs: expect VALIDATION_ERROR
+    let log_out = run_live(&["get-network-log", &session_id]);
+    assert!(log_out.status.success(), "get-network-log should succeed (returns JSON error): {}", stderr(&log_out));
+    let output: serde_json::Value = serde_json::from_str(&stdout(&log_out))
+        .unwrap_or_else(|e| panic!("get-network-log output not JSON: {} — {}", e, stdout(&log_out)));
+    assert_eq!(output["ok"], false);
+    assert_eq!(output["error_type"], "VALIDATION_ERROR");
+
+    run_live(&["close-session", &session_id]);
 }
 
 // ─────────────────────────────────────────────────────────────

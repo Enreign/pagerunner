@@ -1,7 +1,12 @@
 use crate::error::{PagerunnerError, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Mutex;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::sync::{broadcast, mpsc, oneshot};
+use tokio::task::JoinHandle;
 
 #[derive(Debug, Serialize)]
 pub struct CdpMessage {
@@ -28,34 +33,61 @@ pub fn frame(msg: &CdpMessage) -> Result<Vec<u8>> {
     Ok(bytes)
 }
 
+struct CdpInner {
+    pending: Mutex<HashMap<u64, oneshot::Sender<Result<Value>>>>,
+    event_tx: broadcast::Sender<Value>,
+    next_id: AtomicU64,
+    write_tx: mpsc::Sender<Vec<u8>>,
+}
+
+/// Thread-safe, Clone-able handle to a Chrome CDP pipe connection.
+/// Background reader and writer tasks handle I/O; callers use async methods.
+#[derive(Clone)]
 pub struct CdpConn {
-    writer: tokio::fs::File,
-    reader: tokio::io::BufReader<tokio::fs::File>,
-    next_id: u64,
+    inner: std::sync::Arc<CdpInner>,
 }
 
 impl CdpConn {
-    pub fn new(write_fd: tokio::fs::File, read_fd: tokio::fs::File) -> Self {
-        Self {
-            writer: write_fd,
-            reader: tokio::io::BufReader::new(read_fd),
-            next_id: 1,
-        }
+    /// Create a new CdpConn from write and read file descriptors of the Chrome process.
+    /// Returns the connection handle and the reader task JoinHandle.
+    pub fn new(write_fd: tokio::fs::File, read_fd: tokio::fs::File) -> (Self, JoinHandle<()>) {
+        let (event_tx, _) = broadcast::channel(1024);
+        let (write_tx, write_rx) = mpsc::channel::<Vec<u8>>(256);
+
+        let inner = std::sync::Arc::new(CdpInner {
+            pending: Mutex::new(HashMap::new()),
+            event_tx,
+            next_id: AtomicU64::new(1),
+            write_tx,
+        });
+
+        tokio::spawn(writer_task(write_fd, write_rx));
+        let reader_inner = inner.clone();
+        let reader_handle = tokio::spawn(reader_task(read_fd, reader_inner));
+
+        (CdpConn { inner }, reader_handle)
     }
 
-    pub async fn send(&mut self, method: &str, params: Value) -> Result<Value> {
+    pub async fn send(&self, method: &str, params: Value) -> Result<Value> {
         self.send_on_session(method, params, None).await
     }
 
     pub async fn send_on_session(
-        &mut self,
+        &self,
         method: &str,
         params: Value,
         session_id: Option<String>,
     ) -> Result<Value> {
-        let id = self.next_id;
-        self.next_id += 1;
-
+        let id = self.inner.next_id.fetch_add(1, Ordering::SeqCst);
+        let (tx, rx) = oneshot::channel();
+        {
+            let mut pending = self
+                .inner
+                .pending
+                .lock()
+                .map_err(|_| PagerunnerError::Cdp("Pending lock poisoned".into()))?;
+            pending.insert(id, tx);
+        }
         let msg = CdpMessage {
             id,
             method: method.into(),
@@ -63,43 +95,189 @@ impl CdpConn {
             session_id,
         };
         let framed = frame(&msg)?;
-        self.writer.write_all(&framed).await?;
-
-        // Read responses until we get the one matching our id
-        loop {
-            let raw = self.read_message().await?;
-            let v: Value = serde_json::from_slice(&raw)?;
-
-            if v.get("id") == Some(&Value::Number(id.into())) {
-                if let Some(err) = v.get("error") {
-                    return Err(PagerunnerError::Cdp(err.to_string()));
-                }
-                return Ok(v["result"].clone());
-            }
-            // Events (no "id") are dropped for now
-        }
+        self.inner
+            .write_tx
+            .send(framed)
+            .await
+            .map_err(|_| PagerunnerError::Cdp("Write channel closed".into()))?;
+        rx.await
+            .map_err(|_| PagerunnerError::Cdp("Response channel closed (Chrome exited?)".into()))?
     }
 
-    async fn read_message(&mut self) -> Result<Vec<u8>> {
+    /// Subscribe to all CDP events. Filter by `event["method"]` on the receiver side.
+    pub fn subscribe_events(&self) -> broadcast::Receiver<Value> {
+        self.inner.event_tx.subscribe()
+    }
+}
+
+async fn writer_task(mut write_fd: tokio::fs::File, mut rx: mpsc::Receiver<Vec<u8>>) {
+    while let Some(data) = rx.recv().await {
+        if write_fd.write_all(&data).await.is_err() {
+            break;
+        }
+    }
+}
+
+async fn reader_task(read_fd: tokio::fs::File, inner: std::sync::Arc<CdpInner>) {
+    let mut reader = tokio::io::BufReader::new(read_fd);
+    loop {
         let mut buf = Vec::new();
         loop {
             let mut byte = [0u8; 1];
-            self.reader
-                .read_exact(&mut byte)
-                .await
-                .map_err(|e| PagerunnerError::Cdp(format!("Pipe read error: {}", e)))?;
+            match reader.read_exact(&mut byte).await {
+                Err(_) => return,
+                Ok(_) => {}
+            }
             if byte[0] == b'\0' {
                 break;
             }
             buf.push(byte[0]);
         }
-        Ok(buf)
+        if buf.is_empty() {
+            continue;
+        }
+        let v: Value = match serde_json::from_slice(&buf) {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+        if let Some(id) = v.get("id").and_then(|id| id.as_u64()) {
+            if let Ok(mut pending) = inner.pending.lock() {
+                if let Some(tx) = pending.remove(&id) {
+                    if let Some(err) = v.get("error") {
+                        let _ = tx.send(Err(PagerunnerError::Cdp(err.to_string())));
+                    } else {
+                        let _ = tx.send(Ok(v["result"].clone()));
+                    }
+                }
+            }
+        } else {
+            let _ = inner.event_tx.send(v);
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tokio::io::AsyncWriteExt;
+
+    async fn fake_chrome_response(
+        mut write_end: tokio::fs::File,
+        id: u64,
+        result: serde_json::Value,
+    ) {
+        let resp = serde_json::json!({ "id": id, "result": result });
+        let mut bytes = serde_json::to_vec(&resp).unwrap();
+        bytes.push(b'\0');
+        write_end.write_all(&bytes).await.unwrap();
+    }
+
+    async fn fake_chrome_event(
+        mut write_end: tokio::fs::File,
+        method: &str,
+        params: serde_json::Value,
+    ) {
+        let evt = serde_json::json!({ "method": method, "params": params });
+        let mut bytes = serde_json::to_vec(&evt).unwrap();
+        bytes.push(b'\0');
+        write_end.write_all(&bytes).await.unwrap();
+    }
+
+    fn make_pipe_pair() -> (tokio::fs::File, tokio::fs::File) {
+        use nix::unistd::pipe;
+        use std::os::unix::io::{FromRawFd, IntoRawFd};
+        let (r, w) = pipe().unwrap();
+        let read_end = unsafe { tokio::fs::File::from_raw_fd(r.into_raw_fd()) };
+        let write_end = unsafe { tokio::fs::File::from_raw_fd(w.into_raw_fd()) };
+        (read_end, write_end)
+    }
+
+    #[tokio::test]
+    async fn test_send_receives_response() {
+        let (cmd_read, cmd_write) = make_pipe_pair();
+        let (evt_read, evt_write) = make_pipe_pair();
+
+        let (conn, _handle) = CdpConn::new(cmd_write, evt_read);
+
+        tokio::spawn(async move {
+            let mut buf = Vec::new();
+            let mut reader = tokio::io::BufReader::new(cmd_read);
+            use tokio::io::AsyncReadExt;
+            loop {
+                let mut byte = [0u8; 1];
+                reader.read_exact(&mut byte).await.unwrap();
+                if byte[0] == b'\0' {
+                    break;
+                }
+                buf.push(byte[0]);
+            }
+            let msg: serde_json::Value = serde_json::from_slice(&buf).unwrap();
+            let id = msg["id"].as_u64().unwrap();
+            fake_chrome_response(evt_write, id, serde_json::json!({"ok": true})).await;
+        });
+
+        let result = conn
+            .send("Target.getTargets", serde_json::json!({}))
+            .await
+            .unwrap();
+        assert_eq!(result["ok"], true);
+    }
+
+    #[tokio::test]
+    async fn test_events_are_broadcast() {
+        let (cmd_read, cmd_write) = make_pipe_pair();
+        let (evt_read, evt_write) = make_pipe_pair();
+
+        let (conn, _handle) = CdpConn::new(cmd_write, evt_read);
+        let mut rx = conn.subscribe_events();
+
+        drop(cmd_read);
+
+        tokio::spawn(async move {
+            fake_chrome_event(
+                evt_write,
+                "Network.responseReceived",
+                serde_json::json!({"requestId": "abc"}),
+            )
+            .await;
+        });
+
+        let event = tokio::time::timeout(std::time::Duration::from_secs(2), rx.recv())
+            .await
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(event["method"], "Network.responseReceived");
+    }
+
+    #[tokio::test]
+    async fn test_events_not_confused_with_responses() {
+        use nix::unistd::dup;
+        use std::os::unix::io::{FromRawFd, IntoRawFd};
+
+        let (cmd_read, cmd_write) = make_pipe_pair();
+        let (evt_read, evt_write) = make_pipe_pair();
+
+        let evt_write_raw = evt_write.into_std().await.into_raw_fd();
+        let evt_write2_raw = dup(nix::libc::c_int::from(evt_write_raw as i32)).unwrap();
+        let evt_write1 = unsafe { tokio::fs::File::from_raw_fd(evt_write_raw) };
+        let evt_write2 = unsafe { tokio::fs::File::from_raw_fd(evt_write2_raw) };
+
+        let (conn, _handle) = CdpConn::new(cmd_write, evt_read);
+        let mut rx = conn.subscribe_events();
+
+        tokio::spawn(async move {
+            drop(cmd_read);
+            fake_chrome_event(evt_write1, "Page.loadEventFired", serde_json::json!({})).await;
+            drop(evt_write2);
+        });
+
+        let event = tokio::time::timeout(std::time::Duration::from_secs(2), rx.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(event["method"], "Page.loadEventFired");
+    }
 
     #[test]
     fn test_frame_message() {
@@ -111,7 +289,8 @@ mod tests {
         };
         let framed = frame(&msg).unwrap();
         assert!(framed.ends_with(b"\0"));
-        let json: serde_json::Value = serde_json::from_slice(&framed[..framed.len() - 1]).unwrap();
+        let json: serde_json::Value =
+            serde_json::from_slice(&framed[..framed.len() - 1]).unwrap();
         assert_eq!(json["id"], 1);
         assert_eq!(json["method"], "Target.getTargets");
     }
@@ -119,8 +298,7 @@ mod tests {
     #[test]
     fn test_parse_response() {
         let raw = br#"{"id":1,"result":{"targetInfos":[]}}"#;
-        let resp: CdpResponse = serde_json::from_slice(raw).unwrap();
-        assert_eq!(resp.id, 1);
-        assert!(resp.error.is_none());
+        let resp: serde_json::Value = serde_json::from_slice(raw).unwrap();
+        assert_eq!(resp["id"], 1);
     }
 }

@@ -94,6 +94,24 @@ pub struct AnonymizationConfig {
     pub profiles: Vec<DomainAnonProfile>,
 }
 
+fn default_buffer_capacity() -> usize {
+    500
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct NetworkConfig {
+    #[serde(default = "default_buffer_capacity")]
+    pub buffer_capacity: usize,
+}
+
+impl Default for NetworkConfig {
+    fn default() -> Self {
+        Self {
+            buffer_capacity: 500,
+        }
+    }
+}
+
 /// Global NER configuration.
 #[derive(Debug, Clone, Deserialize, Serialize, Default)]
 pub struct NerConfig {
@@ -112,6 +130,8 @@ pub struct PagerunnerConfig {
     pub anonymization: AnonymizationConfig,
     #[serde(default)]
     pub ner: NerConfig, // NEW
+    #[serde(default)]
+    pub network: NetworkConfig,
 }
 
 impl PagerunnerConfig {
@@ -374,6 +394,34 @@ user_data_dir = "/tmp/t"
             cfg.ner.enabled.is_none(),
             "absent [ner] should give enabled=None"
         );
+    }
+
+    #[test]
+    fn test_network_config_defaults() {
+        let cfg = NetworkConfig::default();
+        assert_eq!(cfg.buffer_capacity, 500);
+    }
+
+    #[test]
+    fn test_network_config_from_toml() {
+        let toml = r#"
+[network]
+buffer_capacity = 100
+"#;
+        let cfg: PagerunnerConfig = toml::from_str(toml).unwrap();
+        assert_eq!(cfg.network.buffer_capacity, 100);
+    }
+
+    #[test]
+    fn test_network_config_absent_gives_default() {
+        let toml = r#"
+[[profiles]]
+name = "test"
+display_name = "Test"
+user_data_dir = "/tmp/t"
+"#;
+        let cfg: PagerunnerConfig = toml::from_str(toml).unwrap();
+        assert_eq!(cfg.network.buffer_capacity, 500);
     }
 
     #[test]

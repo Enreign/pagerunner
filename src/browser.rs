@@ -10,7 +10,7 @@ pub struct TabInfo {
     pub title: String,
 }
 
-pub async fn list_tabs(cdp: &mut CdpConn) -> Result<Vec<TabInfo>> {
+pub async fn list_tabs(cdp: &CdpConn) -> Result<Vec<TabInfo>> {
     let result = cdp.send("Target.getTargets", json!({})).await?;
     let targets = result["targetInfos"]
         .as_array()
@@ -27,7 +27,7 @@ pub async fn list_tabs(cdp: &mut CdpConn) -> Result<Vec<TabInfo>> {
         .collect())
 }
 
-pub async fn new_tab(cdp: &mut CdpConn, url: &str) -> Result<TabInfo> {
+pub async fn new_tab(cdp: &CdpConn, url: &str) -> Result<TabInfo> {
     let result = cdp
         .send(
             "Target.createTarget",
@@ -75,17 +75,23 @@ pub async fn attach_to_target(session: &mut Session, target_id: &str) -> Result<
     fresh_attach(session, target_id).await
 }
 
-/// Enable CDP Network domain and block all private IP ranges for this session.
-/// Called on every fresh CDP session attach when the pagerunner session has a policy.
-// Tested indirectly: blocked_url_patterns_covers_all_private_ranges verifies
-// the pattern list; e2e redirect tests verify the CDP integration.
-async fn enable_network_blocking(cdp: &mut CdpConn, session_id: &str) -> Result<()> {
+/// Enable CDP Network domain for logging and event capture.
+/// Called on every fresh CDP session attach for all sessions.
+pub async fn enable_network_logging(cdp: &CdpConn, session_id: &str) -> Result<()> {
     cdp.send_on_session(
         "Network.enable",
         serde_json::json!({}),
         Some(session_id.to_string()),
     )
     .await?;
+    Ok(())
+}
+
+/// Block all private IP ranges via CDP Network domain.
+/// Called on every fresh CDP session attach when the pagerunner session has a security policy.
+// Tested indirectly: blocked_url_patterns_covers_all_private_ranges verifies
+// the pattern list; e2e redirect tests verify the CDP integration.
+async fn enable_network_blocking_patterns(cdp: &CdpConn, session_id: &str) -> Result<()> {
     let patterns = crate::network_guard::NetworkGuard::blocked_url_patterns();
     cdp.send_on_session(
         "Network.setBlockedURLs",
@@ -114,11 +120,23 @@ async fn fresh_attach(session: &mut Session, target_id: &str) -> Result<String> 
         .to_string();
 
     if session.stealth {
-        crate::stealth::inject(&mut session.cdp, &session_id).await?;
+        crate::stealth::inject(&session.cdp, &session_id).await?;
     }
+
+    // Always enable Network domain for logging/event capture
+    enable_network_logging(&session.cdp, &session_id).await?;
+
     if session.security_policy.is_some() {
-        enable_network_blocking(&mut session.cdp, &session_id).await?;
+        enable_network_blocking_patterns(&session.cdp, &session_id).await?;
     }
+
+    // Update reverse map for event processor
+    if let Ok(mut rev) = session.cdp_sessions_rev.write() {
+        rev.insert(session_id.clone(), target_id.to_string());
+    }
+
+    // Mark session as network-enabled
+    session.network_enabled = true;
 
     session
         .cdp_sessions
@@ -587,7 +605,7 @@ pub async fn select_option(
 
 /// Navigate a target to about:blank (cleanup after blocked redirect detection).
 /// Does not go through policy checks — used only for cleanup.
-pub async fn navigate_to_blank(cdp: &mut CdpConn, target_id: &str) -> Result<()> {
+pub async fn navigate_to_blank(cdp: &CdpConn, target_id: &str) -> Result<()> {
     cdp.send("Target.activateTarget", json!({ "targetId": target_id }))
         .await
         .ok();

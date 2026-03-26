@@ -392,6 +392,27 @@ pub fn all_tools() -> Vec<Value> {
                 "required": ["namespace"]
             }
         }),
+        json!({
+            "name": "get_network_log",
+            "description": "Return captured network requests for a tab (or all tabs in a session). Filter by URL pattern, HTTP method, status code range, or lookback window. Response bodies are truncated to 2KB by default — use full_response: true for the complete body. Requires a session opened after network subscriptions are enabled.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "session_id": { "type": "string" },
+                    "target_id": { "type": "string", "description": "Tab target ID. Required unless all_tabs is true." },
+                    "url_pattern": { "type": "string", "description": "Substring or glob match against full URL (e.g. \"/api/*\", \"graphql\")." },
+                    "method": { "type": "string", "description": "HTTP method filter: GET, POST, PUT, DELETE, etc." },
+                    "status_min": { "type": "integer", "description": "Min HTTP status code (inclusive). E.g. 400." },
+                    "status_max": { "type": "integer", "description": "Max HTTP status code (inclusive). E.g. 499." },
+                    "lookback_ms": { "type": "integer", "description": "Only return events from the last N milliseconds." },
+                    "limit": { "type": "integer", "description": "Max entries (default 50, max 500)." },
+                    "include_request_body": { "type": "boolean", "description": "Include request body (default false)." },
+                    "full_response": { "type": "boolean", "description": "Return full response body without truncation (default false)." },
+                    "all_tabs": { "type": "boolean", "description": "Return events across all tabs in session (default false)." }
+                },
+                "required": ["session_id"]
+            }
+        }),
     ]
 }
 
@@ -518,7 +539,7 @@ async fn run_standalone() -> Result<()> {
     {
         let mut mgr = sessions.lock().await;
         for sid in &session_ids {
-            let _ = mgr.close(sid).await;
+            let _ = mgr.close(sid, &db).await;
         }
     }
 
@@ -1338,7 +1359,7 @@ async fn dispatch_tool_inner(
 
             let id = {
                 let mut mgr = sessions.lock().await;
-                let session_id = mgr.open(&profile, stealth, Some(policy)).await?;
+                let session_id = mgr.open(&profile, stealth, Some(policy), Arc::clone(&db), &config.network).await?;
                 if anon_config_result.is_some() {
                     if let Some(session) = mgr.get_mut(&session_id) {
                         session.anon_config = anon_config_result;
@@ -1378,7 +1399,7 @@ async fn dispatch_tool_inner(
             }
 
             let mut mgr = sessions.lock().await;
-            mgr.close(id).await?;
+            mgr.close(id, &db).await?;
             // Purge vault entries for this session (best-effort, non-fatal)
             let vault = crate::anonymizer::vault::Vault::new(Arc::clone(&db));
             if let Err(e) = vault.purge_session(id) {
@@ -1487,7 +1508,7 @@ async fn dispatch_tool_inner(
                 }
             }
 
-            let tab = browser::new_tab(&mut session.cdp, url).await?;
+            let tab = browser::new_tab(&session.cdp, url).await?;
             Ok(serde_json::json!({
                 "ok": true,
                 "target_id": tab.target_id,
@@ -1863,7 +1884,7 @@ async fn dispatch_tool_inner(
                 // After the URL pattern matched, validate the actual current URL against policy.
                 // wait_for_url uses substring matching, so the actual URL may be different from
                 // what the agent intended (e.g. "github.com" matches "evil-github.com").
-                let actual_url = browser::list_tabs(&mut session.cdp)
+                let actual_url = browser::list_tabs(&session.cdp)
                     .await?
                     .into_iter()
                     .find(|t| t.target_id == tid)
@@ -1876,7 +1897,7 @@ async fn dispatch_tool_inner(
                         .and_then(|p| p.check_navigate(actual).err());
                     if let Some(reason) = blocked {
                         // Navigate away from the blocked page before returning error.
-                        let _ = browser::navigate_to_blank(&mut session.cdp, tid).await;
+                        let _ = browser::navigate_to_blank(&session.cdp, tid).await;
                         // Evict stale cdp_sessions entry so next attach goes through fresh_attach cleanly.
                         session.cdp_sessions.remove(tid);
                         session
@@ -2171,6 +2192,78 @@ async fn dispatch_tool_inner(
                 db.delete(&table, &key)?;
             }
             Ok(serde_json::json!({"ok": true, "namespace": ns, "deleted": count}).to_string())
+        }
+
+        "get_network_log" => {
+            let session_id = args["session_id"]
+                .as_str()
+                .ok_or_else(|| PagerunnerError::Cdp("Missing session_id".into()))?
+                .to_string();
+            let target_id = args["target_id"].as_str().map(String::from);
+            let all_tabs = args["all_tabs"].as_bool().unwrap_or(false);
+
+            // Validation: must have target_id or all_tabs
+            if target_id.is_none() && !all_tabs {
+                return Ok(json!({
+                    "ok": false,
+                    "error_type": "VALIDATION_ERROR",
+                    "recovery_hint": "Provide either target_id (for a specific tab) or all_tabs: true (for all tabs in the session)."
+                }).to_string());
+            }
+
+            let mgr = sessions.lock().await;
+            let session = mgr
+                .get(&session_id)
+                .ok_or_else(|| PagerunnerError::SessionNotFound(session_id.clone()))?;
+
+            // Guard: session must have had Network.enable called
+            if !session.network_enabled {
+                return Ok(json!({
+                    "ok": false,
+                    "error_type": "NETWORK_LOG_UNAVAILABLE",
+                    "recovery_hint": "Network event capture is not enabled for this session. Close and reopen the session to enable network logging."
+                }).to_string());
+            }
+
+            let all_target_ids: Vec<String> = if all_tabs {
+                session.cdp_sessions.keys().cloned().collect()
+            } else {
+                vec![]
+            };
+
+            let query = crate::network_log::NetworkQuery {
+                url_pattern: args["url_pattern"].as_str().map(String::from),
+                method: args["method"].as_str().map(String::from),
+                status_min: args["status_min"].as_u64().map(|v| v as u16),
+                status_max: args["status_max"].as_u64().map(|v| v as u16),
+                lookback_ms: args["lookback_ms"].as_u64(),
+                limit: args["limit"].as_u64().map(|v| (v as usize).min(500)).unwrap_or(50),
+                include_request_body: args["include_request_body"].as_bool().unwrap_or(false),
+                full_response: args["full_response"].as_bool().unwrap_or(false),
+                all_tabs,
+            };
+
+            let now_ms = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis() as u64;
+
+            let result = crate::network_log::query_entries(
+                &db,
+                &session_id,
+                target_id.as_deref(),
+                &all_target_ids,
+                &query,
+                now_ms,
+            )?;
+
+            Ok(json!({
+                "ok": true,
+                "entries": result.entries,
+                "total_matched": result.total_matched,
+                "total_captured": result.total_captured,
+                "result_truncated": result.result_truncated
+            }).to_string())
         }
 
         _ => Err(crate::error::PagerunnerError::Cdp(format!(

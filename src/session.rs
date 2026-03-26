@@ -22,6 +22,13 @@ pub struct Session {
     /// Last navigated URL per target_id — used for untrusted-content domain labeling
     pub tab_urls: HashMap<String, String>,
     pub anon_config: Option<crate::anonymizer::AnonConfig>,
+    pub _reader_task: tokio::task::JoinHandle<()>,
+    /// Reverse map: CDP sessionId → target_id (populated by fresh_attach)
+    pub cdp_sessions_rev: std::sync::Arc<std::sync::RwLock<HashMap<String, String>>>,
+    /// Network event processor task handle
+    pub _network_processor: Option<tokio::task::JoinHandle<()>>,
+    /// True once Network.enable has been successfully called for at least one tab in this session.
+    pub network_enabled: bool,
 }
 
 impl Session {
@@ -56,10 +63,30 @@ impl SessionManager {
         profile: &ChromeProfile,
         stealth: bool,
         security_policy: Option<crate::security::SecurityPolicy>,
+        db: std::sync::Arc<crate::db::Db>,
+        network_config: &crate::config::NetworkConfig,
     ) -> Result<SessionId> {
         let result = crate::chrome::ChromeProcess::spawn(&profile.user_data_dir, stealth).await?;
-        let cdp = CdpConn::new(result.cmd_write, result.evt_read);
+        let (cdp, reader_task) = CdpConn::new(result.cmd_write, result.evt_read);
         let id = Uuid::new_v4().to_string();
+        let cdp_sessions_rev = std::sync::Arc::new(std::sync::RwLock::new(HashMap::new()));
+
+        let events_rx = cdp.subscribe_events();
+        let cdp_for_processor = cdp.clone();
+        let session_id_for_processor = id.clone();
+        let db_for_processor = db;
+        let rev_map = cdp_sessions_rev.clone();
+        let capacity = network_config.buffer_capacity;
+
+        let processor_handle = tokio::spawn(crate::network_log::network_event_processor(
+            events_rx,
+            cdp_for_processor,
+            session_id_for_processor,
+            db_for_processor,
+            rev_map,
+            capacity,
+        ));
+
         self.sessions.insert(
             id.clone(),
             Session {
@@ -75,12 +102,16 @@ impl SessionManager {
                 nav_count: 0,
                 tab_urls: HashMap::new(),
                 anon_config: None,
+                _reader_task: reader_task,
+                cdp_sessions_rev,
+                _network_processor: Some(processor_handle),
+                network_enabled: false,
             },
         );
         Ok(id)
     }
 
-    pub async fn close(&mut self, id: &str) -> Result<()> {
+    pub async fn close(&mut self, id: &str, db: &crate::db::Db) -> Result<()> {
         let mut session = self
             .sessions
             .remove(id)
@@ -100,6 +131,7 @@ impl SessionManager {
                 session.chrome.kill().await?;
             }
         }
+        let _ = crate::network_log::delete_session_entries(db, id);
         Ok(())
     }
 
@@ -172,7 +204,7 @@ impl SessionManager {
             .spawn()
             .expect("spawn /usr/bin/true");
         let chrome = crate::chrome::ChromeProcess::from_child_for_test(child);
-        let cdp = crate::cdp::CdpConn::new(cmd_write, evt_read);
+        let (cdp, _reader_handle) = crate::cdp::CdpConn::new(cmd_write, evt_read);
 
         let id = uuid::Uuid::new_v4().to_string();
         self.sessions.insert(
@@ -190,6 +222,10 @@ impl SessionManager {
                 nav_count: 0,
                 tab_urls: HashMap::new(),
                 anon_config: None,
+                _reader_task: tokio::spawn(async {}),
+                cdp_sessions_rev: std::sync::Arc::new(std::sync::RwLock::new(HashMap::new())),
+                _network_processor: None,
+                network_enabled: false,
             },
         );
         id

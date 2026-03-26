@@ -169,7 +169,7 @@ pub struct TabState {
 
 /// Save the URL, title, and scroll position of every open tab in the session.
 pub async fn save_tab_state(session: &mut Session, db: &Db) -> Result<usize> {
-    let tabs = crate::browser::list_tabs(&mut session.cdp).await?;
+    let tabs = crate::browser::list_tabs(&session.cdp).await?;
     let mut saved_tabs = Vec::new();
 
     for tab in &tabs {
@@ -251,7 +251,7 @@ pub async fn restore_tab_state(session: &mut Session, db: &Db) -> Result<Vec<Str
                 continue;
             }
         }
-        let tab = crate::browser::new_tab(&mut session.cdp, &saved_tab.url).await?;
+        let tab = crate::browser::new_tab(&session.cdp, &saved_tab.url).await?;
         if saved_tab.scroll_y > 0.0 {
             if let Ok(sid) = attach_to_target(session, &tab.target_id).await {
                 let _ = session

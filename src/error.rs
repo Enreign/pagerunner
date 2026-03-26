@@ -57,6 +57,7 @@ impl PagerunnerError {
             }
             Self::Io(_) => "io_error",
             Self::Json(_) => "internal_error",
+            Self::SessionDead(_) => "session_dead",
         }
     }
 
