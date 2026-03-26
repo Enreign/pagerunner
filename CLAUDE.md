@@ -10,6 +10,7 @@ cargo test                     # run all tests (239 unit + 45 CLI integration)
 cargo test                     # run all tests (232 unit + 46 CLI integration)
 cargo test                     # run all tests (232 unit + 47 CLI integration)
 cargo test                     # run all tests (256 unit + 50 CLI integration)
+cargo test                     # run all tests (332 unit + 65 CLI integration)
 cargo test --test cli_tools_integration   # run CLI integration tests only
 ```
 
@@ -18,7 +19,7 @@ cargo test --test cli_tools_integration   # run CLI integration tests only
 - `src/cli_tools.rs` — CLI tool runner, screenshot output handling
 - `src/audit.rs` — AuditLog, AuditEvent types, build_args_summary
 - `src/security.rs` — SecurityPolicy, PolicySummary
-- `src/main.rs` — CLI entry (27 subcommands + mcp, daemon, audit)
+- `src/main.rs` — CLI entry (30 subcommands + mcp, daemon, audit)
 - `~/.pagerunner/config.toml` — profile config (Chrome user data dirs)
 - `~/.pagerunner/state.db` — encrypted ReDB (sessions, KV, snapshots, audit)
 - `~/.pagerunner/audit.log` — append-only JSON-lines audit log (0600)
@@ -124,7 +125,7 @@ Disable globally with `[ner] enabled = false` in `config.toml`.
 
 ## CLI Subcommands
 
-All 27 MCP tools are exposed as direct CLI subcommands — no MCP registration required:
+All 30 MCP tools are exposed as direct CLI subcommands — no MCP registration required:
 
 ```bash
 pagerunner list-profiles
@@ -154,6 +155,9 @@ pagerunner kv-get <namespace> <key>
 pagerunner kv-delete <namespace> <key>
 pagerunner kv-list <namespace> [--prefix <pfx>] [--keys-only]
 pagerunner kv-clear <namespace>
+pagerunner get-site-knowledge <origin>
+pagerunner register-adapter <origin> <name> <description> <js-code>
+pagerunner call-site-api <session-id> <target-id> <origin> <name> [--params <json>]
 ```
 
 All commands output JSON to stdout. Errors go to stderr with exit 1.
@@ -166,6 +170,7 @@ None currently. On CI (Linux): 262 tests pass (239 unit + 23 non-Chrome CLI), 23
 None currently. On CI (Linux): 255 tests pass (232 unit + 23 non-Chrome CLI), 23 skipped. On macOS locally: 276 pass (232 unit + 44 Chrome CLI), 1 NER test skipped (requires `--features ner` build + model). NER live tests pass with model at `~/.pagerunner/models/ner.onnx`.
 None currently. On CI (Linux): 255 tests pass (232 unit + 23 non-Chrome CLI), 25 skipped. On macOS locally: 278 pass (232 unit + 46 Chrome CLI), 1 NER test skipped (requires `--features ner` build + model). NER live tests pass with model at `~/.pagerunner/models/ner.onnx`.
 None currently. On CI (Linux): 280 tests pass (256 unit + 24 non-Chrome CLI), 26 skipped. On macOS locally: 306 pass (256 unit + 50 CLI integration), 1 NER test skipped (requires `--features ner` build + model). NER live tests pass with model at `~/.pagerunner/models/ner.onnx`.
+None currently. On CI (Linux): 366 tests pass (332 unit + 34 non-Chrome CLI), 32 skipped. On macOS locally: 396 pass (332 unit + 64 CLI integration), 1 NER test skipped (requires `--features ner` build + model). NER live tests pass with model at `~/.pagerunner/models/ner.onnx`.
 
 ## Testing
 
@@ -220,6 +225,10 @@ Tests use `PAGERUNNER_DB_PATH=/tmp/pagerunner_integration_test.db` automatically
 | **Total** | **47/47** | macOS: 46 pass + 1 ignored; Linux CI: 23 pass + 24 cfg_attr-ignored + 1 ignored |
 | Chrome: network log (get_network_log) | 3/3 | macOS only |
 | **Total** | **50/50** | macOS: 49 pass + 1 ignored; Linux CI: 24 pass + 25 cfg_attr-ignored + 1 ignored |
+| Non-Chrome: site knowledge (get-site-knowledge, register-adapter, call-site-api errors) | 3/3 | |
+| Chrome: site intelligence (adapter register+call, selector stability) | 3/3 | macOS only |
+| Chrome: get_network_log + auth token detection | 3/3 | macOS only — included in prior Chrome: network log row |
+| **Total** | **65/65** | macOS: 64 pass + 1 ignored; Linux CI: 34 pass + 31 cfg_attr-ignored + 1 ignored |
 
 ### Last Full Live Test Run: [2026-03-21-run-6](docs/test-runs/2026-03-21-run-6.md)
 | Category | Pass | Notes |
