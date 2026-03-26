@@ -1,3 +1,4 @@
+mod adapter_generator;
 mod adapters;
 mod anonymizer;
 mod audit;
