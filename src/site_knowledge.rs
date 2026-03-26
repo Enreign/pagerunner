@@ -79,6 +79,12 @@ impl SiteKnowledgeStore {
         self.db.delete("site_knowledge", &key)
     }
 
+    /// Encrypts a token value and stores it in the site vault table.
+    /// Returns a `"site_vault:<hex6>"` reference derived from the ciphertext hash.
+    /// Each call produces a different reference (random AES-GCM nonce per call).
+    /// Callers MUST update the stored `AuthTokenEntry.vault_ref` field with the returned
+    /// reference — the ref is not stable across calls, even for the same token value.
+    /// This is intentional: token rotation is handled by overwriting the stored ref.
     pub fn vault_token(&self, token: &str) -> Result<String> {
         let encrypted = Db::encrypt(&self.site_vault_key, token.as_bytes())?;
         let mut hasher = Sha256::new();
@@ -112,6 +118,10 @@ impl SiteKnowledgeStore {
         now_micros.saturating_sub(entry.last_updated) > NINETY_DAYS_MICROS
     }
 
+    /// Removes never-used (last_used == 0) non-trusted adapters created more than 30 days ago.
+    /// Trusted (seed) adapters are never pruned.
+    /// Adapters that have been used at least once (last_used > 0) are never pruned regardless of age.
+    /// Returns true if any adapters were removed.
     pub fn prune_stale_adapters(entry: &mut SiteKnowledgeEntry, now_micros: u64) -> bool {
         const THIRTY_DAYS_MICROS: u64 = 30 * 24 * 60 * 60 * 1_000_000;
         let before = entry.adapters.len();
@@ -145,11 +155,11 @@ mod tests {
     use std::sync::Arc;
     use tempfile::tempdir;
 
-    fn make_store() -> SiteKnowledgeStore {
+    fn make_store() -> (SiteKnowledgeStore, tempfile::TempDir) {
         let dir = tempdir().unwrap();
         let key = Db::generate_key();
         let db = Arc::new(Db::open_with_key(dir.path().join("t.db").to_str().unwrap(), key).unwrap());
-        SiteKnowledgeStore::new(db, key)
+        (SiteKnowledgeStore::new(db, key), dir)
     }
 
     #[test]
@@ -169,13 +179,13 @@ mod tests {
 
     #[test]
     fn get_unknown_origin_returns_none() {
-        let store = make_store();
+        let (store, _dir) = make_store();
         assert!(store.get("https://unknown.example.com").unwrap().is_none());
     }
 
     #[test]
     fn put_and_get_roundtrip() {
-        let store = make_store();
+        let (store, _dir) = make_store();
         let mut entry = SiteKnowledgeEntry::default();
         entry.last_updated = 1_000_000;
         store.put("https://linear.app", &entry).unwrap();
@@ -185,7 +195,7 @@ mod tests {
 
     #[test]
     fn delete_removes_entry() {
-        let store = make_store();
+        let (store, _dir) = make_store();
         let entry = SiteKnowledgeEntry::default();
         store.put("https://linear.app", &entry).unwrap();
         store.delete("https://linear.app").unwrap();
@@ -194,14 +204,14 @@ mod tests {
 
     #[test]
     fn vault_token_returns_site_vault_prefix() {
-        let store = make_store();
+        let (store, _dir) = make_store();
         let vref = store.vault_token("Bearer mytoken123").unwrap();
         assert!(vref.starts_with("site_vault:"), "got: {}", vref);
     }
 
     #[test]
     fn vault_token_same_value_different_refs() {
-        let store = make_store();
+        let (store, _dir) = make_store();
         let r1 = store.vault_token("same_token").unwrap();
         let r2 = store.vault_token("same_token").unwrap();
         assert_ne!(r1, r2);
