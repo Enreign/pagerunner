@@ -43,7 +43,18 @@ pub async fn run_tool(
         .await
         .map_err(|e| anyhow::anyhow!("{}", e))?;
 
-    let output = if let Some(b64) = tool_response.result.strip_prefix("data:image/png;base64,") {
+    // Check if this is a screenshot response ({"ok":true,"data":"data:image/png;base64,..."})
+    let parsed_result: serde_json::Value =
+        serde_json::from_str(&tool_response.result).unwrap_or(serde_json::Value::Null);
+    let screenshot_data_uri = parsed_result
+        .get("data")
+        .and_then(|v| v.as_str())
+        .filter(|s| s.starts_with("data:image/png;base64,"));
+
+    let output = if let Some(data_uri) = screenshot_data_uri {
+        let b64 = data_uri
+            .strip_prefix("data:image/png;base64,")
+            .unwrap_or(data_uri);
         handle_screenshot_output(b64, &screenshot_mode)?
     } else {
         // If there's metadata, wrap result and metadata together in JSON

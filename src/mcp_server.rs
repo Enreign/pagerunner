@@ -476,7 +476,14 @@ async fn run_standalone() -> Result<()> {
             Err(e) => json!({
                 "jsonrpc": "2.0",
                 "id": id,
-                "error": { "code": -32000, "message": e.to_string() }
+                "error": {
+                    "code": -32000,
+                    "message": e.to_string(),
+                    "data": {
+                        "error_type": e.error_type(),
+                        "recovery_hint": e.recovery_hint(),
+                    }
+                }
             }),
         };
 
@@ -596,7 +603,14 @@ async fn run_proxy(mut client: crate::daemon_client::DaemonClient) -> Result<()>
             Err(e) => json!({
                 "jsonrpc": "2.0",
                 "id": id,
-                "error": { "code": -32000, "message": e.to_string() }
+                "error": {
+                    "code": -32000,
+                    "message": e.to_string(),
+                    "data": {
+                        "error_type": e.error_type(),
+                        "recovery_hint": e.recovery_hint(),
+                    }
+                }
             }),
         };
 
@@ -621,10 +635,12 @@ fn build_tool_metadata(tool: &str, args: &Value, result: &str) -> Option<Value> 
     match tool {
         // P0: evaluate — warn if array (field order ambiguity)
         "evaluate" => {
-            let result_val: Value = serde_json::from_str(result).unwrap_or(Value::Null);
-            let result_type = if result_val.is_array() {
+            // result is now {"ok":true,"result":<value>} — extract the inner value
+            let envelope: Value = serde_json::from_str(result).unwrap_or(Value::Null);
+            let inner = envelope.get("result").unwrap_or(&Value::Null);
+            let result_type = if inner.is_array() {
                 "array"
-            } else if result_val.is_object() {
+            } else if inner.is_object() {
                 "object"
             } else {
                 "primitive"
@@ -634,7 +650,7 @@ fn build_tool_metadata(tool: &str, args: &Value, result: &str) -> Option<Value> 
                 "_result_type": result_type,
                 "_hint": "Always return labeled objects { key: value }, not arrays. Arrays cause field-order ambiguity."
             });
-            if result_val.is_array() {
+            if inner.is_array() {
                 meta["_warning"] = json!("Result is an array — field meanings cannot be inferred. Use: return { field1: val1, field2: val2 }");
             }
             Some(meta)
@@ -649,9 +665,7 @@ fn build_tool_metadata(tool: &str, args: &Value, result: &str) -> Option<Value> 
             } else {
                 "fixed_delay"
             };
-            // If result starts with "Waited Nms", it's a fixed delay with no condition checked.
-            // Otherwise, the condition was met.
-            let condition_met = !result.starts_with("Waited ");
+            let condition_met = condition_type != "fixed_delay";
             Some(json!({
                 "_tool": "wait_for",
                 "_condition_type": condition_type,
@@ -681,10 +695,11 @@ fn build_tool_metadata(tool: &str, args: &Value, result: &str) -> Option<Value> 
 
         // P1: list_tabs — clarify schema and total count
         "list_tabs" => {
-            let tabs: Vec<Value> = serde_json::from_str(result).unwrap_or_default();
+            let envelope: Value = serde_json::from_str(result).unwrap_or(Value::Null);
+            let tabs = envelope["data"].as_array().map(|v| v.len()).unwrap_or(0);
             Some(json!({
                 "_tool": "list_tabs",
-                "_total": tabs.len(),
+                "_total": tabs,
                 "_schema": {
                     "target_id": "CDP identifier — pass to navigate, get_content, evaluate, click, etc.",
                     "url": "Current page URL",
@@ -695,10 +710,11 @@ fn build_tool_metadata(tool: &str, args: &Value, result: &str) -> Option<Value> 
 
         // P1: list_sessions — clarify schema and total count
         "list_sessions" => {
-            let sessions: Vec<Value> = serde_json::from_str(result).unwrap_or_default();
+            let envelope: Value = serde_json::from_str(result).unwrap_or(Value::Null);
+            let sessions = envelope["data"].as_array().map(|v| v.len()).unwrap_or(0);
             Some(json!({
                 "_tool": "list_sessions",
-                "_total": sessions.len(),
+                "_total": sessions,
                 "_schema": {
                     "id": "session_id — pass as session_id to all tools",
                     "profile": "Chrome profile name",
@@ -922,9 +938,12 @@ async fn record_security(
 
 pub(crate) fn list_profiles_response(config: &PagerunnerConfig) -> String {
     if config.profiles.is_empty() {
-        return "No profiles configured. Run `pagerunner init` to auto-detect Chrome profiles, \
-                or create ~/.pagerunner/config.toml manually (see `pagerunner example-config`)."
-            .to_string();
+        return serde_json::json!({
+            "ok": true,
+            "data": [],
+            "hint": "No profiles configured. Run `pagerunner init` to auto-detect Chrome profiles, or create ~/.pagerunner/config.toml manually (see `pagerunner example-config`)."
+        })
+        .to_string();
     }
     let list: Vec<serde_json::Value> = config
         .profiles
@@ -936,7 +955,7 @@ pub(crate) fn list_profiles_response(config: &PagerunnerConfig) -> String {
             })
         })
         .collect();
-    serde_json::to_string_pretty(&list).unwrap_or_default()
+    serde_json::json!({"ok": true, "data": list}).to_string()
 }
 
 /// Run a tool by name, trying the daemon first then falling back to standalone.
@@ -1335,7 +1354,7 @@ async fn dispatch_tool_inner(
                 .await;
             }
 
-            Ok(serde_json::json!({"session_id": id, "stealth": stealth_val}).to_string())
+            Ok(serde_json::json!({"ok": true, "session_id": id, "stealth": stealth_val}).to_string())
         }
 
         "close_session" => {
@@ -1360,7 +1379,7 @@ async fn dispatch_tool_inner(
             if let Err(e) = vault.purge_session(id) {
                 tracing::warn!("Failed to purge vault for session {}: {}", id, e);
             }
-            Ok(format!("Session {} closed", id))
+            Ok(serde_json::json!({"ok": true, "session_id": id}).to_string())
         }
 
         "list_sessions" => {
@@ -1377,7 +1396,7 @@ async fn dispatch_tool_inner(
                     })
                 })
                 .collect();
-            Ok(serde_json::to_string_pretty(&list)?)
+            Ok(serde_json::json!({"ok": true, "data": list}).to_string())
         }
 
         "list_tabs" => {
@@ -1436,7 +1455,7 @@ async fn dispatch_tool_inner(
                     "title": title,
                 }));
             }
-            Ok(serde_json::to_string_pretty(&list)?)
+            Ok(serde_json::json!({"ok": true, "data": list}).to_string())
         }
 
         "new_tab" => {
@@ -1467,11 +1486,12 @@ async fn dispatch_tool_inner(
             }
 
             let tab = browser::new_tab(&mut session.cdp, url).await?;
-            Ok(serde_json::to_string_pretty(&json!({
+            Ok(serde_json::json!({
+                "ok": true,
                 "target_id": tab.target_id,
                 "url": tab.url,
                 "title": tab.title,
-            }))?)
+            }).to_string())
         }
 
         "navigate" => {
@@ -1521,7 +1541,7 @@ async fn dispatch_tool_inner(
             browser::navigate(session, tid, url).await?;
             // Record URL after successful navigation for untrusted-content domain labeling.
             session.tab_urls.insert(tid.to_string(), url.to_string());
-            Ok(format!("Navigated {} to {}", tid, url))
+            Ok(serde_json::json!({"ok": true, "url": url, "target_id": tid}).to_string())
         }
 
         "get_content" => {
@@ -1593,7 +1613,8 @@ async fn dispatch_tool_inner(
                         .await;
                     }
                 }
-                return Ok(crate::sanitizer::wrap_untrusted(&domain, &output));
+                let wrapped = crate::sanitizer::wrap_untrusted(&domain, &output);
+                return Ok(serde_json::json!({"ok": true, "content": wrapped}).to_string());
             }
 
             if let Some(policy) = &session.security_policy {
@@ -1638,11 +1659,12 @@ async fn dispatch_tool_inner(
                         .await;
                     }
 
-                    return Ok(crate::sanitizer::wrap_untrusted(&domain, &final_content));
+                    let wrapped = crate::sanitizer::wrap_untrusted(&domain, &final_content);
+                    return Ok(serde_json::json!({"ok": true, "content": wrapped}).to_string());
                 }
-                Ok(raw)
+                Ok(serde_json::json!({"ok": true, "content": raw}).to_string())
             } else {
-                Ok(raw)
+                Ok(serde_json::json!({"ok": true, "content": raw}).to_string())
             }
         }
 
@@ -1660,12 +1682,15 @@ async fn dispatch_tool_inner(
             // Block screenshot when anonymization is active to prevent PII leakage via image.
             if session.anon_config.is_some() {
                 return Ok(serde_json::json!({
-                    "error": "AnonymizationActive: screenshot blocked when anonymization is enabled"
+                    "ok": false,
+                    "error_type": "permission_denied",
+                    "error": "AnonymizationActive: screenshot blocked when anonymization is enabled",
+                    "recovery_hint": "This action is blocked by the session security policy. Check allowed_domains or allowed_tools in open_session.",
                 })
                 .to_string());
             }
             let data = browser::screenshot(session, tid).await?;
-            Ok(format!("data:image/png;base64,{}", data))
+            Ok(serde_json::json!({"ok": true, "data": format!("data:image/png;base64,{}", data)}).to_string())
         }
 
         "evaluate" => {
@@ -1704,7 +1729,9 @@ async fn dispatch_tool_inner(
                 let anon_result = engine
                     .process(sid, None, &decoded)
                     .map_err(|e| crate::error::PagerunnerError::Config(e.to_string()))?;
-                return Ok(anon_result.output);
+                let eval_val: serde_json::Value = serde_json::from_str(&anon_result.output)
+                    .unwrap_or(serde_json::Value::String(anon_result.output));
+                return Ok(serde_json::json!({"ok": true, "result": eval_val}).to_string());
             }
 
             if let Some(policy) = &session.security_policy {
@@ -1740,10 +1767,13 @@ async fn dispatch_tool_inner(
                     } else {
                         sanitized
                     };
-                    return Ok(crate::sanitizer::wrap_untrusted(&domain, &final_content));
+                    let wrapped = crate::sanitizer::wrap_untrusted(&domain, &final_content);
+                    return Ok(serde_json::json!({"ok": true, "result": wrapped}).to_string());
                 }
             }
-            Ok(raw)
+            let eval_val: serde_json::Value =
+                serde_json::from_str(&raw).unwrap_or(serde_json::Value::String(raw));
+            Ok(serde_json::json!({"ok": true, "result": eval_val}).to_string())
         }
 
         "click" => {
@@ -1761,7 +1791,7 @@ async fn dispatch_tool_inner(
                 .get_mut(sid)
                 .ok_or_else(|| crate::error::PagerunnerError::SessionNotFound(sid.into()))?;
             browser::click(session, tid, selector).await?;
-            Ok(format!("Clicked: {}", selector))
+            Ok(serde_json::json!({"ok": true, "selector": selector}).to_string())
         }
 
         "type_text" => {
@@ -1788,7 +1818,10 @@ async fn dispatch_tool_inner(
                     Some(original) => original,
                     None => {
                         return Ok(serde_json::json!({
-                            "error": format!("VaultLookupFailed: token '{}' not found in session vault", text)
+                            "ok": false,
+                            "error_type": "validation_error",
+                            "error": format!("VaultLookupFailed: token '{}' not found in session vault", text),
+                            "recovery_hint": "Check that all required parameters are provided and have valid values.",
                         }).to_string());
                     }
                 }
@@ -1796,7 +1829,7 @@ async fn dispatch_tool_inner(
                 text.to_string()
             };
             browser::type_text(session, tid, &type_text_value, selector).await?;
-            Ok(format!("Typed {} chars", type_text_value.len()))
+            Ok(serde_json::json!({"ok": true}).to_string())
         }
 
         "wait_for" => {
@@ -1827,7 +1860,7 @@ async fn dispatch_tool_inner(
 
             if let Some(selector) = args["selector"].as_str() {
                 browser::wait_for_selector(session, tid, selector, timeout_ms).await?;
-                Ok(format!("Selector found: {}", selector))
+                Ok(serde_json::json!({"ok": true, "condition_met": true}).to_string())
             } else if let Some(url_pattern) = args["url"].as_str() {
                 browser::wait_for_url(session, tid, url_pattern, timeout_ms).await?;
 
@@ -1870,10 +1903,10 @@ async fn dispatch_tool_inner(
                     session.tab_urls.insert(tid.to_string(), actual.clone());
                 }
 
-                Ok(format!("URL matched: {}", url_pattern))
+                Ok(serde_json::json!({"ok": true, "condition_met": true}).to_string())
             } else if let Some(ms) = args["ms"].as_u64() {
                 tokio::time::sleep(std::time::Duration::from_millis(ms)).await;
-                Ok(format!("Waited {}ms", ms))
+                Ok(serde_json::json!({"ok": true, "condition_met": true}).to_string())
             } else {
                 Err(crate::error::PagerunnerError::Config(
                     "wait_for requires one of: selector, url, ms".into(),
@@ -1906,7 +1939,10 @@ async fn dispatch_tool_inner(
                     Some(original) => original,
                     None => {
                         return Ok(serde_json::json!({
-                            "error": format!("VaultLookupFailed: token '{}' not found in session vault", value)
+                            "ok": false,
+                            "error_type": "validation_error",
+                            "error": format!("VaultLookupFailed: token '{}' not found in session vault", value),
+                            "recovery_hint": "Check that all required parameters are provided and have valid values.",
                         }).to_string());
                     }
                 }
@@ -1914,7 +1950,7 @@ async fn dispatch_tool_inner(
                 value.to_string()
             };
             browser::fill(session, tid, selector, &fill_value).await?;
-            Ok(format!("Filled: {}", selector))
+            Ok(serde_json::json!({"ok": true, "selector": selector}).to_string())
         }
 
         "select" => {
@@ -1935,7 +1971,7 @@ async fn dispatch_tool_inner(
                 .get_mut(sid)
                 .ok_or_else(|| crate::error::PagerunnerError::SessionNotFound(sid.into()))?;
             browser::select_option(session, tid, selector, value).await?;
-            Ok(format!("Selected '{}' in {}", value, selector))
+            Ok(serde_json::json!({"ok": true, "selector": selector, "value": value}).to_string())
         }
 
         "scroll" => {
@@ -1953,10 +1989,7 @@ async fn dispatch_tool_inner(
                 .get_mut(sid)
                 .ok_or_else(|| crate::error::PagerunnerError::SessionNotFound(sid.into()))?;
             browser::scroll(session, tid, x, y, selector).await?;
-            match selector {
-                Some(sel) => Ok(format!("Scrolled {} into view", sel)),
-                None => Ok(format!("Scrolled by ({}, {})", x, y)),
-            }
+            Ok(serde_json::json!({"ok": true}).to_string())
         }
 
         "save_snapshot" => {
@@ -1972,18 +2005,10 @@ async fn dispatch_tool_inner(
                 .ok_or_else(|| crate::error::PagerunnerError::SessionNotFound(sid.into()))?;
             if let Some(origin) = args["origin"].as_str() {
                 crate::snapshot::save_snapshot(session, tid, origin, &db).await?;
-                Ok(format!("Snapshot saved for {}", origin))
+                Ok(serde_json::json!({"ok": true}).to_string())
             } else {
                 let origins = crate::snapshot::save_all_snapshots(session, tid, &db).await?;
-                if origins.is_empty() {
-                    Ok("No cookies found in session — nothing saved. Navigate to a page with cookies first.".into())
-                } else {
-                    Ok(format!(
-                        "Snapshots saved for {} origin(s): {}",
-                        origins.len(),
-                        origins.join(", ")
-                    ))
-                }
+                Ok(serde_json::json!({"ok": true, "origins": origins}).to_string())
             }
         }
 
@@ -2003,18 +2028,14 @@ async fn dispatch_tool_inner(
                 .get_mut(sid)
                 .ok_or_else(|| crate::error::PagerunnerError::SessionNotFound(sid.into()))?;
             crate::snapshot::restore_snapshot(session, tid, origin, from_profile, &db).await?;
-            let msg = match from_profile {
-                Some(p) => format!("Snapshot restored for {} (from profile '{}')", origin, p),
-                None => format!("Snapshot restored for {}", origin),
-            };
-            Ok(msg)
+            Ok(serde_json::json!({"ok": true}).to_string())
         }
 
         "list_snapshots" => {
             let latest_only = args["latest_only"].as_bool().unwrap_or(true);
             let profile_filter = args["profile"].as_str();
             let infos = crate::snapshot::list_snapshots(&db, latest_only, profile_filter)?;
-            Ok(serde_json::to_string_pretty(&infos)?)
+            Ok(serde_json::json!({"ok": true, "data": infos}).to_string())
         }
 
         "delete_snapshot" => {
@@ -2026,14 +2047,7 @@ async fn dispatch_tool_inner(
                 .ok_or_else(|| crate::error::PagerunnerError::Config("Missing origin".into()))?;
             let saved_at = args["saved_at"].as_u64();
             let n = crate::snapshot::delete_snapshot(&db, profile, origin, saved_at)?;
-            let scope = match saved_at {
-                Some(ts) => format!("version {} of", ts),
-                None => "all versions of".into(),
-            };
-            Ok(format!(
-                "Deleted {} snapshot(s) for {} {} / {}",
-                n, scope, profile, origin
-            ))
+            Ok(serde_json::json!({"ok": true, "deleted": n}).to_string())
         }
 
         "save_tab_state" => {
@@ -2045,7 +2059,7 @@ async fn dispatch_tool_inner(
                 .get_mut(sid)
                 .ok_or_else(|| crate::error::PagerunnerError::SessionNotFound(sid.into()))?;
             let n = crate::snapshot::save_tab_state(session, &db).await?;
-            Ok(format!("Saved state for {} tab(s)", n))
+            Ok(serde_json::json!({"ok": true, "tabs_saved": n}).to_string())
         }
 
         "restore_tab_state" => {
@@ -2057,18 +2071,7 @@ async fn dispatch_tool_inner(
                 .get_mut(sid)
                 .ok_or_else(|| crate::error::PagerunnerError::SessionNotFound(sid.into()))?;
             let urls = crate::snapshot::restore_tab_state(session, &db).await?;
-            if urls.is_empty() {
-                Ok(
-                    "No real tabs to restore — saved state only contained blank or empty tabs."
-                        .into(),
-                )
-            } else {
-                Ok(format!(
-                    "Restored {} tab(s): {}",
-                    urls.len(),
-                    urls.join(", ")
-                ))
-            }
+            Ok(serde_json::json!({"ok": true, "tabs_restored": urls.len(), "urls": urls}).to_string())
         }
 
         "kv_set" => {
@@ -2088,7 +2091,7 @@ async fn dispatch_tool_inner(
                 .ok_or_else(|| crate::error::PagerunnerError::Config("Missing value".into()))?;
             let table = format!("kv_store/{}", ns);
             db.put(&table, key, val.as_bytes())?;
-            Ok(format!("Stored {}/{}", ns, key))
+            Ok(serde_json::json!({"ok": true, "key": key}).to_string())
         }
 
         "kv_get" => {
@@ -2105,9 +2108,12 @@ async fn dispatch_tool_inner(
                 .ok_or_else(|| crate::error::PagerunnerError::Config("Missing key".into()))?;
             let table = format!("kv_store/{}", ns);
             match db.get(&table, key)? {
-                None => Ok("null".into()),
-                Some(bytes) => String::from_utf8(bytes)
-                    .map_err(|e| crate::error::PagerunnerError::Config(e.to_string())),
+                None => Ok(serde_json::json!({"ok": true, "key": key, "value": null}).to_string()),
+                Some(bytes) => {
+                    let value = String::from_utf8(bytes)
+                        .map_err(|e| crate::error::PagerunnerError::Config(e.to_string()))?;
+                    Ok(serde_json::json!({"ok": true, "key": key, "value": value}).to_string())
+                }
             }
         }
 
@@ -2125,7 +2131,7 @@ async fn dispatch_tool_inner(
                 .ok_or_else(|| crate::error::PagerunnerError::Config("Missing key".into()))?;
             let table = format!("kv_store/{}", ns);
             db.delete(&table, key)?;
-            Ok(format!("Deleted {}/{}", ns, key))
+            Ok(serde_json::json!({"ok": true, "key": key}).to_string())
         }
 
         "kv_list" => {
@@ -2151,7 +2157,7 @@ async fn dispatch_tool_inner(
                     result.push(json!({ "key": k }));
                 }
             }
-            Ok(serde_json::to_string_pretty(&result)?)
+            Ok(serde_json::json!({"ok": true, "data": result}).to_string())
         }
 
         "kv_clear" => {
@@ -2169,7 +2175,7 @@ async fn dispatch_tool_inner(
             for (key, _) in entries {
                 db.delete(&table, &key)?;
             }
-            Ok(format!("Cleared {} key(s) from namespace '{}'", count, ns))
+            Ok(serde_json::json!({"ok": true, "namespace": ns, "deleted": count}).to_string())
         }
 
         _ => Err(crate::error::PagerunnerError::Cdp(format!(
@@ -3110,21 +3116,24 @@ mod metadata_tests {
 
     #[test]
     fn test_evaluate_metadata_array_gets_warning() {
-        let meta = build_tool_metadata("evaluate", &json!({}), "[25, 2]").unwrap();
+        let result = r#"{"ok":true,"result":[25,2]}"#;
+        let meta = build_tool_metadata("evaluate", &json!({}), result).unwrap();
         assert_eq!(meta["_result_type"], "array");
         assert!(meta["_warning"].as_str().unwrap().contains("array"));
     }
 
     #[test]
     fn test_evaluate_metadata_object_no_warning() {
-        let meta = build_tool_metadata("evaluate", &json!({}), r#"{"likes":25}"#).unwrap();
+        let result = r#"{"ok":true,"result":{"likes":25}}"#;
+        let meta = build_tool_metadata("evaluate", &json!({}), result).unwrap();
         assert_eq!(meta["_result_type"], "object");
         assert!(meta.get("_warning").is_none() || meta["_warning"].is_null());
     }
 
     #[test]
     fn test_evaluate_metadata_primitive() {
-        let meta = build_tool_metadata("evaluate", &json!({}), "42").unwrap();
+        let result = r#"{"ok":true,"result":42}"#;
+        let meta = build_tool_metadata("evaluate", &json!({}), result).unwrap();
         assert_eq!(meta["_result_type"], "primitive");
     }
 
@@ -3154,7 +3163,7 @@ mod metadata_tests {
 
     #[test]
     fn test_list_tabs_metadata_has_total_and_schema() {
-        let result = r#"[{"target_id":"T1","url":"https://x.com","title":"X"}]"#;
+        let result = r#"{"ok":true,"data":[{"target_id":"T1","url":"https://x.com","title":"X"}]}"#;
         let meta = build_tool_metadata("list_tabs", &json!({}), result).unwrap();
         assert_eq!(meta["_total"], 1);
         assert!(meta["_schema"]["target_id"].is_string());
@@ -3162,7 +3171,7 @@ mod metadata_tests {
 
     #[test]
     fn test_list_sessions_metadata_has_total_and_schema() {
-        let result = r#"[{"id":"S1","profile":"default","stealth":false}]"#;
+        let result = r#"{"ok":true,"data":[{"id":"S1","profile":"default","stealth":false}]}"#;
         let meta = build_tool_metadata("list_sessions", &json!({}), result).unwrap();
         assert_eq!(meta["_total"], 1);
         assert!(meta["_schema"]["id"].is_string());
