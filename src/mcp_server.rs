@@ -1271,6 +1271,13 @@ async fn dispatch_tool_inner(
     audit: Option<&crate::audit::AuditLog>,
     sec_violation: &mut bool,
 ) -> crate::error::Result<String> {
+    // Site knowledge store is available to all tool handlers (get_site_knowledge,
+    // register_adapter, call_site_api, open_session for token detection).
+    let site_store = std::sync::Arc::new(crate::site_knowledge::SiteKnowledgeStore::new(
+        Arc::clone(&db),
+        db.master_key(),
+    ));
+
     match tool {
         "list_profiles" => Ok(list_profiles_response(config)),
 
@@ -1369,11 +1376,6 @@ async fn dispatch_tool_inner(
             let policy_summary = policy.to_policy_summary();
             let stealth_val = stealth;
             let profile_name_val = profile.name.clone();
-
-            let site_store = std::sync::Arc::new(crate::site_knowledge::SiteKnowledgeStore::new(
-                Arc::clone(&db),
-                db.master_key(),
-            ));
 
             let id = {
                 let mut mgr = sessions.lock().await;
