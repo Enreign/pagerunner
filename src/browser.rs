@@ -654,6 +654,51 @@ pub async fn navigate_to_blank(cdp: &CdpConn, target_id: &str) -> Result<()> {
     Ok(())
 }
 
+/// Update selector stability in site_knowledge. Best-effort — never fails the tool call.
+pub fn update_selector_stability(
+    store: &crate::site_knowledge::SiteKnowledgeStore,
+    origin: &str,
+    selector: &str,
+    success: bool,
+) {
+    if selector.len() > 2048 {
+        return; // cap: silently drop oversized selectors
+    }
+    let now = crate::site_knowledge::now_micros();
+    let mut entry = store.get(origin).unwrap_or_default().unwrap_or_default();
+    let sel = entry.selectors.entry(selector.to_string()).or_default();
+    if success {
+        sel.successes += 1;
+    } else {
+        sel.failures += 1;
+    }
+    sel.last_seen = now;
+    entry.last_updated = now;
+    let _ = store.put(origin, &entry);
+}
+
+/// Build fragility warning metadata if the selector is fragile.
+pub fn fragility_warning(
+    store: &crate::site_knowledge::SiteKnowledgeStore,
+    origin: &str,
+    selector: &str,
+) -> Option<serde_json::Value> {
+    let entry = store.get(origin).ok()??;
+    let sel = entry.selectors.get(selector)?;
+    if !crate::site_knowledge::SiteKnowledgeStore::is_fragile(sel) {
+        return None;
+    }
+    let total = sel.successes + sel.failures;
+    let rate = (sel.failures as f64 / total as f64 * 100.0) as u32;
+    Some(serde_json::json!({
+        "_warning": format!(
+            "Selector '{}' has a {}% failure rate ({}/{} uses) on {} — consider finding a more stable selector",
+            selector, rate, sel.failures, total, origin
+        ),
+        "_hint": format!("Use get_site_knowledge('{}') to see alternative selectors with better reliability", origin)
+    }))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -675,5 +720,80 @@ mod tests {
     fn test_scroll_selector_error_message() {
         let err = PagerunnerError::Cdp("Selector not found: #off-screen".into());
         assert!(err.to_string().contains("#off-screen"));
+    }
+
+    #[test]
+    fn update_selector_stability_records_success() {
+        let dir = tempfile::tempdir().unwrap();
+        let key = crate::db::Db::generate_key();
+        let db = std::sync::Arc::new(
+            crate::db::Db::open_with_key(dir.path().join("t.db").to_str().unwrap(), key).unwrap()
+        );
+        let store = crate::site_knowledge::SiteKnowledgeStore::new(db, key);
+
+        update_selector_stability(&store, "https://linear.app", ".submit-btn", true);
+
+        let entry = store.get("https://linear.app").unwrap().unwrap();
+        let sel = entry.selectors.get(".submit-btn").unwrap();
+        assert_eq!(sel.successes, 1);
+        assert_eq!(sel.failures, 0);
+    }
+
+    #[test]
+    fn update_selector_stability_records_failure() {
+        let dir = tempfile::tempdir().unwrap();
+        let key = crate::db::Db::generate_key();
+        let db = std::sync::Arc::new(
+            crate::db::Db::open_with_key(dir.path().join("t.db").to_str().unwrap(), key).unwrap()
+        );
+        let store = crate::site_knowledge::SiteKnowledgeStore::new(db, key);
+
+        update_selector_stability(&store, "https://linear.app", ".submit-btn", false);
+
+        let entry = store.get("https://linear.app").unwrap().unwrap();
+        let sel = entry.selectors.get(".submit-btn").unwrap();
+        assert_eq!(sel.successes, 0);
+        assert_eq!(sel.failures, 1);
+    }
+
+    #[test]
+    fn fragility_warning_returned_when_failure_rate_exceeds_threshold() {
+        let dir = tempfile::tempdir().unwrap();
+        let key = crate::db::Db::generate_key();
+        let db = std::sync::Arc::new(
+            crate::db::Db::open_with_key(dir.path().join("t.db").to_str().unwrap(), key).unwrap()
+        );
+        let store = crate::site_knowledge::SiteKnowledgeStore::new(db, key);
+        let origin = "https://linear.app";
+        let selector = ".submit-btn";
+
+        // 3 successes + 7 failures = 70% failure rate (> 30%, >= 5 samples)
+        for _ in 0..3 { update_selector_stability(&store, origin, selector, true); }
+        for _ in 0..7 { update_selector_stability(&store, origin, selector, false); }
+
+        let warning = fragility_warning(&store, origin, selector);
+        assert!(warning.is_some(), "expected fragility warning");
+        let w = warning.unwrap();
+        let warning_text = w["_warning"].as_str().unwrap();
+        assert!(warning_text.contains("linear.app"));
+        assert!(warning_text.contains(".submit-btn"));
+        assert!(w["_hint"].as_str().is_some());
+    }
+
+    #[test]
+    fn fragility_warning_absent_below_5_samples() {
+        let dir = tempfile::tempdir().unwrap();
+        let key = crate::db::Db::generate_key();
+        let db = std::sync::Arc::new(
+            crate::db::Db::open_with_key(dir.path().join("t.db").to_str().unwrap(), key).unwrap()
+        );
+        let store = crate::site_knowledge::SiteKnowledgeStore::new(db, key);
+        let origin = "https://linear.app";
+        let selector = ".btn";
+
+        // 4 failures but only 4 total — under the 5-sample minimum
+        for _ in 0..4 { update_selector_stability(&store, origin, selector, false); }
+
+        assert!(fragility_warning(&store, origin, selector).is_none());
     }
 }

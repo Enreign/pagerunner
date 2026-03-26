@@ -1849,8 +1849,29 @@ async fn dispatch_tool_inner(
                 .ok_or_else(|| crate::error::PagerunnerError::Config("Missing selector".into()))?;
             let mut mgr = sessions.lock().await;
             let session = mgr.get_live(sid)?;
-            browser::click(session, tid, selector).await?;
-            Ok(serde_json::json!({"ok": true, "selector": selector}).to_string())
+            let tab_url = session.tab_urls.read().ok().and_then(|m| m.get(tid).cloned());
+            let click_result = browser::click(session, tid, selector).await;
+            // Track selector stability — best-effort, never fails the tool call
+            if let Some(ref tab_url) = tab_url {
+                if let Some(origin) = crate::network_log::url_to_origin(tab_url) {
+                    let success = click_result.is_ok();
+                    browser::update_selector_stability(&site_store, &origin, selector, success);
+                }
+            }
+            click_result?;
+            let mut resp = serde_json::json!({"ok": true, "selector": selector});
+            if let Some(ref tab_url) = tab_url {
+                if let Some(origin) = crate::network_log::url_to_origin(tab_url) {
+                    if let Some(warning) = browser::fragility_warning(&site_store, &origin, selector) {
+                        if let (Some(obj), Some(warn_obj)) = (resp.as_object_mut(), warning.as_object()) {
+                            for (k, v) in warn_obj {
+                                obj.insert(k.clone(), v.clone());
+                            }
+                        }
+                    }
+                }
+            }
+            Ok(resp.to_string())
         }
 
         "type_text" => {
@@ -2025,8 +2046,29 @@ async fn dispatch_tool_inner(
             } else {
                 value.to_string()
             };
-            browser::fill(session, tid, selector, &fill_value).await?;
-            Ok(serde_json::json!({"ok": true, "selector": selector}).to_string())
+            let tab_url = session.tab_urls.read().ok().and_then(|m| m.get(tid).cloned());
+            let fill_result = browser::fill(session, tid, selector, &fill_value).await;
+            // Track selector stability — best-effort, never fails the tool call
+            if let Some(ref tab_url) = tab_url {
+                if let Some(origin) = crate::network_log::url_to_origin(tab_url) {
+                    let success = fill_result.is_ok();
+                    browser::update_selector_stability(&site_store, &origin, selector, success);
+                }
+            }
+            fill_result?;
+            let mut resp = serde_json::json!({"ok": true, "selector": selector});
+            if let Some(ref tab_url) = tab_url {
+                if let Some(origin) = crate::network_log::url_to_origin(tab_url) {
+                    if let Some(warning) = browser::fragility_warning(&site_store, &origin, selector) {
+                        if let (Some(obj), Some(warn_obj)) = (resp.as_object_mut(), warning.as_object()) {
+                            for (k, v) in warn_obj {
+                                obj.insert(k.clone(), v.clone());
+                            }
+                        }
+                    }
+                }
+            }
+            Ok(resp.to_string())
         }
 
         "select" => {
@@ -2044,8 +2086,29 @@ async fn dispatch_tool_inner(
                 .ok_or_else(|| crate::error::PagerunnerError::Config("Missing value".into()))?;
             let mut mgr = sessions.lock().await;
             let session = mgr.get_live(sid)?;
-            browser::select_option(session, tid, selector, value).await?;
-            Ok(serde_json::json!({"ok": true, "selector": selector, "value": value}).to_string())
+            let tab_url = session.tab_urls.read().ok().and_then(|m| m.get(tid).cloned());
+            let select_result = browser::select_option(session, tid, selector, value).await;
+            // Track selector stability — best-effort, never fails the tool call
+            if let Some(ref tab_url) = tab_url {
+                if let Some(origin) = crate::network_log::url_to_origin(tab_url) {
+                    let success = select_result.is_ok();
+                    browser::update_selector_stability(&site_store, &origin, selector, success);
+                }
+            }
+            select_result?;
+            let mut resp = serde_json::json!({"ok": true, "selector": selector, "value": value});
+            if let Some(ref tab_url) = tab_url {
+                if let Some(origin) = crate::network_log::url_to_origin(tab_url) {
+                    if let Some(warning) = browser::fragility_warning(&site_store, &origin, selector) {
+                        if let (Some(obj), Some(warn_obj)) = (resp.as_object_mut(), warning.as_object()) {
+                            for (k, v) in warn_obj {
+                                obj.insert(k.clone(), v.clone());
+                            }
+                        }
+                    }
+                }
+            }
+            Ok(resp.to_string())
         }
 
         "scroll" => {
