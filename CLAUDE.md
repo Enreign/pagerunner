@@ -6,7 +6,7 @@ Rust MCP server that drives Chrome via CDP for AI agents. Serves Claude Code via
 ## Build & Test
 ```bash
 cargo build --release          # build release binary
-cargo test                     # run all tests (332 unit + 65 CLI integration)
+cargo test                     # run all tests (370 unit + 68 CLI integration on macOS)
 cargo test --test cli_tools_integration   # run CLI integration tests only
 ```
 
@@ -15,7 +15,7 @@ cargo test --test cli_tools_integration   # run CLI integration tests only
 - `src/cli_tools.rs` — CLI tool runner, screenshot output handling
 - `src/audit.rs` — AuditLog, AuditEvent types, build_args_summary
 - `src/security.rs` — SecurityPolicy, PolicySummary
-- `src/main.rs` — CLI entry (32 subcommands + mcp, daemon, audit)
+- `src/main.rs` — CLI entry (33 subcommands + mcp, daemon, audit)
 - `~/.pagerunner/config.toml` — profile config (Chrome user data dirs)
 - `~/.pagerunner/state.db` — encrypted ReDB (sessions, KV, snapshots, audit)
 - `~/.pagerunner/audit.log` — append-only JSON-lines audit log (0600)
@@ -121,7 +121,7 @@ Disable globally with `[ner] enabled = false` in `config.toml`.
 
 ## CLI Subcommands
 
-All 32 MCP tools are exposed as direct CLI subcommands — no MCP registration required:
+All 33 MCP tools are exposed as direct CLI subcommands — no MCP registration required:
 
 ```bash
 pagerunner list-profiles
@@ -156,6 +156,7 @@ pagerunner get-console-log <session-id> [--target-id <tid>] [--limit <n>]
 pagerunner get-site-knowledge <origin>
 pagerunner register-adapter <origin> <name> <description> <js-code>
 pagerunner call-site-api <session-id> <target-id> <origin> <name> [--params <json>]
+pagerunner generate-adapter <origin> <name> [--description <desc>]
 ```
 
 All commands output JSON to stdout. Errors go to stderr with exit 1.
@@ -164,7 +165,7 @@ All commands output JSON to stdout. Errors go to stderr with exit 1.
 CLI calls try the daemon socket first (`~/.pagerunner/daemon.sock`), then fall back to opening the DB directly. If a live MCP server is running standalone, start the daemon mode first to avoid DB lock conflicts.
 
 ## Known Issues
-None currently. On CI (Linux): 366 tests pass (332 unit + 34 non-Chrome CLI), 32 skipped. On macOS locally: 397 pass (332 unit + 65 CLI integration), 1 NER test skipped (requires `--features ner` build + model). NER live tests pass with model at `~/.pagerunner/models/ner.onnx`.
+None currently. On CI (Linux): 406 tests pass (370 unit + 36 non-Chrome CLI), 32 skipped. On macOS locally: 437 pass (370 unit + 67 CLI integration), 1 NER test skipped (requires `--features ner` build + model). NER live tests pass with model at `~/.pagerunner/models/ner.onnx`.
 
 ## Testing
 
@@ -188,7 +189,7 @@ Test runs are saved in `docs/test-runs/`. Run naming: `YYYY-MM-DD-run-N.md`.
 
 ### CLI Integration Tests (`tests/cli_tools_integration.rs`)
 
-34 non-Chrome tests cover subcommands without a live browser:
+36 non-Chrome tests cover subcommands without a live browser:
 - `list-profiles`, `list-sessions`, `list-snapshots` — happy-path output shape
 - KV store — full lifecycle (set, get, list, prefix filter, keys-only, delete, clear)
 - `init --json` — flag acceptance, CLAUDE.md snippet return, AGENTS.md snippet return
@@ -198,22 +199,22 @@ Test runs are saved in `docs/test-runs/`. Run naming: `YYYY-MM-DD-run-N.md`.
 
 Tests use `PAGERUNNER_DB_PATH=/tmp/pagerunner_integration_test.db` automatically, so they never conflict with a running `pagerunner mcp` process. Session-based Chrome tests spin up a per-test daemon (also using the test DB) so session state persists across separate CLI invocations.
 
-### Last CLI Test Run: 2026-03-26 (`cargo test --test cli_tools_integration`)
+### Last CLI Test Run: 2026-03-27 (`cargo test --test cli_tools_integration`)
 | Category | Pass | Notes |
 |----------|------|-------|
 | Non-Chrome (profiles, sessions, KV, errors, help, init) | 27/27 | |
-| Non-Chrome: network log + site knowledge errors | 7/7 | |
-| Chrome: sessions + tabs | 4/4 | |
-| Chrome: screenshot, evaluate | 3/3 | |
-| Chrome: interactions (click, fill, type, select, scroll) | 8/8 | |
-| Chrome: wait-for | 4/4 | |
-| Chrome: anonymization | 2/2 | |
-| Chrome: security (allowed-domains) | 1/1 | |
-| Chrome: kv-roundtrip, snapshots, tab-state | 3/3 | |
-| Chrome: network log + auth token detection | 3/3 | macOS only |
-| Chrome: site intelligence (adapter register+call, selector stability) | 3/3 | macOS only |
+| Non-Chrome: network log + site knowledge errors | 9/9 | includes generate_adapter missing API key, stale adapter error |
+| Chrome: sessions + tabs | 4/4 | macOS only |
+| Chrome: screenshot, evaluate | 3/3 | macOS only |
+| Chrome: interactions (click, fill, type, select, scroll) | 8/8 | macOS only |
+| Chrome: wait-for | 4/4 | macOS only |
+| Chrome: anonymization | 2/2 | macOS only |
+| Chrome: security (allowed-domains) | 1/1 | macOS only |
+| Chrome: kv-roundtrip, snapshots, tab-state | 3/3 | macOS only |
+| Chrome: network log + console log | 4/4 | macOS only |
+| Chrome: site intelligence (adapter roundtrip, origin mismatch, selector fragility) | 3/3 | macOS only |
 | Chrome: NER CLI | 1/1 | `#[ignore]` — requires `--features ner` + model |
-| **Total** | **65/65** | macOS: 64 pass + 1 ignored; Linux CI: 34 pass + 31 cfg_attr-ignored + 1 ignored |
+| **Total** | **68/68** | macOS: 67 pass + 1 ignored; Linux CI: 36 pass + 31 cfg_attr-ignored + 1 ignored |
 
 ### Last Full Live Test Run: [2026-03-21-run-6](docs/test-runs/2026-03-21-run-6.md)
 | Category | Pass | Notes |
