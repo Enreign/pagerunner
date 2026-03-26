@@ -29,6 +29,8 @@ pub fn detect_tokens(headers: &HashMap<String, String>) -> Vec<(String, String)>
                     if let Some((cname, _cval)) = part.split_once('=') {
                         let cname_lower = cname.trim().to_lowercase();
                         if matches!(cname_lower.as_str(), "session" | "token" | "auth") {
+                            // Store the full "name=value" string as the token value (not just the value portion).
+                            // This is intentional: the full cookie pair is what gets vaulted for replay purposes.
                             results.push(("session_cookie".into(), part.into()));
                         }
                     }
@@ -94,6 +96,11 @@ pub fn detect_and_vault(
     origin: &str,
     store: &SiteKnowledgeStore,
 ) -> HashMap<String, String> {
+    // IMPORTANT for Task 4 integration: `strip_sensitive_headers` in network_log.rs does not
+    // currently strip `x-api-key` headers. Task 4 must add "x-api-key" to SENSITIVE_HEADERS
+    // to ensure api_key tokens are stripped from the ring buffer on the happy path
+    // (when vault succeeds, we return original headers and strip_sensitive_headers is the
+    // only backstop for this header type).
     let tokens = detect_tokens(headers);
     if tokens.is_empty() {
         return headers.clone();
@@ -126,6 +133,10 @@ pub fn detect_and_vault(
     if changed {
         entry.last_updated = crate::site_knowledge::now_micros();
         if let Err(e) = store.put(origin, &entry) {
+            // Note: put failure does NOT set had_error — the spec says redaction is triggered
+            // by vault *encryption* errors only. A DB write failure after successful
+            // encryption means the vault ref was not persisted, but the token itself was
+            // not exposed in plain text. On the next request, a new vault ref will be created.
             tracing::warn!(
                 "auth_token_detector: failed to persist site_knowledge for {}: {}",
                 origin,
@@ -253,5 +264,35 @@ mod tests {
         let redacted = redact_detected_tokens(&h);
         assert_eq!(redacted.get("content-type").unwrap(), "application/json");
         assert_eq!(redacted.get("accept").unwrap(), "text/html");
+    }
+
+    #[test]
+    fn detect_and_vault_stores_vault_ref_and_returns_original_headers() {
+        use std::sync::Arc;
+        use tempfile::tempdir;
+        use crate::site_knowledge::SiteKnowledgeStore;
+
+        let dir = tempdir().unwrap();
+        let key = crate::db::Db::generate_key();
+        let db = Arc::new(crate::db::Db::open_with_key(
+            dir.path().join("t.db").to_str().unwrap(), key
+        ).unwrap());
+        let store = SiteKnowledgeStore::new(db, key);
+
+        let h = headers(&[
+            ("authorization", "Bearer mytoken456"),
+            ("content-type", "application/json"),
+        ]);
+
+        let result = detect_and_vault(&h, "https://example.com", &store);
+
+        // On success, returns headers unchanged
+        assert_eq!(result.get("authorization").unwrap(), "Bearer mytoken456");
+        assert_eq!(result.get("content-type").unwrap(), "application/json");
+
+        // Vault ref is stored in site_knowledge
+        let entry = store.get("https://example.com").unwrap().unwrap();
+        let bearer_ref = &entry.auth_tokens.get("bearer").unwrap().vault_ref;
+        assert!(bearer_ref.starts_with("site_vault:"), "got: {}", bearer_ref);
     }
 }
