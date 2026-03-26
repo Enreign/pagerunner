@@ -87,6 +87,18 @@ pub async fn enable_network_logging(cdp: &CdpConn, session_id: &str) -> Result<(
     Ok(())
 }
 
+/// Enable CDP Runtime domain for console/exception event capture.
+/// Called on every fresh CDP session attach for all sessions.
+pub async fn enable_runtime_logging(cdp: &CdpConn, session_id: &str) -> Result<()> {
+    cdp.send_on_session(
+        "Runtime.enable",
+        serde_json::json!({}),
+        Some(session_id.to_string()),
+    )
+    .await?;
+    Ok(())
+}
+
 /// Block all private IP ranges via CDP Network domain.
 /// Called on every fresh CDP session attach when the pagerunner session has a security policy.
 // Tested indirectly: blocked_url_patterns_covers_all_private_ranges verifies
@@ -125,6 +137,9 @@ async fn fresh_attach(session: &mut Session, target_id: &str) -> Result<String> 
 
     // Always enable Network domain for logging/event capture
     enable_network_logging(&session.cdp, &session_id).await?;
+
+    // Always enable Runtime domain for console/exception capture
+    enable_runtime_logging(&session.cdp, &session_id).await?;
 
     if session.security_policy.is_some() {
         enable_network_blocking_patterns(&session.cdp, &session_id).await?;

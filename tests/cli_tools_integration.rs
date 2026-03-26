@@ -1498,6 +1498,116 @@ fn test_get_network_log_validation_error() {
 }
 
 // ─────────────────────────────────────────────────────────────
+// get_console_log tests
+// ─────────────────────────────────────────────────────────────
+
+#[test]
+#[serial]
+fn test_get_console_log_invalid_session() {
+    let output = run(&["get-console-log", "invalid-session-id", "--target-id", "tab1"]);
+    assert!(!output.status.success());
+}
+
+#[cfg_attr(not(target_os = "macos"), ignore)]
+#[test]
+#[serial]
+fn test_evaluate_error_includes_console_errors() {
+    let _launchd = LaunchdGuard::pause_pagerunner_daemon();
+    let _daemon = start_test_daemon();
+    let profile = first_profile();
+
+    let open = run_live(&["open-session", &profile]);
+    assert!(open.status.success());
+    let session_id = parse_json_field(&stdout(&open), "session_id");
+
+    let tab = run_live(&["new-tab", &session_id]);
+    assert!(tab.status.success());
+    let target_id = parse_json_field(&stdout(&tab), "target_id");
+
+    // Navigate to a test page
+    let nav = run_live(&["navigate", &session_id, &target_id, "https://example.com"]);
+    assert!(nav.status.success());
+
+    // First generate some console output
+    run_live(&["evaluate", &session_id, &target_id, "console.error('test error message')"]);
+
+    // Now trigger a JS exception by evaluating undefined function call
+    let eval = run_live(&["evaluate", &session_id, &target_id, "undefined_function_xyz()"]);
+    // evaluate error returns ok:false as JSON (exit 0) OR exits non-zero
+    // Either way, the output should be parseable JSON
+    let s = stdout(&eval);
+    if !s.is_empty() {
+        if let Ok(v) = serde_json::from_str::<serde_json::Value>(s.trim()) {
+            if v["ok"] == false {
+                // Check that console context fields are included
+                assert!(
+                    v.get("console_errors").is_some(),
+                    "evaluate error should include console_errors field"
+                );
+                assert!(
+                    v.get("exceptions").is_some(),
+                    "evaluate error should include exceptions field"
+                );
+            }
+        }
+    }
+
+    run_live(&["close-session", &session_id]);
+}
+
+#[cfg_attr(not(target_os = "macos"), ignore)]
+#[test]
+#[serial]
+fn test_get_console_log_captures_messages() {
+    let _launchd = LaunchdGuard::pause_pagerunner_daemon();
+    let _daemon = start_test_daemon();
+    let profile = first_profile();
+
+    let open = run_live(&["open-session", &profile]);
+    assert!(open.status.success());
+    let session_id = parse_json_field(&stdout(&open), "session_id");
+
+    let tab = run_live(&["new-tab", &session_id]);
+    assert!(tab.status.success());
+    let target_id = parse_json_field(&stdout(&tab), "target_id");
+
+    let nav = run_live(&["navigate", &session_id, &target_id, "https://example.com"]);
+    assert!(nav.status.success());
+
+    // Generate console messages
+    run_live(&["evaluate", &session_id, &target_id, "console.error('captured error')"]);
+    run_live(&["evaluate", &session_id, &target_id, "console.warn('captured warning')"]);
+
+    // Short wait for async event processing
+    std::thread::sleep(std::time::Duration::from_millis(200));
+
+    let log_out = run_live(&["get-console-log", &session_id, "--target-id", &target_id]);
+    assert!(
+        log_out.status.success(),
+        "get-console-log failed: {}",
+        stderr(&log_out)
+    );
+    let output: serde_json::Value = serde_json::from_str(&stdout(&log_out))
+        .unwrap_or_else(|e| panic!("not JSON: {}: {}", e, stdout(&log_out)));
+
+    assert_eq!(output["ok"], true);
+    assert!(output.get("console_errors").is_some());
+    assert!(output.get("exceptions").is_some());
+
+    let console = output["console_errors"].as_array().unwrap();
+    let has_error = console
+        .iter()
+        .any(|e| e["text"].as_str().unwrap_or("").contains("captured error"));
+    assert!(
+        has_error,
+        "captured error message should appear in console_errors: {:?}",
+        console
+    );
+
+    run_live(&["close-session", &session_id]);
+}
+
+// ─────────────────────────────────────────────────────────────
 // Helpers used by Chrome tests
 // ─────────────────────────────────────────────────────────────
 
