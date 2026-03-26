@@ -1370,9 +1370,14 @@ async fn dispatch_tool_inner(
             let stealth_val = stealth;
             let profile_name_val = profile.name.clone();
 
+            let site_store = std::sync::Arc::new(crate::site_knowledge::SiteKnowledgeStore::new(
+                Arc::clone(&db),
+                db.master_key(),
+            ));
+
             let id = {
                 let mut mgr = sessions.lock().await;
-                let session_id = mgr.open(&profile, stealth, Some(policy), Arc::clone(&db), &config.network, None).await?;
+                let session_id = mgr.open(&profile, stealth, Some(policy), Arc::clone(&db), &config.network, Some(std::sync::Arc::clone(&site_store))).await?;
                 if anon_config_result.is_some() {
                     if let Some(session) = mgr.get_mut(&session_id) {
                         session.anon_config = anon_config_result;

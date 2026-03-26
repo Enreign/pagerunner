@@ -18,6 +18,10 @@ impl Db {
         k.into()
     }
 
+    pub fn master_key(&self) -> [u8; 32] {
+        self.key
+    }
+
     /// Load key from macOS Keychain, generating and storing one on first run.
     ///
     /// If the `PAGERUNNER_DB_KEY` environment variable is set to a 64-char hex
