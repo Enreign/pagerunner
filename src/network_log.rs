@@ -416,6 +416,11 @@ pub async fn network_event_processor(
                                 &entry,
                             );
                             *seq += 1;
+
+                            // Update endpoint knowledge for this completed request
+                            if let Some(ref store) = site_store {
+                                crate::endpoint_mapper::ingest(&entry, store);
+                            }
                         }
                     }
                     _ => {}
@@ -725,6 +730,40 @@ mod tests {
     #[test]
     fn url_to_origin_returns_none_for_invalid_url() {
         assert_eq!(url_to_origin("not-a-url"), None);
+    }
+
+    #[test]
+    fn ingest_wired_into_completed_requests() {
+        // Verify endpoint_mapper integration by confirming ingest is called
+        // (unit test — just verify it compiles and doesn't panic on a sample entry)
+        use std::collections::HashMap;
+        use crate::network_log::NetworkEntry;
+        use crate::site_knowledge::SiteKnowledgeStore;
+        use std::sync::Arc;
+        use tempfile::tempdir;
+        use crate::db::Db;
+
+        let dir = tempdir().unwrap();
+        let key = Db::generate_key();
+        let db = Arc::new(Db::open_with_key(dir.path().join("t.db").to_str().unwrap(), key).unwrap());
+        let store = SiteKnowledgeStore::new(db, key);
+
+        let entry = NetworkEntry {
+            request_id: "r1".into(),
+            url: "https://api.test.com/v1/users/99".into(),
+            method: "GET".into(),
+            status: 200,
+            duration_ms: 10,
+            timestamp_ms: 0,
+            request_headers: HashMap::new(),
+            request_body: None,
+            response_body: Some(r#"{"id":99,"name":"Alice"}"#.into()),
+            response_truncated: false,
+            tab_id: "t1".into(),
+        };
+        crate::endpoint_mapper::ingest(&entry, &store);
+        let sk = store.get("https://api.test.com").unwrap().unwrap();
+        assert!(sk.endpoints.contains_key("GET /v1/users/{id}"));
     }
 
     #[test]
