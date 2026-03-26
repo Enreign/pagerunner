@@ -1,3 +1,4 @@
+mod adapters;
 mod anonymizer;
 mod audit;
 mod auth_token_detector;

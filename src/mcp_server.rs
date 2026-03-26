@@ -1332,6 +1332,52 @@ fn wrap_untrusted_web_content(s: &str) -> String {
     format!("<<<UNTRUSTED_WEB_CONTENT>>>\n{}\n<<<UNTRUSTED_WEB_CONTENT>>>", s)
 }
 
+fn ensure_seed_adapters_loaded(
+    store: &crate::site_knowledge::SiteKnowledgeStore,
+    origin: &str,
+) -> crate::error::Result<()> {
+    let matching: Vec<_> = crate::adapters::seed_adapters()
+        .iter()
+        .filter(|a| a.origin == origin)
+        .collect();
+
+    if matching.is_empty() {
+        return Ok(());
+    }
+
+    let mut entry = store.get(origin)?.unwrap_or_default();
+    let mut changed = false;
+    let now = crate::site_knowledge::now_micros();
+
+    for seed in matching {
+        // Skip only if the adapter already exists AND is trusted (already loaded).
+        // If it's not trusted (user-registered with same name), overwrite with seed.
+        let should_insert = match entry.adapters.get(seed.name) {
+            None => true,
+            Some(a) if a.trusted => false,
+            Some(_) => true,
+        };
+        if should_insert {
+            entry.adapters.insert(seed.name.to_string(), crate::site_knowledge::AdapterEntry {
+                js_code: seed.js_code.to_string(),
+                description: seed.description.to_string(),
+                params_schema: None,
+                trusted: true,
+                created_at: now,
+                last_used: 0,
+                last_error: None,
+            });
+            changed = true;
+        }
+    }
+
+    if changed {
+        entry.last_updated = now;
+        store.put(origin, &entry)?;
+    }
+    Ok(())
+}
+
 fn check_call_site_api_origin(
     mgr: &crate::session::SessionManager,
     session_id: &str,
@@ -2568,6 +2614,7 @@ async fn dispatch_tool_inner(
         "get_site_knowledge" => {
             let origin = args["origin"].as_str()
                 .ok_or_else(|| PagerunnerError::Config("origin required".into()))?;
+            ensure_seed_adapters_loaded(&site_store, origin)?;
             let now = crate::site_knowledge::now_micros();
             match site_store.get(origin)? {
                 None => Ok(serde_json::to_string(&serde_json::Value::Null)?),
@@ -2649,6 +2696,8 @@ async fn dispatch_tool_inner(
             let adapter_name = args["name"].as_str()
                 .ok_or_else(|| PagerunnerError::Config("name required".into()))?;
             let params = args.get("params").cloned().unwrap_or(serde_json::json!({}));
+
+            ensure_seed_adapters_loaded(&site_store, origin)?;
 
             // Get adapter (check it exists before locking session)
             let sk_entry = site_store.get(origin)?
