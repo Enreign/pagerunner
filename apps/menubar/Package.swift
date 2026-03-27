@@ -10,7 +10,7 @@ let package = Package(
     ],
     dependencies: [
         .package(url: "https://github.com/sparkle-project/Sparkle", from: "2.6.0"),
-        .package(url: "https://github.com/sindresorhus/KeyboardShortcuts", from: "2.2.0"),
+        .package(url: "https://github.com/sindresorhus/KeyboardShortcuts", exact: "1.15.0"),
     ],
     targets: [
         .target(
