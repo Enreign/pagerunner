@@ -6,6 +6,8 @@ pub struct ChromeProfile {
     pub name: String,
     pub display_name: String,
     pub user_data_dir: String,
+    #[serde(default)]
+    pub kind: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -301,6 +303,7 @@ user_data_dir = "/tmp/chrome-test"
                 name: "a".into(),
                 display_name: "A".into(),
                 user_data_dir: "/tmp/a".into(),
+                kind: None,
             }],
             ..Default::default()
         };
@@ -437,5 +440,30 @@ enabled = false
 "#;
         let cfg: PagerunnerConfig = toml::from_str(toml).unwrap();
         assert_eq!(cfg.ner.enabled, Some(false));
+    }
+
+    #[test]
+    fn test_chrome_profile_kind_defaults_to_none() {
+        let toml = r#"
+[[profiles]]
+name = "personal"
+display_name = "Personal"
+user_data_dir = "/tmp/chrome"
+"#;
+        let cfg: PagerunnerConfig = toml::from_str(toml).unwrap();
+        assert!(cfg.profiles[0].kind.is_none());
+    }
+
+    #[test]
+    fn test_chrome_profile_kind_agent() {
+        let toml = r#"
+[[profiles]]
+name = "agent-1"
+display_name = "Agent 1"
+user_data_dir = "/tmp/chrome-agent"
+kind = "agent"
+"#;
+        let cfg: PagerunnerConfig = toml::from_str(toml).unwrap();
+        assert_eq!(cfg.profiles[0].kind.as_deref(), Some("agent"));
     }
 }

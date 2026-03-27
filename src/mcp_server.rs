@@ -1066,6 +1066,7 @@ pub(crate) fn list_profiles_response(config: &PagerunnerConfig) -> String {
             json!({
                 "name": p.name,
                 "display_name": p.display_name,
+                "kind": p.kind.as_deref().unwrap_or("personal"),
             })
         })
         .collect();
@@ -3668,6 +3669,7 @@ Normal visible content here."#;
                 name: "personal".into(),
                 display_name: "Personal".into(),
                 user_data_dir: "/tmp/p".into(),
+                kind: None,
             }],
             ..Default::default()
         };
@@ -3681,6 +3683,32 @@ Normal visible content here."#;
             !result.contains("pagerunner init"),
             "should not show hint when profiles exist"
         );
+    }
+
+    #[test]
+    fn list_profiles_response_includes_kind_field() {
+        let config = crate::config::PagerunnerConfig {
+            profiles: vec![
+                crate::config::ChromeProfile {
+                    name: "personal".into(),
+                    display_name: "Personal".into(),
+                    user_data_dir: "/tmp/p".into(),
+                    kind: None,
+                },
+                crate::config::ChromeProfile {
+                    name: "agent-1".into(),
+                    display_name: "Agent 1".into(),
+                    user_data_dir: "/tmp/a".into(),
+                    kind: Some("agent".into()),
+                },
+            ],
+            ..Default::default()
+        };
+        let result = list_profiles_response(&config);
+        let v: serde_json::Value = serde_json::from_str(&result).unwrap();
+        let data = v["data"].as_array().unwrap();
+        assert_eq!(data[0]["kind"], "personal"); // None → "personal"
+        assert_eq!(data[1]["kind"], "agent");
     }
 
     #[tokio::test]
