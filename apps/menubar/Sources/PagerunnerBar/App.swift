@@ -98,6 +98,43 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     appState.tabs[session.id] = []
                 }
             }
+
+            // 3. list_session_checkpoints for each unique profile
+            let uniqueProfiles = Set(sessions.map { $0.profile })
+            for profile in uniqueProfiles {
+                if let ckptRaw = try? await client.call(
+                    tool: "list_session_checkpoints",
+                    args: ["profile": profile]
+                ) {
+                    if let data = ckptRaw["data"]?.arrayValue {
+                        appState.checkpoints[profile] = data.compactMap { item -> Checkpoint? in
+                            guard let obj = item.objectValue,
+                                  let checkpointId = obj["checkpoint_id"]?.stringValue,
+                                  let name = obj["name"]?.stringValue,
+                                  let profileStr = obj["profile"]?.stringValue else { return nil }
+                            let savedAt: Int
+                            if case .int(let i) = obj["saved_at"] { savedAt = i }
+                            else if case .double(let d) = obj["saved_at"] { savedAt = Int(d) }
+                            else { return nil }
+                            let tabCount: Int
+                            if case .int(let i) = obj["tab_count"] { tabCount = i }
+                            else { tabCount = 0 }
+                            let origins = obj["origins"]?.arrayValue?.compactMap { $0.stringValue } ?? []
+                            let dict: [String: Any] = [
+                                "checkpoint_id": checkpointId,
+                                "name": name,
+                                "saved_at": savedAt,
+                                "profile": profileStr,
+                                "tab_count": tabCount,
+                                "origins": origins
+                            ]
+                            guard let jsonData = try? JSONSerialization.data(withJSONObject: dict),
+                                  let checkpoint = try? JSONDecoder().decode(Checkpoint.self, from: jsonData) else { return nil }
+                            return checkpoint
+                        }
+                    }
+                }
+            }
         } catch {
             appState.recordFailure()
         }

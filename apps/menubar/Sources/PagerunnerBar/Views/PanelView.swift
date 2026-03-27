@@ -7,6 +7,7 @@ struct PanelView: View {
     @Bindable var appState: AppState
     let pollingService: PollingService
     let controller: StatusItemController
+    @State private var daemonProcess: Process?
 
     var body: some View {
         ZStack(alignment: .bottom) {
@@ -16,7 +17,18 @@ struct PanelView: View {
 
             VStack(spacing: 0) {
                 // Daemon status banner
-                DaemonBanner(appState: appState)
+                DaemonBanner(appState: appState, onStart: {
+                    guard let binary = appState.binaryPath else { return }
+                    let proc = Process()
+                    proc.launchPath = binary
+                    proc.arguments = ["daemon"]
+                    try? proc.run()
+                    daemonProcess = proc
+                }, onStop: {
+                    // TODO: send SIGTERM to tracked daemon process
+                    daemonProcess?.terminate()
+                    daemonProcess = nil
+                })
                     .padding(.horizontal, 12)
                     .padding(.top, 10)
 
@@ -50,6 +62,8 @@ struct PanelView: View {
 
 struct DaemonBanner: View {
     let appState: AppState
+    let onStart: () -> Void
+    let onStop: () -> Void
 
     var body: some View {
         HStack {
@@ -60,14 +74,14 @@ struct DaemonBanner: View {
                 .font(.system(size: 11, weight: .medium))
             Spacer()
             if case .stopped = appState.daemonStatus {
-                Button("Start") { /* TODO: start daemon */ }
+                Button("Start") { onStart() }
                     .buttonStyle(.borderedProminent)
                     .controlSize(.mini)
             } else if case .running = appState.daemonStatus {
                 Text("\(appState.sessionCount) sessions · \(appState.tabCount) tabs")
                     .font(.system(size: 10))
                     .foregroundStyle(.secondary)
-                Button("Stop") { /* TODO: stop daemon */ }
+                Button("Stop") { onStop() }
                     .buttonStyle(.bordered)
                     .controlSize(.mini)
             }

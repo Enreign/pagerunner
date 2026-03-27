@@ -6,6 +6,7 @@ struct SessionBlockView: View {
     let tabs: [PagerunnerCore.Tab]
     @Bindable var appState: AppState
     let controller: StatusItemController
+    @Environment(\.daemonClient) private var daemon
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -30,7 +31,9 @@ struct SessionBlockView: View {
 
                 // Save checkpoint button
                 Button {
-                    // TODO: call save_session_checkpoint
+                    Task { @MainActor in
+                        _ = try? await daemon.call(tool: "save_session_checkpoint", args: ["session_id": session.id])
+                    }
                 } label: {
                     Image(systemName: "square.and.arrow.down")
                         .font(.system(size: 11))
@@ -40,7 +43,9 @@ struct SessionBlockView: View {
 
                 // Close session button
                 Button {
-                    // TODO: call close_session
+                    Task { @MainActor in
+                        _ = try? await daemon.call(tool: "close_session", args: ["session_id": session.id])
+                    }
                 } label: {
                     Image(systemName: "xmark")
                         .font(.system(size: 10))
@@ -95,6 +100,7 @@ struct TabRowView: View {
     let sessionId: String
     let tabs: [PagerunnerCore.Tab]
     let controller: StatusItemController
+    @Environment(\.daemonClient) private var daemon
     @State private var isHovered = false
 
     var body: some View {
@@ -115,7 +121,9 @@ struct TabRowView: View {
             // Close button (visible on hover, disabled if last tab)
             if isHovered {
                 Button {
-                    // TODO: call close_tab
+                    Task { @MainActor in
+                        _ = try? await daemon.call(tool: "close_tab", args: ["session_id": sessionId, "target_id": tab.targetId])
+                    }
                 } label: {
                     Image(systemName: "xmark")
                         .font(.system(size: 9))

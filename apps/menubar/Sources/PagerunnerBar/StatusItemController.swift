@@ -33,6 +33,7 @@ final class StatusItemController {
 
     private func setupPopover() {
         let contentView = PanelView(appState: appState, pollingService: pollingService, controller: self)
+            .environment(\.daemonClient, DaemonClient())
         let hostingVC = NSHostingController(rootView: contentView)
         hostingVC.view.frame = NSRect(x: 0, y: 0, width: 310, height: 560)
         popover.contentViewController = hostingVC

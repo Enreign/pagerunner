@@ -5,6 +5,7 @@ struct ProfileDetailView: View {
     @Bindable var appState: AppState
     let profileName: String
     let controller: StatusItemController
+    @Environment(\.daemonClient) private var daemon
 
     private var profile: Profile? { appState.profiles.first { $0.name == profileName } }
     private var sessions: [Session] { appState.sessionsFor(profile: profileName) }
@@ -51,7 +52,9 @@ struct ProfileDetailView: View {
 
             // Open new session button
             Button {
-                // TODO: call open_session via DaemonClient
+                Task { @MainActor in
+                    _ = try? await daemon.call(tool: "open_session", args: ["profile": profileName])
+                }
             } label: {
                 Label("Open new session", systemImage: "plus")
                     .font(.system(size: 11))

@@ -58,6 +58,7 @@ struct CheckpointRow: View {
     let profileName: String
     let sessionId: String?   // nil = no active session for this profile
     @Bindable var appState: AppState
+    @Environment(\.daemonClient) private var daemon
 
     var body: some View {
         HStack(alignment: .top, spacing: 8) {
@@ -94,8 +95,9 @@ struct CheckpointRow: View {
                 // Restore button — disabled if no active session or daemon stopped
                 Button("Restore") {
                     guard let sid = sessionId else { return }
-                    // TODO (Task 10): call restore_session_checkpoint via DaemonClient
-                    _ = sid
+                    Task { @MainActor in
+                        _ = try? await daemon.call(tool: "restore_session_checkpoint", args: ["session_id": sid, "checkpoint_id": checkpoint.id])
+                    }
                 }
                 .buttonStyle(.borderedProminent)
                 .controlSize(.mini)
@@ -104,7 +106,9 @@ struct CheckpointRow: View {
 
                 // Delete button
                 Button {
-                    // TODO (Task 10): call delete_session_checkpoint via DaemonClient
+                    Task { @MainActor in
+                        _ = try? await daemon.call(tool: "delete_session_checkpoint", args: ["profile": profileName, "checkpoint_id": checkpoint.id])
+                    }
                 } label: {
                     Image(systemName: "xmark")
                         .font(.system(size: 9))

@@ -74,3 +74,4 @@ final class AppState {
         daemonStatus = .running
     }
 }
+
