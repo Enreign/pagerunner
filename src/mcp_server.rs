@@ -368,6 +368,29 @@ pub fn all_tools() -> Vec<Value> {
             }
         }),
         json!({
+            "name": "list_session_checkpoints",
+            "description": "List saved session checkpoints for a profile, sorted newest first.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "profile": { "type": "string" }
+                },
+                "required": ["profile"]
+            }
+        }),
+        json!({
+            "name": "delete_session_checkpoint",
+            "description": "Delete a saved session checkpoint (does not delete constituent snapshots).",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "profile": { "type": "string" },
+                    "checkpoint_id": { "type": "string" }
+                },
+                "required": ["profile", "checkpoint_id"]
+            }
+        }),
+        json!({
             "name": "kv_set",
             "description": "Store a string value under a namespaced key in the encrypted local DB. Use for persisting agent state across MCP restarts.",
             "inputSchema": {
@@ -2540,6 +2563,43 @@ async fn dispatch_tool_inner(
             Ok(result.to_string())
         }
 
+        "list_session_checkpoints" => {
+            let profile = args["profile"]
+                .as_str()
+                .ok_or_else(|| PagerunnerError::Config("Missing profile".into()))?;
+            let checkpoints = crate::checkpoint::list_checkpoints(&db, profile)?;
+            let data: Vec<serde_json::Value> = checkpoints
+                .iter()
+                .map(|c| {
+                    let mut seen = std::collections::HashSet::new();
+                    let origins: Vec<&str> = c.tabs.iter()
+                        .filter(|t| seen.insert(t.origin.as_str()))
+                        .map(|t| t.origin.as_str())
+                        .collect();
+                    serde_json::json!({
+                        "checkpoint_id": c.checkpoint_id,
+                        "name": c.name,
+                        "saved_at": c.saved_at,
+                        "profile": c.profile,
+                        "tab_count": c.tabs.len(),
+                        "origins": origins,
+                    })
+                })
+                .collect();
+            Ok(serde_json::json!({"ok": true, "data": data}).to_string())
+        }
+
+        "delete_session_checkpoint" => {
+            let profile = args["profile"]
+                .as_str()
+                .ok_or_else(|| PagerunnerError::Config("Missing profile".into()))?;
+            let ckpt_id = args["checkpoint_id"]
+                .as_str()
+                .ok_or_else(|| PagerunnerError::Config("Missing checkpoint_id".into()))?;
+            crate::checkpoint::delete_checkpoint(&db, profile, ckpt_id)?;
+            Ok(serde_json::json!({"ok": true}).to_string())
+        }
+
         "kv_set" => {
             let ns = args["namespace"]
                 .as_str()
@@ -3110,6 +3170,8 @@ mod tests {
         assert!(tools.iter().any(|t| t["name"] == "type_text"));
         assert!(tools.iter().any(|t| t["name"] == "save_session_checkpoint"));
         assert!(tools.iter().any(|t| t["name"] == "restore_session_checkpoint"));
+        assert!(tools.iter().any(|t| t["name"] == "list_session_checkpoints"));
+        assert!(tools.iter().any(|t| t["name"] == "delete_session_checkpoint"));
     }
 
     #[test]

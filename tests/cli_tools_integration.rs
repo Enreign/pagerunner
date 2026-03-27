@@ -2257,3 +2257,27 @@ fn test_cli_restore_session_checkpoint_roundtrip() {
 
     run_live(&["close-session", &session_id]);
 }
+
+#[test]
+#[serial]
+fn test_cli_list_session_checkpoints_no_chrome() {
+    // Uses isolated test DB — no Chrome, no daemon needed.
+    // Verifies subcommand exists and returns empty list.
+    let output = run(&["list-session-checkpoints", "--profile", "personal"]);
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    let v: serde_json::Value = serde_json::from_str(&stdout(&output)).unwrap();
+    assert_eq!(v["ok"], true);
+    assert_eq!(v["data"].as_array().unwrap().len(), 0);
+}
+
+#[test]
+#[serial]
+fn test_cli_delete_session_checkpoint_not_found() {
+    // Uses isolated test DB — no Chrome, no daemon needed.
+    let output = run(&[
+        "delete-session-checkpoint",
+        "--profile", "personal",
+        "--checkpoint-id", "nonexistent-uuid",
+    ]);
+    assert!(!output.status.success(), "should fail for missing checkpoint");
+}

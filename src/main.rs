@@ -248,6 +248,20 @@ enum Commands {
         session_id: String,
         checkpoint_id: String,
     },
+    /// List saved session checkpoints for a profile
+    #[command(name = "list-session-checkpoints")]
+    ListSessionCheckpoints {
+        #[arg(long)]
+        profile: String,
+    },
+    /// Delete a saved session checkpoint
+    #[command(name = "delete-session-checkpoint")]
+    DeleteSessionCheckpoint {
+        #[arg(long)]
+        profile: String,
+        #[arg(long)]
+        checkpoint_id: String,
+    },
     /// Save tab URLs and titles for later restoration
     SaveTabState { session_id: String },
     /// Reopen tabs from the most recently saved tab state
@@ -1048,6 +1062,26 @@ async fn run() -> anyhow::Result<()> {
             crate::cli_tools::run_tool(
                 "restore_session_checkpoint",
                 serde_json::json!({"session_id": session_id, "checkpoint_id": checkpoint_id}),
+                crate::cli_tools::ScreenshotMode::File,
+                &config,
+            )
+            .await?;
+        }
+        Commands::ListSessionCheckpoints { profile } => {
+            let config = config::PagerunnerConfig::load()?;
+            crate::cli_tools::run_tool(
+                "list_session_checkpoints",
+                serde_json::json!({"profile": profile}),
+                crate::cli_tools::ScreenshotMode::File,
+                &config,
+            )
+            .await?;
+        }
+        Commands::DeleteSessionCheckpoint { profile, checkpoint_id } => {
+            let config = config::PagerunnerConfig::load()?;
+            crate::cli_tools::run_tool(
+                "delete_session_checkpoint",
+                serde_json::json!({"profile": profile, "checkpoint_id": checkpoint_id}),
                 crate::cli_tools::ScreenshotMode::File,
                 &config,
             )
