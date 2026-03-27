@@ -117,6 +117,18 @@ pub fn all_tools() -> Vec<Value> {
             }
         }),
         json!({
+            "name": "close_tab",
+            "description": "Close a specific browser tab. Returns an error if this is the last tab in the session (use close_session instead).",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "session_id": { "type": "string" },
+                    "target_id": { "type": "string" }
+                },
+                "required": ["session_id", "target_id"]
+            }
+        }),
+        json!({
             "name": "navigate",
             "description": "Navigate a tab to a URL",
             "inputSchema": {
@@ -1781,6 +1793,19 @@ async fn dispatch_tool_inner(
             }).to_string())
         }
 
+        "close_tab" => {
+            let sid = args["session_id"]
+                .as_str()
+                .ok_or_else(|| PagerunnerError::Config("Missing session_id".into()))?;
+            let target_id = args["target_id"]
+                .as_str()
+                .ok_or_else(|| PagerunnerError::Config("Missing target_id".into()))?;
+            let mut mgr = sessions.lock().await;
+            let session = mgr.get_live(sid)?;
+            browser::close_tab(&session.cdp, target_id).await?;
+            Ok(serde_json::json!({"ok": true, "target_id": target_id}).to_string())
+        }
+
         "navigate" => {
             let sid = args["session_id"]
                 .as_str()
@@ -3027,6 +3052,7 @@ mod tests {
         assert!(tools.iter().any(|t| t["name"] == "open_session"));
         assert!(tools.iter().any(|t| t["name"] == "screenshot"));
         assert!(tools.iter().any(|t| t["name"] == "new_tab"));
+        assert!(tools.iter().any(|t| t["name"] == "close_tab"));
         assert!(tools.iter().any(|t| t["name"] == "evaluate"));
         assert!(tools.iter().any(|t| t["name"] == "click"));
         assert!(tools.iter().any(|t| t["name"] == "type_text"));

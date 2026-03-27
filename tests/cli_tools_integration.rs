@@ -2140,3 +2140,65 @@ fn test_selector_fragility_warning_appears() {
 
     run_live(&["close-session", &sid]);
 }
+
+#[test]
+#[cfg_attr(not(target_os = "macos"), ignore)]
+#[serial]
+fn test_cli_close_tab_last_tab_returns_error() {
+    let _daemon = start_test_daemon();
+
+    let profiles_out = run_live(&["list-profiles"]);
+    let profiles: serde_json::Value = serde_json::from_str(&stdout(&profiles_out)).unwrap();
+    let profile = profiles["data"][0]["name"].as_str().unwrap().to_string();
+
+    let open_out = run_live(&["open-session", &profile]);
+    let session_id = serde_json::from_str::<serde_json::Value>(&stdout(&open_out))
+        .unwrap()["session_id"].as_str().unwrap().to_string();
+
+    let tabs_out = run_live(&["list-tabs", &session_id]);
+    let tabs: serde_json::Value = serde_json::from_str(&stdout(&tabs_out)).unwrap();
+    let target_id = tabs["data"][0]["target_id"].as_str().unwrap().to_string();
+
+    // Closing the only tab must fail
+    let close_out = run_live(&["close-tab", &session_id, &target_id]);
+    assert!(
+        !close_out.status.success(),
+        "close-tab on last tab should exit non-zero"
+    );
+    assert!(
+        stderr(&close_out).contains("Cannot close last tab") || stderr(&close_out).contains("last tab"),
+        "error message should mention last tab: {}", stderr(&close_out)
+    );
+
+    run_live(&["close-session", &session_id]);
+}
+
+#[test]
+#[cfg_attr(not(target_os = "macos"), ignore)]
+#[serial]
+fn test_cli_close_tab_succeeds_with_multiple_tabs() {
+    let _daemon = start_test_daemon();
+
+    let profiles_out = run_live(&["list-profiles"]);
+    let profiles: serde_json::Value = serde_json::from_str(&stdout(&profiles_out)).unwrap();
+    let profile = profiles["data"][0]["name"].as_str().unwrap().to_string();
+
+    let open_out = run_live(&["open-session", &profile]);
+    let session_id = serde_json::from_str::<serde_json::Value>(&stdout(&open_out))
+        .unwrap()["session_id"].as_str().unwrap().to_string();
+
+    // Open a second tab so we have 2 total
+    run_live(&["new-tab", &session_id]);
+
+    let tabs_out = run_live(&["list-tabs", &session_id]);
+    let tabs: serde_json::Value = serde_json::from_str(&stdout(&tabs_out)).unwrap();
+    let target_id = tabs["data"][0]["target_id"].as_str().unwrap().to_string();
+
+    // Closing one of two tabs should succeed
+    let close_out = run_live(&["close-tab", &session_id, &target_id]);
+    assert!(close_out.status.success(), "stderr: {}", stderr(&close_out));
+    let v: serde_json::Value = serde_json::from_str(&stdout(&close_out)).unwrap();
+    assert_eq!(v["ok"], true);
+
+    run_live(&["close-session", &session_id]);
+}

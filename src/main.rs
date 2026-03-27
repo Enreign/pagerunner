@@ -116,6 +116,12 @@ enum Commands {
         #[arg(long)]
         url: Option<String>,
     },
+    /// Close a specific tab (fails if it's the last tab in the session)
+    #[command(name = "close-tab")]
+    CloseTab {
+        session_id: String,
+        target_id: String,
+    },
     /// Navigate to a URL
     Navigate {
         session_id: String,
@@ -757,6 +763,16 @@ async fn run() -> anyhow::Result<()> {
             crate::cli_tools::run_tool(
                 "new_tab",
                 args,
+                crate::cli_tools::ScreenshotMode::File,
+                &config,
+            )
+            .await?;
+        }
+        Commands::CloseTab { session_id, target_id } => {
+            let config = config::PagerunnerConfig::load()?;
+            crate::cli_tools::run_tool(
+                "close_tab",
+                serde_json::json!({"session_id": session_id, "target_id": target_id}),
                 crate::cli_tools::ScreenshotMode::File,
                 &config,
             )
