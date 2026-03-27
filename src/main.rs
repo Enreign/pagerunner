@@ -234,6 +234,14 @@ enum Commands {
         #[arg(long)]
         saved_at: Option<i64>,
     },
+    /// Save a session checkpoint (tabs + auth state)
+    #[command(name = "save-session-checkpoint")]
+    SaveSessionCheckpoint {
+        session_id: String,
+        /// Optional name (auto-named if omitted)
+        #[arg(long)]
+        name: Option<String>,
+    },
     /// Save tab URLs and titles for later restoration
     SaveTabState { session_id: String },
     /// Reopen tabs from the most recently saved tab state
@@ -1009,6 +1017,20 @@ async fn run() -> anyhow::Result<()> {
             }
             crate::cli_tools::run_tool(
                 "delete_snapshot",
+                args,
+                crate::cli_tools::ScreenshotMode::File,
+                &config,
+            )
+            .await?;
+        }
+        Commands::SaveSessionCheckpoint { session_id, name } => {
+            let config = config::PagerunnerConfig::load()?;
+            let mut args = serde_json::json!({"session_id": session_id});
+            if let Some(n) = name {
+                args["name"] = serde_json::json!(n);
+            }
+            crate::cli_tools::run_tool(
+                "save_session_checkpoint",
                 args,
                 crate::cli_tools::ScreenshotMode::File,
                 &config,

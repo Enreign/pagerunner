@@ -83,6 +83,83 @@ pub fn delete_checkpoint(db: &Db, profile: &str, checkpoint_id: &str) -> Result<
     )))
 }
 
+/// Extract the HTTPS/HTTP origin from a URL string (scheme + host, no path).
+/// Returns None for blank/chrome-internal URLs.
+pub fn extract_origin(url: &str) -> Option<String> {
+    if url.is_empty() || url == "about:blank" || url.starts_with("chrome-") {
+        return None;
+    }
+    let after_scheme = url.find("://").map(|i| i + 3)?;
+    let rest = &url[after_scheme..];
+    let host_end = rest.find('/').unwrap_or(rest.len());
+    let host = &rest[..host_end];
+    if host.is_empty() {
+        return None;
+    }
+    let scheme = &url[..url.find("://").unwrap()];
+    Some(format!("{}://{}", scheme, host))
+}
+
+/// Save the current session state as a named checkpoint.
+pub async fn save_session_checkpoint(
+    session: &mut crate::session::Session,
+    name: Option<&str>,
+    db: &crate::db::Db,
+) -> Result<SessionCheckpoint> {
+    // Step 1: get current tabs
+    let tabs = crate::browser::list_tabs(&session.cdp).await?;
+
+    // Step 2: save tab URL list for recovery
+    crate::snapshot::save_tab_state(session, db).await?;
+
+    // Step 3: collect tabs with origins, dedup origins for snapshot saving
+    let mut checkpoint_tabs: Vec<CheckpointTab> = Vec::new();
+    let mut seen_origins: std::collections::HashMap<String, String> =
+        std::collections::HashMap::new(); // origin → target_id of first tab
+
+    for tab in &tabs {
+        if let Some(origin) = extract_origin(&tab.url) {
+            seen_origins.entry(origin.clone()).or_insert_with(|| tab.target_id.clone());
+            checkpoint_tabs.push(CheckpointTab {
+                url: tab.url.clone(),
+                origin: origin.clone(),
+            });
+        }
+    }
+
+    // Step 4: save snapshot for each unique origin (best-effort)
+    for (origin, target_id) in &seen_origins {
+        if let Err(e) = crate::snapshot::save_snapshot(session, target_id, origin, db).await {
+            tracing::warn!(origin = %origin, error = %e, "save_session_checkpoint: snapshot failed");
+        }
+    }
+
+    // Step 5: build and store checkpoint
+    let saved_at = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+
+    let checkpoint_name = match name {
+        Some(n) if !n.is_empty() => n.to_string(),
+        _ => {
+            let days = saved_at / 86400;
+            let year = 1970 + days / 365;
+            format!("Autosave · {}", year)
+        }
+    };
+
+    let ckpt = SessionCheckpoint {
+        checkpoint_id: uuid::Uuid::new_v4().to_string(),
+        name: checkpoint_name,
+        saved_at,
+        profile: session.profile_name.clone(),
+        tabs: checkpoint_tabs,
+    };
+    save_checkpoint(db, &ckpt)?;
+    Ok(ckpt)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -163,5 +240,30 @@ mod tests {
     fn test_load_checkpoint_not_found_returns_error() {
         let (db, _dir) = make_db();
         assert!(load_checkpoint(&db, "personal", "missing").is_err());
+    }
+
+    #[test]
+    fn test_extract_origin_happy_path() {
+        assert_eq!(
+            extract_origin("https://github.com/foo/bar"),
+            Some("https://github.com".into())
+        );
+        assert_eq!(
+            extract_origin("http://example.com/path?q=1"),
+            Some("http://example.com".into())
+        );
+        // No trailing path
+        assert_eq!(
+            extract_origin("https://linear.app"),
+            Some("https://linear.app".into())
+        );
+    }
+
+    #[test]
+    fn test_extract_origin_returns_none_for_blank_and_chrome() {
+        assert_eq!(extract_origin(""), None);
+        assert_eq!(extract_origin("about:blank"), None);
+        assert_eq!(extract_origin("chrome-extension://abc/page.html"), None);
+        assert_eq!(extract_origin("chrome-search://local-ntp/"), None);
     }
 }

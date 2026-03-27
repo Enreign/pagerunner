@@ -344,6 +344,18 @@ pub fn all_tools() -> Vec<Value> {
             }
         }),
         json!({
+            "name": "save_session_checkpoint",
+            "description": "Save the current session state (tabs + auth) as a named checkpoint for later restore.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "session_id": { "type": "string" },
+                    "name": { "type": "string", "description": "Optional name. Auto-named if omitted." }
+                },
+                "required": ["session_id"]
+            }
+        }),
+        json!({
             "name": "kv_set",
             "description": "Store a string value under a namespaced key in the encrypted local DB. Use for persisting agent state across MCP restarts.",
             "inputSchema": {
@@ -2488,6 +2500,21 @@ async fn dispatch_tool_inner(
             Ok(serde_json::json!({"ok": true, "tabs_restored": urls.len(), "urls": urls}).to_string())
         }
 
+        "save_session_checkpoint" => {
+            let sid = args["session_id"]
+                .as_str()
+                .ok_or_else(|| PagerunnerError::Config("Missing session_id".into()))?;
+            let name = args["name"].as_str();
+            let mut mgr = sessions.lock().await;
+            let session = mgr.get_live(sid)?;
+            let ckpt = crate::checkpoint::save_session_checkpoint(session, name, &db).await?;
+            Ok(serde_json::json!({
+                "ok": true,
+                "checkpoint_id": ckpt.checkpoint_id,
+                "name": ckpt.name,
+            }).to_string())
+        }
+
         "kv_set" => {
             let ns = args["namespace"]
                 .as_str()
@@ -3056,6 +3083,7 @@ mod tests {
         assert!(tools.iter().any(|t| t["name"] == "evaluate"));
         assert!(tools.iter().any(|t| t["name"] == "click"));
         assert!(tools.iter().any(|t| t["name"] == "type_text"));
+        assert!(tools.iter().any(|t| t["name"] == "save_session_checkpoint"));
     }
 
     #[test]

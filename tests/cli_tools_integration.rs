@@ -2202,3 +2202,27 @@ fn test_cli_close_tab_succeeds_with_multiple_tabs() {
 
     run_live(&["close-session", &session_id]);
 }
+
+#[test]
+#[cfg_attr(not(target_os = "macos"), ignore)]
+#[serial]
+fn test_cli_save_session_checkpoint_returns_checkpoint_id() {
+    let _daemon = start_test_daemon();
+
+    let profiles_out = run_live(&["list-profiles"]);
+    let profiles: serde_json::Value = serde_json::from_str(&stdout(&profiles_out)).unwrap();
+    let profile = profiles["data"][0]["name"].as_str().unwrap().to_string();
+
+    let open_out = run_live(&["open-session", &profile]);
+    let session_id = serde_json::from_str::<serde_json::Value>(&stdout(&open_out))
+        .unwrap()["session_id"].as_str().unwrap().to_string();
+
+    let save_out = run_live(&["save-session-checkpoint", &session_id]);
+    assert!(save_out.status.success(), "save-session-checkpoint failed: {}", stderr(&save_out));
+    let result: serde_json::Value = serde_json::from_str(&stdout(&save_out)).unwrap();
+    assert_eq!(result["ok"], true);
+    assert!(result["checkpoint_id"].as_str().is_some(), "must return checkpoint_id");
+    assert!(result["name"].as_str().is_some(), "must return name");
+
+    run_live(&["close-session", &session_id]);
+}
