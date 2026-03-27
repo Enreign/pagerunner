@@ -223,6 +223,47 @@ Tests use `PAGERUNNER_DB_PATH=/tmp/pagerunner_integration_test.db` automatically
 | Chrome: NER CLI | 1/1 | `#[ignore]` — requires `--features ner` + model |
 | **Total** | **74/74** | macOS: 73 pass + 1 ignored; Linux CI: 38 pass + 35 cfg_attr-ignored + 1 ignored |
 
+## macOS Menu Bar App
+
+Native Swift companion app at `apps/menubar/`.
+
+### Build
+
+```bash
+cd apps/menubar
+swift build            # debug build
+swift build -c release # release binary → .build/release/PagerunnerBar
+swift test             # run PagerunnerCoreTests (11 tests, no Chrome needed)
+```
+
+### Run locally (with live daemon)
+
+```bash
+pagerunner daemon &    # start daemon
+./.build/release/PagerunnerBar  # run from apps/menubar/
+```
+
+### Distribution
+
+```bash
+cd apps/menubar/scripts
+./package.sh           # builds .app bundle + signs + .zip
+./notarize.sh          # submits to Apple notarization + staples
+```
+
+Requires: `CODE_SIGN_IDENTITY`, `APPLE_TEAM_ID`, `APPLE_ID`, `NOTARIZE_PASSWORD` env vars for signing + notarization.
+
+### Architecture
+
+- `Sources/PagerunnerCore/` — zero-UI, fully testable: `Models.swift`, `DaemonClient.swift`, `PollingService.swift`
+- `Sources/PagerunnerBar/` — app target: `App.swift`, `AppState.swift`, `StatusItemController.swift`, `NotificationService.swift`, `Views/`
+- `Tests/PagerunnerCoreTests/` — unit tests for Core (no UI, no live daemon)
+
+### Dependencies
+
+- Sparkle 2.x (auto-update framework)
+- KeyboardShortcuts 1.15.0 (global hotkey, sindresorhus)
+
 ### Last Full Live Test Run: [2026-03-21-run-6](docs/test-runs/2026-03-21-run-6.md)
 | Category | Pass | Notes |
 |----------|------|-------|
