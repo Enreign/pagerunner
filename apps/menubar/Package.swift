@@ -1,4 +1,4 @@
-// swift-tools-version: 5.10
+// swift-tools-version: 6.0
 import PackageDescription
 
 let package = Package(
@@ -16,8 +16,7 @@ let package = Package(
         .target(
             name: "PagerunnerCore",
             dependencies: [],
-            path: "Sources/PagerunnerCore",
-            swiftSettings: [.unsafeFlags(["-strict-concurrency=complete"])]
+            path: "Sources/PagerunnerCore"
         ),
         .executableTarget(
             name: "PagerunnerBar",
@@ -27,12 +26,13 @@ let package = Package(
                 .product(name: "KeyboardShortcuts", package: "KeyboardShortcuts"),
             ],
             path: "Sources/PagerunnerBar",
-            swiftSettings: [.unsafeFlags(["-strict-concurrency=complete"])]
+            exclude: ["Info.plist"]
         ),
         .testTarget(
             name: "PagerunnerCoreTests",
             dependencies: ["PagerunnerCore"],
             path: "Tests/PagerunnerCoreTests"
         ),
-    ]
+    ],
+    swiftLanguageModes: [.v6]
 )

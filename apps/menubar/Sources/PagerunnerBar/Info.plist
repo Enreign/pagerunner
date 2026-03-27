@@ -6,13 +6,15 @@
     <true/>
     <key>CFBundleIdentifier</key>
     <string>io.pagerunner.bar</string>
+    <key>CFBundleExecutable</key>
+    <string>PagerunnerBar</string>
     <key>CFBundleName</key>
     <string>Pagerunner</string>
     <key>CFBundleVersion</key>
     <string>1</string>
     <key>CFBundleShortVersionString</key>
     <string>0.1.0</string>
-    <key>NSLocalNotificationCenterUsageDescription</key>
+    <key>NSUserNotificationsUsageDescription</key>
     <string>Pagerunner notifies you about session crashes and daemon status changes.</string>
 </dict>
 </plist>
