@@ -54,6 +54,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func poll(client: DaemonClient) async {
         do {
+            // 0. list_profiles
+            if let profilesRaw = try? await client.call(tool: "list_profiles") {
+                if let data = profilesRaw["data"]?.arrayValue {
+                    appState.profiles = data.compactMap { item -> Profile? in
+                        guard let obj = item.objectValue else { return nil }
+                        let dict: [String: Any] = [
+                            "name": obj["name"]?.stringValue as Any,
+                            "display_name": obj["display_name"]?.stringValue as Any,
+                            "kind": obj["kind"]?.stringValue ?? "personal"
+                        ]
+                        guard let jsonData = try? JSONSerialization.data(withJSONObject: dict),
+                              let profile = try? JSONDecoder().decode(Profile.self, from: jsonData) else { return nil }
+                        return profile
+                    }
+                }
+            }
+
             // 1. list_sessions
             let sessionsRaw = try await client.call(tool: "list_sessions")
             guard let data = sessionsRaw["data"]?.arrayValue else { return }

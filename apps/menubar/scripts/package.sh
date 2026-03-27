@@ -10,9 +10,18 @@ APP_DIR="$SCRIPT_DIR/$APP_NAME.app"
 BUNDLE_ID="io.pagerunner.bar"
 
 # Build
-echo "Building release..."
+echo "Building release (arm64 + x86_64)..."
 cd "$MENUBAR_DIR"
-swift build -c release --arch arm64 --arch x86_64 2>&1
+swift build -c release --arch arm64
+swift build -c release --arch x86_64
+
+# Create universal binary
+echo "Creating universal binary..."
+mkdir -p "$BUILD_DIR"
+lipo -create \
+    "$MENUBAR_DIR/.build/arm64-apple-macosx/release/PagerunnerBar" \
+    "$MENUBAR_DIR/.build/x86_64-apple-macosx/release/PagerunnerBar" \
+    -output "$BUILD_DIR/PagerunnerBar"
 
 # Bundle
 echo "Bundling .app..."
