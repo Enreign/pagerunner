@@ -6,7 +6,7 @@ Rust MCP server that drives Chrome via CDP for AI agents. Serves Claude Code via
 ## Build & Test
 ```bash
 cargo build --release          # build release binary
-cargo test                     # run all tests (370 unit + 68 CLI integration on macOS)
+cargo test                     # run all tests (382 unit + 74 CLI integration on macOS)
 cargo test --test cli_tools_integration   # run CLI integration tests only
 ```
 
@@ -15,7 +15,7 @@ cargo test --test cli_tools_integration   # run CLI integration tests only
 - `src/cli_tools.rs` — CLI tool runner, screenshot output handling
 - `src/audit.rs` — AuditLog, AuditEvent types, build_args_summary
 - `src/security.rs` — SecurityPolicy, PolicySummary
-- `src/main.rs` — CLI entry (33 subcommands + mcp, daemon, audit)
+- `src/main.rs` — CLI entry (38 subcommands + mcp, daemon, audit)
 - `~/.pagerunner/config.toml` — profile config (Chrome user data dirs)
 - `~/.pagerunner/state.db` — encrypted ReDB (sessions, KV, snapshots, audit)
 - `~/.pagerunner/audit.log` — append-only JSON-lines audit log (0600)
@@ -121,7 +121,7 @@ Disable globally with `[ner] enabled = false` in `config.toml`.
 
 ## CLI Subcommands
 
-All 33 MCP tools are exposed as direct CLI subcommands — no MCP registration required:
+All 38 MCP tools are exposed as direct CLI subcommands — no MCP registration required:
 
 ```bash
 pagerunner list-profiles
@@ -130,6 +130,7 @@ pagerunner close-session <session-id>
 pagerunner list-sessions
 pagerunner list-tabs <session-id>
 pagerunner new-tab <session-id> [--url <url>]
+pagerunner close-tab <session-id> <target-id>
 pagerunner navigate <session-id> <target-id> <url>
 pagerunner wait-for <session-id> <target-id> [--selector <sel>] [--url <pat>] [--ms <n>]
 pagerunner get-content <session-id> <target-id>
@@ -157,6 +158,10 @@ pagerunner get-site-knowledge <origin>
 pagerunner register-adapter <origin> <name> <description> <js-code>
 pagerunner call-site-api <session-id> <target-id> <origin> <name> [--params <json>]
 pagerunner generate-adapter <origin> <name> [--description <desc>]
+pagerunner save-session-checkpoint <session-id> [--name <name>]
+pagerunner restore-session-checkpoint <session-id> <checkpoint-id>
+pagerunner list-session-checkpoints --profile <name>
+pagerunner delete-session-checkpoint --profile <name> --checkpoint-id <id>
 ```
 
 All commands output JSON to stdout. Errors go to stderr with exit 1.
@@ -165,7 +170,7 @@ All commands output JSON to stdout. Errors go to stderr with exit 1.
 CLI calls try the daemon socket first (`~/.pagerunner/daemon.sock`), then fall back to opening the DB directly. If a live MCP server is running standalone, start the daemon mode first to avoid DB lock conflicts.
 
 ## Known Issues
-None currently. On CI (Linux): 406 tests pass (370 unit + 36 non-Chrome CLI), 32 skipped. On macOS locally: 437 pass (370 unit + 67 CLI integration), 1 NER test skipped (requires `--features ner` build + model). NER live tests pass with model at `~/.pagerunner/models/ner.onnx`.
+None currently. On CI (Linux): 420 tests pass (382 unit + 38 non-Chrome CLI), 36 skipped. On macOS locally: 455 pass (382 unit + 73 CLI integration), 1 NER test skipped (requires `--features ner` build + model). NER live tests pass with model at `~/.pagerunner/models/ner.onnx`.
 
 ## Testing
 
@@ -189,7 +194,7 @@ Test runs are saved in `docs/test-runs/`. Run naming: `YYYY-MM-DD-run-N.md`.
 
 ### CLI Integration Tests (`tests/cli_tools_integration.rs`)
 
-36 non-Chrome tests cover subcommands without a live browser:
+38 non-Chrome tests cover subcommands without a live browser:
 - `list-profiles`, `list-sessions`, `list-snapshots` — happy-path output shape
 - KV store — full lifecycle (set, get, list, prefix filter, keys-only, delete, clear)
 - `init --json` — flag acceptance, CLAUDE.md snippet return, AGENTS.md snippet return
@@ -204,7 +209,8 @@ Tests use `PAGERUNNER_DB_PATH=/tmp/pagerunner_integration_test.db` automatically
 |----------|------|-------|
 | Non-Chrome (profiles, sessions, KV, errors, help, init) | 27/27 | |
 | Non-Chrome: network log + site knowledge errors | 9/9 | includes generate_adapter missing API key, stale adapter error |
-| Chrome: sessions + tabs | 4/4 | macOS only |
+| Non-Chrome: session checkpoint errors | 2/2 | invalid session returns error for checkpoint commands |
+| Chrome: sessions + tabs (incl. close-tab) | 6/6 | macOS only |
 | Chrome: screenshot, evaluate | 3/3 | macOS only |
 | Chrome: interactions (click, fill, type, select, scroll) | 8/8 | macOS only |
 | Chrome: wait-for | 4/4 | macOS only |
@@ -213,8 +219,9 @@ Tests use `PAGERUNNER_DB_PATH=/tmp/pagerunner_integration_test.db` automatically
 | Chrome: kv-roundtrip, snapshots, tab-state | 3/3 | macOS only |
 | Chrome: network log + console log | 4/4 | macOS only |
 | Chrome: site intelligence (adapter roundtrip, origin mismatch, selector fragility) | 3/3 | macOS only |
+| Chrome: session checkpoints (save, restore, list, delete) | 1/1 | macOS only |
 | Chrome: NER CLI | 1/1 | `#[ignore]` — requires `--features ner` + model |
-| **Total** | **68/68** | macOS: 67 pass + 1 ignored; Linux CI: 36 pass + 31 cfg_attr-ignored + 1 ignored |
+| **Total** | **74/74** | macOS: 73 pass + 1 ignored; Linux CI: 38 pass + 35 cfg_attr-ignored + 1 ignored |
 
 ### Last Full Live Test Run: [2026-03-21-run-6](docs/test-runs/2026-03-21-run-6.md)
 | Category | Pass | Notes |
