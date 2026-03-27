@@ -160,6 +160,74 @@ pub async fn save_session_checkpoint(
     Ok(ckpt)
 }
 
+/// Restore a session to a previously saved checkpoint.
+/// 1. Closes all existing tabs (navigates the last one to about:blank to avoid killing Chrome)
+/// 2. Opens a new tab for each URL in the checkpoint
+/// 3. Restores per-origin auth state (cookies + localStorage) for each unique origin
+pub async fn restore_session_checkpoint(
+    session: &mut crate::session::Session,
+    checkpoint_id: &str,
+    db: &crate::db::Db,
+) -> Result<serde_json::Value> {
+    let ckpt = load_checkpoint(db, &session.profile_name, checkpoint_id)?;
+
+    // Step 1: close existing tabs (keep last one to avoid killing Chrome window)
+    let existing_tabs = crate::browser::list_tabs(&session.cdp).await?;
+    let tab_count = existing_tabs.len();
+
+    if tab_count > 1 {
+        for tab in &existing_tabs[..tab_count - 1] {
+            let _ = session
+                .cdp
+                .send(
+                    "Target.closeTarget",
+                    serde_json::json!({ "targetId": tab.target_id }),
+                )
+                .await;
+        }
+    }
+    // Navigate last tab to about:blank to avoid killing the Chrome window
+    if let Some(last) = existing_tabs.last() {
+        let _ = crate::browser::navigate_to_blank(&session.cdp, &last.target_id).await;
+    }
+
+    // Step 2: open tabs from checkpoint
+    let mut tabs_restored = 0usize;
+    let mut opened: Vec<(String, String)> = Vec::new(); // (target_id, origin)
+
+    for tab in &ckpt.tabs {
+        if tab.url.is_empty() || tab.url == "about:blank" {
+            continue;
+        }
+        match crate::browser::new_tab(&session.cdp, &tab.url).await {
+            Ok(t) => {
+                tabs_restored += 1;
+                opened.push((t.target_id, tab.origin.clone()));
+            }
+            Err(e) => {
+                tracing::warn!(url = %tab.url, error = %e, "restore_session_checkpoint: failed to open tab");
+            }
+        }
+    }
+
+    // Step 3: restore auth state for each unique origin
+    let mut snapshots_restored = 0usize;
+    let mut seen_origins = std::collections::HashSet::new();
+    for (target_id, origin) in &opened {
+        if seen_origins.insert(origin.clone()) {
+            if let Ok(()) = crate::snapshot::restore_snapshot(session, target_id, origin, None, db).await {
+                snapshots_restored += 1;
+            }
+        }
+    }
+
+    Ok(serde_json::json!({
+        "ok": true,
+        "tabs_restored": tabs_restored,
+        "snapshots_restored": snapshots_restored,
+    }))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -2226,3 +2226,34 @@ fn test_cli_save_session_checkpoint_returns_checkpoint_id() {
 
     run_live(&["close-session", &session_id]);
 }
+
+#[test]
+#[cfg_attr(not(target_os = "macos"), ignore)]
+#[serial]
+fn test_cli_restore_session_checkpoint_roundtrip() {
+    let _daemon = start_test_daemon();
+
+    let profiles_out = run_live(&["list-profiles"]);
+    let profiles: serde_json::Value = serde_json::from_str(&stdout(&profiles_out)).unwrap();
+    let profile = profiles["data"][0]["name"].as_str().unwrap().to_string();
+
+    let open_out = run_live(&["open-session", &profile]);
+    let session_id = serde_json::from_str::<serde_json::Value>(&stdout(&open_out))
+        .unwrap()["session_id"].as_str().unwrap().to_string();
+
+    // Save a checkpoint
+    let save_out = run_live(&["save-session-checkpoint", &session_id, "--name", "Test checkpoint"]);
+    assert!(save_out.status.success(), "{}", stderr(&save_out));
+    let saved: serde_json::Value = serde_json::from_str(&stdout(&save_out)).unwrap();
+    assert_eq!(saved["ok"], true);
+    let ckpt_id = saved["checkpoint_id"].as_str().unwrap().to_string();
+
+    // Restore it
+    let restore_out = run_live(&["restore-session-checkpoint", &session_id, &ckpt_id]);
+    assert!(restore_out.status.success(), "{}", stderr(&restore_out));
+    let restored: serde_json::Value = serde_json::from_str(&stdout(&restore_out)).unwrap();
+    assert_eq!(restored["ok"], true);
+    assert!(restored["tabs_restored"].as_u64().is_some());
+
+    run_live(&["close-session", &session_id]);
+}

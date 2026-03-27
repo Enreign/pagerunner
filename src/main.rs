@@ -242,6 +242,12 @@ enum Commands {
         #[arg(long)]
         name: Option<String>,
     },
+    /// Restore a session from a saved checkpoint
+    #[command(name = "restore-session-checkpoint")]
+    RestoreSessionCheckpoint {
+        session_id: String,
+        checkpoint_id: String,
+    },
     /// Save tab URLs and titles for later restoration
     SaveTabState { session_id: String },
     /// Reopen tabs from the most recently saved tab state
@@ -1032,6 +1038,16 @@ async fn run() -> anyhow::Result<()> {
             crate::cli_tools::run_tool(
                 "save_session_checkpoint",
                 args,
+                crate::cli_tools::ScreenshotMode::File,
+                &config,
+            )
+            .await?;
+        }
+        Commands::RestoreSessionCheckpoint { session_id, checkpoint_id } => {
+            let config = config::PagerunnerConfig::load()?;
+            crate::cli_tools::run_tool(
+                "restore_session_checkpoint",
+                serde_json::json!({"session_id": session_id, "checkpoint_id": checkpoint_id}),
                 crate::cli_tools::ScreenshotMode::File,
                 &config,
             )

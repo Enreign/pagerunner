@@ -356,6 +356,18 @@ pub fn all_tools() -> Vec<Value> {
             }
         }),
         json!({
+            "name": "restore_session_checkpoint",
+            "description": "Restore a session to a saved checkpoint: closes current tabs, reopens saved tabs, and restores auth state.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "session_id": { "type": "string" },
+                    "checkpoint_id": { "type": "string" }
+                },
+                "required": ["session_id", "checkpoint_id"]
+            }
+        }),
+        json!({
             "name": "kv_set",
             "description": "Store a string value under a namespaced key in the encrypted local DB. Use for persisting agent state across MCP restarts.",
             "inputSchema": {
@@ -2515,6 +2527,19 @@ async fn dispatch_tool_inner(
             }).to_string())
         }
 
+        "restore_session_checkpoint" => {
+            let sid = args["session_id"]
+                .as_str()
+                .ok_or_else(|| PagerunnerError::Config("Missing session_id".into()))?;
+            let ckpt_id = args["checkpoint_id"]
+                .as_str()
+                .ok_or_else(|| PagerunnerError::Config("Missing checkpoint_id".into()))?;
+            let mut mgr = sessions.lock().await;
+            let session = mgr.get_live(sid)?;
+            let result = crate::checkpoint::restore_session_checkpoint(session, ckpt_id, &db).await?;
+            Ok(result.to_string())
+        }
+
         "kv_set" => {
             let ns = args["namespace"]
                 .as_str()
@@ -3084,6 +3109,7 @@ mod tests {
         assert!(tools.iter().any(|t| t["name"] == "click"));
         assert!(tools.iter().any(|t| t["name"] == "type_text"));
         assert!(tools.iter().any(|t| t["name"] == "save_session_checkpoint"));
+        assert!(tools.iter().any(|t| t["name"] == "restore_session_checkpoint"));
     }
 
     #[test]
