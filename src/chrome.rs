@@ -72,6 +72,13 @@ impl ChromeProcess {
             });
         }
 
+        // Remove stale Chrome singleton files left behind by a previous unclean exit
+        // (kill -9, crash). Chrome refuses to start if these exist.
+        for name in &["SingletonLock", "SingletonCookie", "SingletonSocket"] {
+            let path = std::path::Path::new(&user_data_dir).join(name);
+            let _ = std::fs::remove_file(&path);
+        }
+
         let child = cmd
             .spawn()
             .map_err(|e| PagerunnerError::Chrome(format!("Failed to spawn Chrome: {}", e)))?;
