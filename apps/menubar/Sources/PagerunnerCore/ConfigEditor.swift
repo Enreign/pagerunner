@@ -133,7 +133,10 @@ struct ConfigEditor {
                 // Preserve leading whitespace
                 let trimmed = line.trimmingCharacters(in: .whitespaces)
                 let leadingWhitespace = line.prefix(line.count - trimmed.count)
-                return "\(leadingWhitespace)display_name = \"\(newDisplayName)\""
+                let escaped = newDisplayName
+                    .replacingOccurrences(of: "\\", with: "\\\\")
+                    .replacingOccurrences(of: "\"", with: "\\\"")
+                return "\(leadingWhitespace)display_name = \"\(escaped)\""
             }
             return line
         }
