@@ -73,6 +73,18 @@ final class AppState {
         checkpoints[profile] ?? []
     }
 
+    // MARK: - Profile management (stubs — wired up in Task 7)
+
+    /// Rename a profile's display name. Implementation in Task 7.
+    func renameProfile(_ profile: Profile, newDisplayName: String) {
+        // TODO: Task 7 — call ConfigEditor + restart daemon
+    }
+
+    /// Remove a profile from config. Implementation in Task 7.
+    func removeProfile(_ profile: Profile) {
+        // TODO: Task 7 — call ConfigEditor + restart daemon
+    }
+
     /// Record a poll failure and update daemonStatus.
     func recordFailure() {
         consecutiveFailures += 1

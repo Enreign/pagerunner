@@ -5,6 +5,11 @@ import PagerunnerCore
 struct OverviewView: View {
     @Bindable var appState: AppState
 
+    // MARK: - Sheet state for Rename / Remove
+    @State private var profileToRename: Profile? = nil
+    @State private var profileToRemove: Profile? = nil
+    @State private var showRenameSheet = false
+
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             if !appState.personalProfiles.isEmpty {
@@ -31,7 +36,19 @@ struct OverviewView: View {
                 .padding(.bottom, 4)
 
                 ForEach(Array(appState.personalProfiles.enumerated()), id: \.element.id) { index, profile in
-                    ProfileRow(profile: profile, index: index, appState: appState)
+                    ProfileRowView(
+                        profile: profile,
+                        index: index,
+                        isActive: appState.daemonStatus == .running,
+                        onRename: {
+                            profileToRename = profile
+                            showRenameSheet = true
+                        },
+                        onRemove: {
+                            profileToRemove = profile
+                        },
+                        appState: appState
+                    )
                 }
             }
 
@@ -66,7 +83,19 @@ struct OverviewView: View {
                 .padding(.bottom, 4)
 
                 ForEach(Array(appState.agentProfiles.enumerated()), id: \.element.id) { index, profile in
-                    ProfileRow(profile: profile, index: index, appState: appState)
+                    ProfileRowView(
+                        profile: profile,
+                        index: index,
+                        isActive: appState.daemonStatus == .running,
+                        onRename: {
+                            profileToRename = profile
+                            showRenameSheet = true
+                        },
+                        onRemove: {
+                            profileToRemove = profile
+                        },
+                        appState: appState
+                    )
                 }
             }
 
@@ -78,100 +107,41 @@ struct OverviewView: View {
                     .padding(.top, 20)
             }
         }
-    }
-}
-
-struct ProfileRow: View {
-    let profile: Profile
-    let index: Int
-    @Bindable var appState: AppState
-    @State private var isHovered = false
-    private var sessions: [Session] { appState.sessionsFor(profile: profile.name) }
-    private var aliveSessions: [Session] { sessions.filter { $0.status == .alive } }
-
-    /// Parse "growthmate.io (stas@growthmate.io)" → name: "growthmate.io", email: "stas@growthmate.io"
-    private var profileName: String {
-        if let parenStart = profile.displayName.firstIndex(of: "(") {
-            return String(profile.displayName[..<parenStart]).trimmingCharacters(in: .whitespaces)
-        }
-        return profile.displayName
-    }
-    private var profileEmail: String? {
-        guard let parenStart = profile.displayName.firstIndex(of: "("),
-              let parenEnd = profile.displayName.lastIndex(of: ")") else { return nil }
-        let start = profile.displayName.index(after: parenStart)
-        return String(profile.displayName[start..<parenEnd])
-    }
-
-    var body: some View {
-        Button {
-            appState.navigation = .profile(profile.name)
-        } label: {
-            HStack(spacing: 9) {
-                // Profile icon with status dot
-                ProfileIcon(profile: profile, index: index, size: 32)
-                    .overlay(alignment: .bottomTrailing) {
-                        Circle()
-                            .fill(aliveSessions.isEmpty
-                                  ? Color(white: 0.33)
-                                  : Color(red: 0.133, green: 0.773, blue: 0.369))
-                            .frame(width: 7, height: 7)
-                            .overlay(Circle().stroke(Color(red: 228/255, green: 228/255, blue: 228/255), lineWidth: 1.5))
-                            .offset(x: 1, y: 1)
-                    }
-
-                // Name + email
-                VStack(alignment: .leading, spacing: 1) {
-                    Text(profileName)
-                        .font(.system(size: 12, weight: .medium))
-                        .foregroundColor(Color(red: 0.133, green: 0.133, blue: 0.133)) // #222
-                    if let email = profileEmail {
-                        Text(email)
-                            .font(.system(size: 11))
-                            .foregroundColor(Color(red: 0.533, green: 0.533, blue: 0.533)) // #888
-                            .lineLimit(1)
-                    }
-                }
-
-                Spacer()
-
-                // Right side: session count text badge + chevron (spec: ov-sessions + ov-chevron)
-                HStack(spacing: 6) {
-                    if !aliveSessions.isEmpty {
-                        Text("\(aliveSessions.count) window\(aliveSessions.count == 1 ? "" : "s")")
-                            .font(.system(size: 11))
-                            .foregroundColor(Color(red: 0.086, green: 0.396, blue: 0.204)) // #166534
-                            .padding(.horizontal, 7)
-                            .padding(.vertical, 1)
-                            .background(Color(red: 0.133, green: 0.773, blue: 0.369).opacity(0.12))
-                            .cornerRadius(10)
-                    } else {
-                        Text("idle")
-                            .font(.system(size: 11))
-                            .foregroundColor(Color(red: 0.33, green: 0.33, blue: 0.33)) // #555
-                            .padding(.horizontal, 7)
-                            .padding(.vertical, 1)
-                            .background(Color.black.opacity(0.08))
-                            .cornerRadius(10)
-                    }
-
-                    Text("›")
-                        .font(.system(size: 11))
-                        .foregroundColor(Color(white: 0.733)) // #bbb
+        // MARK: - Rename sheet
+        .sheet(isPresented: $showRenameSheet) {
+            if let profile = profileToRename {
+                RenameSheet(
+                    title: "Rename Profile",
+                    prompt: "Enter a new display name for \"\(profile.name)\".",
+                    isPresented: $showRenameSheet,
+                    initialValue: profile.displayName
+                ) { newName in
+                    appState.renameProfile(profile, newDisplayName: newName)
                 }
             }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 6)
-            .background(
-                RoundedRectangle(cornerRadius: 4)
-                    .fill(isHovered ? Color.black.opacity(0.04) : Color.clear)
-            )
-            .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
-        .onHover { isHovered = $0 }
+        // MARK: - Remove confirmation
+        .confirmationDialog(
+            "Remove \"\(profileToRemove?.name ?? "")\"?",
+            isPresented: Binding(
+                get: { profileToRemove != nil },
+                set: { if !$0 { profileToRemove = nil } }
+            ),
+            titleVisibility: .visible
+        ) {
+            Button("Remove", role: .destructive) {
+                if let profile = profileToRemove {
+                    appState.removeProfile(profile)
+                }
+                profileToRemove = nil
+            }
+            Button("Cancel", role: .cancel) {
+                profileToRemove = nil
+            }
+        } message: {
+            Text("This will remove the profile from pagerunner. The Chrome profile data will not be deleted.")
+        }
     }
-
 }
 
 /// Profile icon that shows Chrome profile picture if available, gradient fallback otherwise.
