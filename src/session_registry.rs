@@ -44,9 +44,9 @@ pub fn list_entries(db: &Db) -> Result<Vec<SessionRegistryEntry>> {
     let raw = db.scan_prefix("session_reg", "")?;
     let mut out = Vec::new();
     for (_, bytes) in raw {
-        if let Ok(entry) = serde_json::from_slice::<SessionRegistryEntry>(&bytes) {
-            out.push(entry);
-        }
+        let entry = serde_json::from_slice::<SessionRegistryEntry>(&bytes)
+            .map_err(|e| crate::error::PagerunnerError::Config(e.to_string()))?;
+        out.push(entry);
     }
     Ok(out)
 }
