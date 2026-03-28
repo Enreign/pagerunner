@@ -30,7 +30,7 @@ let package = Package(
         ),
         .testTarget(
             name: "PagerunnerCoreTests",
-            dependencies: ["PagerunnerCore"],
+            dependencies: ["PagerunnerCore", "PagerunnerBar"],
             path: "Tests/PagerunnerCoreTests"
         ),
     ],
