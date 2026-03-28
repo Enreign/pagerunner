@@ -11,11 +11,14 @@ extension URL {
 
 enum ConfigEditorError: Error, LocalizedError {
     case profileNotFound(String)
+    case invalidProfileName(String)
 
     var errorDescription: String? {
         switch self {
         case .profileNotFound(let name):
             return "Profile '\(name)' not found in config"
+        case .invalidProfileName(let reason):
+            return "Invalid profile name: \(reason)"
         }
     }
 }
@@ -62,13 +65,23 @@ struct ConfigEditor {
         port: Int,
         configURL: URL = .pagerunnerConfig
     ) throws {
+        guard !name.contains("\n") else {
+            throw ConfigEditorError.invalidProfileName("name must not contain newlines")
+        }
+        guard !displayName.contains("\n") else {
+            throw ConfigEditorError.invalidProfileName("display_name must not contain newlines")
+        }
+        let escapedName = name.replacingOccurrences(of: "\\", with: "\\\\")
+            .replacingOccurrences(of: "\"", with: "\\\"")
+        let escapedDisplayName = displayName.replacingOccurrences(of: "\\", with: "\\\\")
+            .replacingOccurrences(of: "\"", with: "\\\"")
         let existing = try readConfig(at: configURL)
         let newBlock = """
 
 
         [[profiles]]
-        name = "\(name)"
-        display_name = "\(displayName)"
+        name = "\(escapedName)"
+        display_name = "\(escapedDisplayName)"
         kind = "attached"
         debug_port = \(port)
         """
@@ -102,10 +115,12 @@ struct ConfigEditor {
     }
 
     /// Returns true if the block contains a line `name = "<name>"` (after whitespace trim).
+    /// A `display_name = ...` line that happens to contain `name = "..."` is NOT a match.
     static func blockMatchesName(_ block: String, name: String) -> Bool {
         let target = "name = \"\(name)\""
         return block.components(separatedBy: "\n").contains { line in
-            line.trimmingCharacters(in: .whitespaces) == target
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            return trimmed == target && !trimmed.hasPrefix("display_name =")
         }
     }
 
@@ -131,12 +146,17 @@ struct ConfigEditor {
 
     private static func writeConfig(_ content: String, to url: URL) throws {
         let tmpURL = URL(fileURLWithPath: url.path + ".tmp")
-        try content.write(to: tmpURL, atomically: false, encoding: .utf8)
+        try content.write(to: tmpURL, atomically: true, encoding: .utf8)
         // Atomically replace: remove destination first if it exists, then move
-        if FileManager.default.fileExists(atPath: url.path) {
-            _ = try FileManager.default.replaceItemAt(url, withItemAt: tmpURL)
-        } else {
-            try FileManager.default.moveItem(at: tmpURL, to: url)
+        do {
+            if FileManager.default.fileExists(atPath: url.path) {
+                _ = try FileManager.default.replaceItemAt(url, withItemAt: tmpURL)
+            } else {
+                try FileManager.default.moveItem(at: tmpURL, to: url)
+            }
+        } catch {
+            try? FileManager.default.removeItem(at: tmpURL)
+            throw error
         }
     }
 }

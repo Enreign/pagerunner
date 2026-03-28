@@ -12,12 +12,12 @@ struct ConfigEditorTests {
         [[profiles]]
         name = "work"
         display_name = "Work Chrome"
-        user_data_dir = "/Users/stas/Library/Application Support/Google/Chrome/Default"
+        user_data_dir = "/Users/testuser/Library/Application Support/Google/Chrome/Default"
 
         [[profiles]]
         name = "personal"
         display_name = "Personal Chrome"
-        user_data_dir = "/Users/stas/Library/Application Support/Google/Chrome/Profile 1"
+        user_data_dir = "/Users/testuser/Library/Application Support/Google/Chrome/Profile 1"
         """
 
     func writeTempConfig(_ content: String) throws -> URL {
@@ -81,7 +81,7 @@ struct ConfigEditorTests {
         let url = try writeTempConfig(sampleConfig)
         defer { try? FileManager.default.removeItem(at: url) }
 
-        #expect(throws: (any Error).self) {
+        #expect(throws: ConfigEditorError.self) {
             try ConfigEditor.renameProfile(name: "nonexistent", newDisplayName: "Whatever", configURL: url)
         }
     }
@@ -91,7 +91,7 @@ struct ConfigEditorTests {
         let url = try writeTempConfig(sampleConfig)
         defer { try? FileManager.default.removeItem(at: url) }
 
-        #expect(throws: (any Error).self) {
+        #expect(throws: ConfigEditorError.self) {
             try ConfigEditor.removeProfile(name: "nonexistent", configURL: url)
         }
     }
