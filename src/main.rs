@@ -18,7 +18,7 @@ mod init;
 mod ipc;
 mod mcp_server;
 mod network_guard;
-mod notification;
+pub mod notification;
 mod console_log;
 mod network_log;
 mod sanitizer;
