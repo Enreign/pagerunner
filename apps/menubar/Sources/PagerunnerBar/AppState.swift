@@ -90,8 +90,8 @@ final class AppState {
         kill.launchPath = "/usr/bin/pkill"
         kill.arguments = ["-f", "pagerunner daemon"]
         try? kill.run()
-        kill.waitUntilExit()
-        try? await Task.sleep(for: .milliseconds(300))
+        // Don't call waitUntilExit() on main actor — use a short sleep instead
+        try? await Task.sleep(for: .milliseconds(500))
         let proc = Process()
         proc.launchPath = binary
         proc.arguments = ["daemon"]
@@ -122,46 +122,33 @@ final class AppState {
 
     // MARK: - Profile management
 
-    func renameProfile(_ profile: Profile, newDisplayName: String) {
-        Task {
-            do {
-                try ConfigEditor.renameProfile(name: profile.name, newDisplayName: newDisplayName)
-                await restartDaemon()
-                await refreshProfiles()
-            } catch {
-                print("renameProfile error: \(error)")
-            }
-        }
+    func renameProfile(_ profile: Profile, newDisplayName: String) async throws {
+        try ConfigEditor.renameProfile(name: profile.name, newDisplayName: newDisplayName)
+        await restartDaemon()
+        await refreshProfiles()
     }
 
-    func removeProfile(_ profile: Profile) {
-        Task {
-            // 1. Close any active sessions for this profile
-            let sessionsToClose = sessions.filter { $0.profile == profile.name }
-            for session in sessionsToClose {
-                do {
-                    _ = try await daemonClient.call(tool: "close_session",
-                                                    args: ["session_id": session.id])
-                } catch {
-                    print("closeSession error (continuing): \(error)")
-                    // non-fatal: continue even if close fails
-                }
-            }
-
-            // 2. Remove from config
+    func removeProfile(_ profile: Profile) async throws {
+        // 1. Close any active sessions for this profile
+        let sessionsToClose = sessions.filter { $0.profile == profile.name }
+        for session in sessionsToClose {
             do {
-                try ConfigEditor.removeProfile(name: profile.name)
+                _ = try await daemonClient.call(tool: "close_session",
+                                                args: ["session_id": session.id])
             } catch {
-                print("removeProfile error: \(error)")
-                return
+                print("closeSession error (continuing): \(error)")
+                // non-fatal: continue even if close fails
             }
-
-            // 3. Restart daemon
-            await restartDaemon()
-
-            // 4. Refresh profiles
-            await refreshProfiles()
         }
+
+        // 2. Remove from config
+        try ConfigEditor.removeProfile(name: profile.name)
+
+        // 3. Restart daemon
+        await restartDaemon()
+
+        // 4. Refresh profiles
+        await refreshProfiles()
     }
 
     // MARK: - Discovery
@@ -169,7 +156,16 @@ final class AppState {
     func triggerDiscovery() {
         Task {
             let found = await discoveryService.probe()
-            discoveredInstances = found
+            // Preserve non-idle attach states for existing instances
+            discoveredInstances = found.map { instance in
+                if let existing = discoveredInstances.first(where: { $0.id == instance.id }),
+                   existing.attachState != .idle {
+                    var updated = instance
+                    updated.attachState = existing.attachState
+                    return updated
+                }
+                return instance
+            }
         }
     }
 

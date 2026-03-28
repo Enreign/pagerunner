@@ -114,7 +114,9 @@ struct OverviewView: View {
                     isPresented: $showRenameSheet,
                     initialValue: profile.displayName
                 ) { newName in
-                    appState.renameProfile(profile, newDisplayName: newName)
+                    Task {
+                        try? await appState.renameProfile(profile, newDisplayName: newName)
+                    }
                 }
             }
         }
@@ -129,7 +131,9 @@ struct OverviewView: View {
         ) {
             Button("Remove", role: .destructive) {
                 if let profile = profileToRemove {
-                    appState.removeProfile(profile)
+                    Task {
+                        try? await appState.removeProfile(profile)
+                    }
                 }
                 profileToRemove = nil
             }
