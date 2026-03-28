@@ -1,5 +1,6 @@
 import UserNotifications
 import Foundation
+import OSLog
 import PagerunnerCore
 
 @MainActor
@@ -159,9 +160,11 @@ final class NotificationService: NSObject, UNUserNotificationCenterDelegate {
 
     // MARK: - Helpers
 
-    private func schedule(_ content: UNMutableNotificationContent, id: String) {
+    private static let log = Logger(subsystem: "io.pagerunner.bar", category: "notifications")
+
+    private nonisolated func schedule(_ content: UNMutableNotificationContent, id: String) {
         let request = UNNotificationRequest(identifier: id, content: content, trigger: nil)
-        center.add(request)
+        UNUserNotificationCenter.current().add(request)
     }
 
     private func sound(for level: String) -> UNNotificationSound? {

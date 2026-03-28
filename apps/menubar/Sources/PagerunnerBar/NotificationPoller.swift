@@ -35,7 +35,6 @@ final class NotificationPoller {
             let profileName = obj["profile_name"]?.stringValue
             let sessionId = obj["session_id"]?.stringValue
 
-            // NOTIFY_TOOL rows always fire — no settings gate
             notificationService.notifyExplicit(
                 title: title,
                 body: body,
