@@ -453,9 +453,23 @@ impl SessionManager {
 
     pub fn list(&mut self) -> Vec<SessionInfo> {
         // Proactively update alive flag via OS process check (no CDP — never hangs).
+        // Abort background tasks for newly-detected crashed sessions so their
+        // event-loop awaits (events.recv()) are cancelled immediately.
         for session in self.sessions.values_mut() {
-            if session.alive && session.owns_process && !session.is_chrome_running() {
+            if !session.alive { continue; }
+            let crashed = if session.owns_process {
+                !session.is_chrome_running()
+            } else {
+                // Attached/secondary: detect via CDP reader task completing
+                // (reader exits when the WebSocket connection drops).
+                session._reader_task.is_finished()
+            };
+            if crashed {
                 session.alive = false;
+                session._reader_task.abort();
+                if let Some(ref h) = session._network_processor   { h.abort(); }
+                if let Some(ref h) = session._console_processor   { h.abort(); }
+                if let Some(ref h) = session._frame_nav_processor { h.abort(); }
             }
         }
         // Secondary sessions whose primary is dead also become dead.

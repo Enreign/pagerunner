@@ -163,21 +163,11 @@ final class NotificationService: NSObject, UNUserNotificationCenterDelegate {
     private static let log = Logger(subsystem: "io.pagerunner.bar", category: "notifications")
 
     private nonisolated func schedule(_ content: UNMutableNotificationContent, id: String) {
-        let center = UNUserNotificationCenter.current()
-        center.getNotificationSettings { settings in
-            let auth = settings.authorizationStatus.rawValue
-            let alert = settings.alertStyle.rawValue
-            let banner = settings.alertSetting.rawValue
-            let msg = "auth=\(auth) alertStyle=\(alert) alertSetting=\(banner) id=\(id)\n"
-            try? msg.write(toFile: "/tmp/pagerunner-notif.log", atomically: false, encoding: .utf8)
-        }
         let request = UNNotificationRequest(identifier: id, content: content, trigger: nil)
-        center.add(request) { error in
-            let msg: String
-            if let error { msg = "FAILED \(id): \(error)\n" } else { msg = "OK \(id)\n" }
-            if let data = msg.data(using: .utf8),
-               let fh = FileHandle(forWritingAtPath: "/tmp/pagerunner-notif.log") {
-                fh.seekToEndOfFile(); fh.write(data); fh.closeFile()
+        UNUserNotificationCenter.current().add(request) { error in
+            if let error {
+                Logger(subsystem: "io.pagerunner.bar", category: "notifications")
+                    .error("Failed to schedule notification \(id): \(error)")
             }
         }
     }

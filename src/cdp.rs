@@ -3,7 +3,7 @@ use futures_util::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Mutex;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::{broadcast, mpsc, oneshot};
@@ -40,6 +40,9 @@ struct CdpInner {
     event_tx: broadcast::Sender<Value>,
     next_id: AtomicU64,
     write_tx: mpsc::Sender<Vec<u8>>,
+    /// Set to true by the reader task when Chrome's connection closes.
+    /// send_on_session checks this to reject new requests immediately.
+    closed: AtomicBool,
 }
 
 /// Thread-safe, Clone-able handle to a Chrome CDP pipe connection.
@@ -61,6 +64,7 @@ impl CdpConn {
             event_tx,
             next_id: AtomicU64::new(1),
             write_tx,
+            closed: AtomicBool::new(false),
         });
 
         tokio::spawn(writer_task(write_fd, write_rx));
@@ -86,6 +90,7 @@ impl CdpConn {
             event_tx,
             next_id: AtomicU64::new(1),
             write_tx,
+            closed: AtomicBool::new(false),
         });
 
         tokio::spawn(ws_writer_task(ws_sink, write_rx));
@@ -105,6 +110,9 @@ impl CdpConn {
         params: Value,
         session_id: Option<String>,
     ) -> Result<Value> {
+        if self.inner.closed.load(Ordering::Acquire) {
+            return Err(PagerunnerError::Cdp("Chrome connection closed".into()));
+        }
         let id = self.inner.next_id.fetch_add(1, Ordering::SeqCst);
         let (tx, rx) = oneshot::channel();
         {
@@ -113,6 +121,11 @@ impl CdpConn {
                 .pending
                 .lock()
                 .map_err(|_| PagerunnerError::Cdp("Pending lock poisoned".into()))?;
+            // Re-check after acquiring the lock — reader may have closed between the
+            // first check and now.
+            if self.inner.closed.load(Ordering::Acquire) {
+                return Err(PagerunnerError::Cdp("Chrome connection closed".into()));
+            }
             pending.insert(id, tx);
         }
         let msg = CdpMessage {
@@ -152,7 +165,18 @@ async fn reader_task(read_fd: tokio::fs::File, inner: std::sync::Arc<CdpInner>) 
         loop {
             let mut byte = [0u8; 1];
             match reader.read_exact(&mut byte).await {
-                Err(_) => return,
+                Err(_) => {
+                    // Pipe closed — mark closed, then unblock all pending send() callers.
+                    inner.closed.store(true, Ordering::Release);
+                    if let Ok(mut pending) = inner.pending.lock() {
+                        for (_, tx) in pending.drain() {
+                            let _ = tx.send(Err(PagerunnerError::Cdp(
+                                "Chrome connection closed".into(),
+                            )));
+                        }
+                    }
+                    return;
+                }
                 Ok(_) => {}
             }
             if byte[0] == b'\0' {
@@ -226,6 +250,15 @@ async fn ws_reader_task(
             }
         } else {
             let _ = inner.event_tx.send(v);
+        }
+    }
+    // Chrome connection closed — mark closed first, then drain pending.
+    // The flag ensures any concurrent send_on_session call that races past
+    // the drain will also get an immediate error.
+    inner.closed.store(true, Ordering::Release);
+    if let Ok(mut pending) = inner.pending.lock() {
+        for (_, tx) in pending.drain() {
+            let _ = tx.send(Err(PagerunnerError::Cdp("Chrome connection closed".into())));
         }
     }
 }
