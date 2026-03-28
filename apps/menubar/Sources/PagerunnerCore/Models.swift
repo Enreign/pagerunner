@@ -104,7 +104,7 @@ public struct Checkpoint: Codable, Identifiable, Sendable {
 public enum AttachState: Equatable, Sendable {
     case idle
     case attaching
-    case attached
+    case attached(profileDisplayName: String)
     case failed(String)
 }
 

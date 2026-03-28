@@ -82,12 +82,12 @@ struct ModelsTests {
     func attachStateEquatable() {
         let idle = AttachState.idle
         let attaching = AttachState.attaching
-        let attached = AttachState.attached
+        let attached = AttachState.attached(profileDisplayName: "Test")
         let failed = AttachState.failed("err")
 
         #expect(idle == .idle)
         #expect(attaching == .attaching)
-        #expect(attached == .attached)
+        #expect(attached == .attached(profileDisplayName: "Test"))
         #expect(failed == .failed("err"))
 
         // Different cases are not equal
@@ -128,8 +128,8 @@ struct ModelsTests {
         instance.attachState = .attaching
         #expect(instance.attachState == .attaching)
 
-        instance.attachState = .attached
-        #expect(instance.attachState == .attached)
+        instance.attachState = .attached(profileDisplayName: "Test")
+        #expect(instance.attachState == .attached(profileDisplayName: "Test"))
 
         instance.attachState = .failed("connection refused")
         #expect(instance.attachState == .failed("connection refused"))

@@ -204,7 +204,8 @@ final class AppState {
                 await restartDaemon()
                 await refreshProfiles()
                 _ = try? await daemonClient.call(tool: "open_session", args: ["profile": profileName])
-                discoveredInstances[idx].attachState = .attached
+                let displayName = profiles.first(where: { $0.name == profileName })?.displayName ?? profileName
+                discoveredInstances[idx].attachState = .attached(profileDisplayName: displayName)
                 navigation = .profile(profileName)
             } catch {
                 discoveredInstances[idx].attachState = .failed(error.localizedDescription)
@@ -227,7 +228,7 @@ final class AppState {
                 await refreshProfiles()
                 _ = try? await daemonClient.call(tool: "open_session", args: ["profile": label])
 
-                discoveredInstances[idx].attachState = .attached
+                discoveredInstances[idx].attachState = .attached(profileDisplayName: displayName)
                 if instance.isVM {
                     remoteSessions.insert(label)
                 }

@@ -287,13 +287,29 @@ impl SessionManager {
                 format!("Bad response from Chrome at {}: {}", debug_url, e)
             ))?;
 
-        let ws_url = version["webSocketDebuggerUrl"]
+        let ws_url_raw = version["webSocketDebuggerUrl"]
             .as_str()
             .ok_or_else(|| crate::error::PagerunnerError::Config(
                 "No webSocketDebuggerUrl in Chrome /json/version response — \
                  is Chrome running with --remote-debugging-port?".into()
-            ))?
-            .to_string();
+            ))?;
+
+        // Chrome behind a proxy (VM, gvproxy) returns a webSocketDebuggerUrl
+        // with no port (e.g. `ws://localhost/devtools/browser/...`). Rewrite
+        // the authority to match the host:port we actually connected to.
+        let ws_url = if let Ok(parsed_debug) = url::Url::parse(debug_url) {
+            if let Ok(mut parsed_ws) = url::Url::parse(ws_url_raw) {
+                let host = parsed_debug.host_str().unwrap_or("localhost");
+                let port = parsed_debug.port();
+                let _ = parsed_ws.set_host(Some(host));
+                let _ = parsed_ws.set_port(port);
+                parsed_ws.to_string()
+            } else {
+                ws_url_raw.to_string()
+            }
+        } else {
+            ws_url_raw.to_string()
+        };
 
         let browser_label = version["Browser"]
             .as_str()

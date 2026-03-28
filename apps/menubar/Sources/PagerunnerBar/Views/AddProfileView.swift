@@ -478,10 +478,15 @@ private struct DebugPortInstanceRow: View {
                     .cornerRadius(4)
             case .attaching:
                 ProgressView().scaleEffect(0.6).frame(width: 16, height: 16)
-            case .attached:
-                Text("Attached")
-                    .font(.system(size: 11))
-                    .foregroundColor(Color(red: 0.533, green: 0.533, blue: 0.533))
+            case .attached(let profileDisplayName):
+                VStack(alignment: .trailing, spacing: 1) {
+                    Text("Attached")
+                        .font(.system(size: 11))
+                        .foregroundColor(Color(red: 0.533, green: 0.533, blue: 0.533))
+                    Text(profileDisplayName)
+                        .font(.system(size: 10))
+                        .foregroundColor(Color(red: 0.533, green: 0.533, blue: 0.533).opacity(0.8))
+                }
             case .failed(let msg):
                 Text(msg)
                     .font(.system(size: 10))
