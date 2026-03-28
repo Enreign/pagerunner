@@ -99,6 +99,31 @@ pub struct AnonymizationConfig {
     pub profiles: Vec<DomainAnonProfile>,
 }
 
+fn default_max_snapshot_versions() -> usize {
+    10
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct RetentionConfig {
+    /// Max snapshot versions to keep per (profile, origin). 0 = unlimited.
+    /// Old default was 3; new default is 10.
+    #[serde(default = "default_max_snapshot_versions")]
+    pub max_snapshot_versions: usize,
+    /// Days after which site knowledge entries expire. 0 = never.
+    /// Old default was 90; new default is 0 (indefinite).
+    #[serde(default)]
+    pub site_knowledge_ttl_days: u64,
+}
+
+impl Default for RetentionConfig {
+    fn default() -> Self {
+        Self {
+            max_snapshot_versions: default_max_snapshot_versions(),
+            site_knowledge_ttl_days: 0,
+        }
+    }
+}
+
 fn default_buffer_capacity() -> usize {
     500
 }
@@ -160,6 +185,8 @@ pub struct PagerunnerConfig {
     pub network: NetworkConfig,
     #[serde(default)]
     pub checkpoints: CheckpointConfig,
+    #[serde(default)]
+    pub retention: RetentionConfig,
 }
 
 impl PagerunnerConfig {
@@ -511,6 +538,25 @@ kind = "agent"
 "#;
         let cfg: PagerunnerConfig = toml::from_str(toml).unwrap();
         assert_eq!(cfg.profiles[0].kind.as_deref(), Some("agent"));
+    }
+
+    #[test]
+    fn test_retention_config_defaults() {
+        let config = PagerunnerConfig::default();
+        assert_eq!(config.retention.max_snapshot_versions, 10);
+        assert_eq!(config.retention.site_knowledge_ttl_days, 0); // 0 = indefinite
+    }
+
+    #[test]
+    fn test_retention_config_from_toml() {
+        let toml_str = r#"
+[retention]
+max_snapshot_versions = 5
+site_knowledge_ttl_days = 30
+"#;
+        let config: PagerunnerConfig = toml::from_str(toml_str).unwrap();
+        assert_eq!(config.retention.max_snapshot_versions, 5);
+        assert_eq!(config.retention.site_knowledge_ttl_days, 30);
     }
 
     #[test]

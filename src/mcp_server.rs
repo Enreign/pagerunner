@@ -669,6 +669,7 @@ async fn run_standalone() -> Result<()> {
         let sm_periodic = Arc::clone(&sessions);
         let db_periodic = Arc::clone(&db);
         let interval = config.checkpoints.interval_seconds;
+        let max_snapshot_versions_periodic = config.retention.max_snapshot_versions;
         tokio::spawn(async move {
             loop {
                 tokio::time::sleep(std::time::Duration::from_secs(interval)).await;
@@ -692,6 +693,7 @@ async fn run_standalone() -> Result<()> {
                             session,
                             Some("Autosave · periodic"),
                             &db_periodic,
+                            max_snapshot_versions_periodic,
                         ).await;
                     }
                     // Lock released at end of iteration — other tool calls can proceed between sessions
@@ -1892,6 +1894,7 @@ async fn dispatch_tool_inner(
                         session,
                         Some("Autosave · close"),
                         &db,
+                        config.retention.max_snapshot_versions,
                     ).await;
                 }
             } // ← ckpt_guard dropped here — lock fully released before next acquisition
@@ -2680,10 +2683,10 @@ async fn dispatch_tool_inner(
             let mut mgr = sessions.lock().await;
             let session = mgr.get_live(sid)?;
             if let Some(origin) = args["origin"].as_str() {
-                crate::snapshot::save_snapshot(session, tid, origin, &db).await?;
+                crate::snapshot::save_snapshot(session, tid, origin, &db, config.retention.max_snapshot_versions).await?;
                 Ok(serde_json::json!({"ok": true}).to_string())
             } else {
-                let origins = crate::snapshot::save_all_snapshots(session, tid, &db).await?;
+                let origins = crate::snapshot::save_all_snapshots(session, tid, &db, config.retention.max_snapshot_versions).await?;
                 Ok(serde_json::json!({"ok": true, "origins": origins}).to_string())
             }
         }
@@ -2751,7 +2754,7 @@ async fn dispatch_tool_inner(
             let name = args["name"].as_str();
             let mut mgr = sessions.lock().await;
             let session = mgr.get_live(sid)?;
-            let ckpt = crate::checkpoint::save_session_checkpoint(session, name, &db).await?;
+            let ckpt = crate::checkpoint::save_session_checkpoint(session, name, &db, config.retention.max_snapshot_versions).await?;
             Ok(serde_json::json!({
                 "ok": true,
                 "checkpoint_id": ckpt.checkpoint_id,
@@ -3021,7 +3024,7 @@ async fn dispatch_tool_inner(
                 None => Ok(serde_json::to_string(&serde_json::Value::Null)?),
                 Some(mut entry) => {
                     // Lazy TTL: if entry is expired, delete and return null
-                    if crate::site_knowledge::SiteKnowledgeStore::is_expired(&entry, now) {
+                    if crate::site_knowledge::SiteKnowledgeStore::is_expired(&entry, now, config.retention.site_knowledge_ttl_days) {
                         let _ = site_store.delete(origin);
                         return Ok(serde_json::to_string(&serde_json::Value::Null)?);
                     }

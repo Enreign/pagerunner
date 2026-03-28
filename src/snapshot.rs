@@ -31,6 +31,7 @@ pub async fn save_snapshot(
     target_id: &str,
     origin: &str,
     db: &Db,
+    max_versions: usize,
 ) -> Result<()> {
     let session_id = attach_to_target(session, target_id).await?;
 
@@ -78,8 +79,7 @@ pub async fn save_snapshot(
     let bytes = serde_json::to_vec(&snap).map_err(|e| PagerunnerError::Config(e.to_string()))?;
     db.put("snapshots", &key, &bytes)?;
 
-    // Prune: keep only the 3 most recent versions
-    prune_snapshots(db, &session.profile_name, origin, 3)
+    prune_snapshots(db, &session.profile_name, origin, max_versions)
 }
 
 /// Capture cookies for all domains in the current browser session and save
@@ -88,6 +88,7 @@ pub async fn save_all_snapshots(
     session: &mut Session,
     target_id: &str,
     db: &Db,
+    max_versions: usize,
 ) -> Result<Vec<String>> {
     let session_id = attach_to_target(session, target_id).await?;
 
@@ -146,7 +147,7 @@ pub async fn save_all_snapshots(
         let bytes =
             serde_json::to_vec(&snap).map_err(|e| PagerunnerError::Config(e.to_string()))?;
         db.put("snapshots", &key, &bytes)?;
-        prune_snapshots(db, &session.profile_name, &origin, 3)?;
+        prune_snapshots(db, &session.profile_name, &origin, max_versions)?;
         saved_origins.push(origin);
     }
     saved_origins.sort();
@@ -280,14 +281,18 @@ pub(crate) fn count_restorable(tabs: &[SavedTab]) -> usize {
         .count()
 }
 
-/// Delete all but the `keep` most recent versioned snapshots for a profile+origin.
-fn prune_snapshots(db: &Db, profile: &str, origin: &str, keep: usize) -> Result<()> {
+/// Delete all but the `max_versions` most recent versioned snapshots for a profile+origin.
+/// If `max_versions` is 0, no pruning is performed (unlimited retention).
+fn prune_snapshots(db: &Db, profile: &str, origin: &str, max_versions: usize) -> Result<()> {
+    if max_versions == 0 {
+        return Ok(());
+    }
     let prefix = format!("{}/", snapshot_key_prefix(profile, origin));
     let mut entries = db.scan_prefix("snapshots", &prefix)?;
-    // Keys end in "/TIMESTAMP" — sort ascending, delete all but last `keep`
+    // Keys end in "/TIMESTAMP" — sort ascending, delete all but last `max_versions`
     entries.sort_by_key(|(k, _)| k.clone());
-    if entries.len() > keep {
-        for (key, _) in &entries[..entries.len() - keep] {
+    if entries.len() > max_versions {
+        for (key, _) in &entries[..entries.len() - max_versions] {
             db.delete("snapshots", key)?;
         }
     }

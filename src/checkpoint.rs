@@ -105,6 +105,7 @@ pub async fn save_session_checkpoint(
     session: &mut crate::session::Session,
     name: Option<&str>,
     db: &crate::db::Db,
+    max_snapshot_versions: usize,
 ) -> Result<SessionCheckpoint> {
     // Step 1: get current tabs
     let tabs = crate::browser::list_tabs(&session.cdp).await?;
@@ -129,7 +130,7 @@ pub async fn save_session_checkpoint(
 
     // Step 4: save snapshot for each unique origin (best-effort)
     for (origin, target_id) in &seen_origins {
-        if let Err(e) = crate::snapshot::save_snapshot(session, target_id, origin, db).await {
+        if let Err(e) = crate::snapshot::save_snapshot(session, target_id, origin, db, max_snapshot_versions).await {
             tracing::warn!(origin = %origin, error = %e, "save_session_checkpoint: snapshot failed");
         }
     }
