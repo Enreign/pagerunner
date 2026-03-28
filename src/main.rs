@@ -27,6 +27,7 @@ mod endpoint_mapper;
 mod schema_inference;
 mod site_knowledge;
 mod session;
+pub mod session_registry;
 mod snapshot;
 mod stealth;
 
