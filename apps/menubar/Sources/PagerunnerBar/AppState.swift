@@ -98,6 +98,11 @@ final class AppState {
         proc.arguments = ["daemon"]
         try? proc.run()
         transition = .restarting
+        // Wait for daemon to be ready (up to 5s, 500ms intervals)
+        for _ in 0..<10 {
+            try? await Task.sleep(for: .milliseconds(500))
+            if (try? await daemonClient.call(tool: "list_profiles")) != nil { break }
+        }
     }
 
     // MARK: - Profile refresh
@@ -176,13 +181,30 @@ final class AppState {
         }
     }
 
-    func attachDiscovered(_ instance: DiscoveredInstance) {
+    /// Merge a discovered port into an existing profile (adds debug_port to its config entry).
+    func mergeDiscovered(_ instance: DiscoveredInstance, intoProfile profileName: String) {
+        Task {
+            guard let idx = discoveredInstances.firstIndex(where: { $0.id == instance.id }) else { return }
+            discoveredInstances[idx].attachState = .attaching
+            do {
+                try ConfigEditor.addDebugPortToProfile(name: profileName, port: instance.port)
+                await restartDaemon()
+                await refreshProfiles()
+                _ = try? await daemonClient.call(tool: "open_session", args: ["profile": profileName])
+                discoveredInstances[idx].attachState = .attached
+                navigation = .profile(profileName)
+            } catch {
+                discoveredInstances[idx].attachState = .failed(error.localizedDescription)
+            }
+        }
+    }
+
+    func attachDiscovered(_ instance: DiscoveredInstance, displayName: String) {
         Task {
             guard let idx = discoveredInstances.firstIndex(where: { $0.id == instance.id }) else { return }
             discoveredInstances[idx].attachState = .attaching
 
             let label = "chrome-\(instance.port)"
-            let displayName = instance.isVM ? "Chrome :\(instance.port) (VM)" : "Chrome :\(instance.port)"
             do {
                 // Save profile to config so it appears permanently in Overview
                 try ConfigEditor.addAttachedProfile(name: label, displayName: displayName, port: instance.port)
@@ -190,6 +212,7 @@ final class AppState {
                 // Restart daemon to pick up the new profile entry
                 await restartDaemon()
                 await refreshProfiles()
+                _ = try? await daemonClient.call(tool: "open_session", args: ["profile": label])
 
                 discoveredInstances[idx].attachState = .attached
                 if instance.isVM {
@@ -222,8 +245,8 @@ final class AppState {
     func recordSuccess() {
         consecutiveFailures = 0
         lastSuccessAt = Date()
-        if transition == .starting {
-            // Start confirmed — daemon is alive
+        if transition == .starting || transition == .restarting {
+            // Start/restart confirmed — daemon is alive
             daemonStatus = .running
             transition = .none
         } else if transition == .none {

@@ -88,6 +88,23 @@ public struct ConfigEditor {
         try writeConfig(existing + newBlock, to: configURL)
     }
 
+    /// Adds `debug_port = <port>` to an existing profile block identified by `name`.
+    /// Replaces an existing `debug_port` line if one is already present.
+    public static func addDebugPortToProfile(
+        name: String,
+        port: Int,
+        configURL: URL = .pagerunnerConfig
+    ) throws {
+        var blocks = try splitBlocks(readConfig(at: configURL))
+
+        guard let idx = blocks.firstIndex(where: { blockMatchesName($0, name: name) }) else {
+            throw ConfigEditorError.profileNotFound(name)
+        }
+
+        blocks[idx] = setDebugPort(in: blocks[idx], port: port)
+        try writeConfig(blocks.joined(), to: configURL)
+    }
+
     // MARK: Internal helpers
 
     /// Splits the TOML content into blocks.
@@ -141,6 +158,19 @@ public struct ConfigEditor {
             return line
         }
         return updated.joined(separator: "\n")
+    }
+
+    private static func setDebugPort(in block: String, port: Int) -> String {
+        var lines = block.components(separatedBy: "\n")
+        let portLine = "debug_port = \(port)"
+        if let idx = lines.firstIndex(where: { $0.trimmingCharacters(in: .whitespaces).hasPrefix("debug_port =") }) {
+            lines[idx] = portLine
+        } else {
+            // Insert before trailing empty lines
+            let insertAt = lines.lastIndex(where: { !$0.trimmingCharacters(in: .whitespaces).isEmpty }).map { $0 + 1 } ?? lines.count
+            lines.insert(portLine, at: insertAt)
+        }
+        return lines.joined(separator: "\n")
     }
 
     private static func readConfig(at url: URL) throws -> String {

@@ -37,6 +37,7 @@ struct AddProfileView: View {
     @State private var agentName = ""
     @State private var isAdding = false
     @State private var errorMessage: String? = nil
+    @State private var instanceToAttach: DiscoveredInstance? = nil
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -59,6 +60,22 @@ struct AddProfileView: View {
         .task {
             await loadDiscovered()
             appState.triggerDiscovery()
+        }
+        .sheet(item: $instanceToAttach) { instance in
+            AttachSheet(
+                instance: instance,
+                existingProfiles: appState.profiles,
+                isPresented: Binding(
+                    get: { instanceToAttach != nil },
+                    set: { if !$0 { instanceToAttach = nil } }
+                ),
+                onAttachNew: { displayName in
+                    appState.attachDiscovered(instance, displayName: displayName)
+                },
+                onMergeInto: { profile in
+                    appState.mergeDiscovered(instance, intoProfile: profile.name)
+                }
+            )
         }
     }
 
@@ -134,7 +151,7 @@ struct AddProfileView: View {
                 sectionHeader("VM / Container Chrome")
                 ForEach(vmInstances) { instance in
                     DebugPortInstanceRow(instance: instance) {
-                        appState.attachDiscovered(instance)
+                        instanceToAttach = instance
                     }
                 }
             }
@@ -143,7 +160,7 @@ struct AddProfileView: View {
                 sectionHeader("Running Chrome")
                 ForEach(localInstances) { instance in
                     DebugPortInstanceRow(instance: instance) {
-                        appState.attachDiscovered(instance)
+                        instanceToAttach = instance
                     }
                 }
             }

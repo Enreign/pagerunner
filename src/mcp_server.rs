@@ -1697,10 +1697,10 @@ async fn dispatch_tool_inner(
                 }
             }
 
-            // Route attached profiles through attach_session logic
-            if profile.kind.as_deref() == Some("attached") {
-                let port = profile.debug_port
-                    .ok_or_else(|| PagerunnerError::Config("Attached profile missing debug_port".into()))?;
+            // Route profiles with a debug_port through attach_session logic.
+            // This covers both kind="attached" (new profile) and any existing profile
+            // where a debug_port was merged in (kind may be "personal", "agent", etc.).
+            if let Some(port) = profile.debug_port {
                 let debug_url = format!("http://localhost:{}", port);
                 let profile_label = Some(profile.display_name.clone());
 
