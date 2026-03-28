@@ -64,13 +64,13 @@ final class NotificationService: NSObject, UNUserNotificationCenterDelegate {
         schedule(content, id: "ckpt-saved-\(UUID().uuidString)")
     }
 
-    func notifyAgentIdle(profileName: String, idleMinutes: Int) {
+    func notifyAgentIdle(profileName: String, idleMinutes: Int, sessionId: String) {
         let content = UNMutableNotificationContent()
         content.title = "Agent \(profileName) idle \(idleMinutes)min"
         content.body = "No tab activity detected."
         content.sound = .default
         content.categoryIdentifier = "AGENT_IDLE"
-        content.userInfo = userInfo(profileName: profileName, sessionId: nil)
+        content.userInfo = userInfo(profileName: profileName, sessionId: sessionId)
         schedule(content, id: "agent-idle-\(profileName)")
     }
 

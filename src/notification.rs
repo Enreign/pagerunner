@@ -48,6 +48,9 @@ pub fn push_notification(
     db.put("notif", &id, &bytes)
 }
 
+/// Scan all undelivered notifications, re-write each as delivered, return the rows.
+/// Note: not strictly atomic (scan then individual puts). This is safe because only
+/// one NotificationPoller ever calls this, on a 2-second timer — no concurrent drains.
 pub fn drain_notifications(db: &Db) -> Result<Vec<Notification>> {
     let rows = db.scan_prefix("notif", "")?;
     let mut result = Vec::new();

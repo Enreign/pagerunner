@@ -156,7 +156,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                         if minutesIdle >= Double(threshold) {
                             notificationService.notifyAgentIdle(
                                 profileName: profile.displayName,
-                                idleMinutes: threshold
+                                idleMinutes: threshold,
+                                sessionId: session.id
                             )
                             idleNotifiedSessions.insert(session.id)
                         }
