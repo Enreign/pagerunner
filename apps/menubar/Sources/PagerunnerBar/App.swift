@@ -19,6 +19,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var pollingService: PollingService!
     private var notificationService: NotificationService!
     private var notificationPoller: NotificationPoller!
+    // Idle detection: tracks last tab-count-change time per session
+    private var sessionIdleTracker: [String: (tabCount: Int, stableFrom: Date)] = [:]
+    private var idleNotifiedSessions: Set<String> = []
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         // Keepalive window: 1×1 NSWindow, orderOut immediately.
@@ -132,6 +135,41 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     appState.tabs[session.id] = []
                 }
             }
+
+            // Idle detection for agent sessions
+            let now = Date()
+            for session in appState.sessions where session.status == .alive {
+                guard let profile = appState.profiles.first(where: { $0.name == session.profile }),
+                      profile.kind == "agent" else { continue }
+                guard NotificationSettings.notifyOnIdle(profile: session.profile) else { continue }
+
+                let currentTabCount = appState.tabs[session.id]?.count ?? 0
+                let threshold = NotificationSettings.idleThresholdMinutes(profile: session.profile)
+
+                if let tracker = sessionIdleTracker[session.id] {
+                    if tracker.tabCount != currentTabCount {
+                        // Tab count changed — reset timer, clear idle notification flag
+                        sessionIdleTracker[session.id] = (tabCount: currentTabCount, stableFrom: now)
+                        idleNotifiedSessions.remove(session.id)
+                    } else if !idleNotifiedSessions.contains(session.id) {
+                        let minutesIdle = now.timeIntervalSince(tracker.stableFrom) / 60
+                        if minutesIdle >= Double(threshold) {
+                            notificationService.notifyAgentIdle(
+                                profileName: profile.displayName,
+                                idleMinutes: threshold
+                            )
+                            idleNotifiedSessions.insert(session.id)
+                        }
+                    }
+                } else {
+                    sessionIdleTracker[session.id] = (tabCount: currentTabCount, stableFrom: now)
+                }
+            }
+
+            // Clean up tracker entries for sessions that no longer exist
+            let activeIds = Set(appState.sessions.map { $0.id })
+            sessionIdleTracker = sessionIdleTracker.filter { activeIds.contains($0.key) }
+            idleNotifiedSessions = idleNotifiedSessions.filter { activeIds.contains($0) }
 
             // 3. list_session_checkpoints for each unique profile
             let uniqueProfiles = Set(sessions.map { $0.profile })
