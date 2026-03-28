@@ -89,6 +89,27 @@ pub fn all_tools() -> Vec<Value> {
             }
         }),
         json!({
+            "name": "attach_session",
+            "description": "Attach to an already-running Chrome instance started with --remote-debugging-port. Returns a session_id that can be used with all other tools. Use close_session to detach without killing Chrome.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "debug_port": {
+                        "type": "integer",
+                        "description": "The --remote-debugging-port Chrome was launched with (e.g. 9222)"
+                    },
+                    "debug_url": {
+                        "type": "string",
+                        "description": "Full base URL if Chrome is on a non-localhost host (e.g. http://localhost:9222)"
+                    },
+                    "profile": {
+                        "type": "string",
+                        "description": "Optional label for this session (used in list_sessions display_name)"
+                    }
+                }
+            }
+        }),
+        json!({
             "name": "list_sessions",
             "description": "List active Chrome sessions",
             "inputSchema": { "type": "object", "properties": {} }
@@ -1126,6 +1147,7 @@ pub(crate) fn list_profiles_response(config: &PagerunnerConfig) -> String {
                 "name": p.name,
                 "display_name": p.display_name,
                 "kind": p.kind.as_deref().unwrap_or("personal"),
+                "user_data_dir": p.user_data_dir,
             })
         })
         .collect();
@@ -1706,6 +1728,26 @@ async fn dispatch_tool_inner(
             Ok(serde_json::json!({"ok": true, "session_id": id, "stealth": stealth_val}).to_string())
         }
 
+        "attach_session" => {
+            let debug_url = if let Some(port) = args["debug_port"].as_u64() {
+                format!("http://localhost:{}", port)
+            } else if let Some(url) = args["debug_url"].as_str() {
+                url.to_string()
+            } else {
+                return Err(crate::error::PagerunnerError::Config(
+                    "attach_session requires either debug_port (integer) or debug_url (string)".into()
+                ));
+            };
+            let profile_label = args["profile"].as_str().map(|s| s.to_string());
+
+            let mut mgr = sessions.lock().await;
+            let id = mgr
+                .attach(&debug_url, profile_label, Arc::clone(&db), &config.network, Some(Arc::clone(&site_store)))
+                .await?;
+
+            Ok(serde_json::json!({"ok": true, "session_id": id, "attached_to": debug_url}).to_string())
+        }
+
         "close_session" => {
             let id = args["session_id"].as_str().ok_or_else(|| {
                 crate::error::PagerunnerError::Config("Missing session_id".into())
@@ -1755,7 +1797,18 @@ async fn dispatch_tool_inner(
             })?;
             let mut mgr = sessions.lock().await;
             let session = mgr.get_live(id)?;
-            let tabs = browser::list_tabs(&mut session.cdp).await?;
+            let all_tabs = browser::list_tabs(&mut session.cdp).await?;
+            let owned = session.owned_targets.clone();
+            // Primary sessions own the Chrome process — show all tabs.
+            // Secondary sessions share a Chrome process, so filter to tabs opened by this session.
+            // Also fall back to all tabs if owned_targets is stale (e.g. Chrome restored a
+            // previous session and replaced the initial blank tab with new target IDs).
+            let tabs: Vec<_> = if session.owns_process || owned.is_empty() {
+                all_tabs
+            } else {
+                let filtered: Vec<_> = all_tabs.iter().filter(|t| owned.contains(&t.target_id)).cloned().collect();
+                if filtered.is_empty() { all_tabs } else { filtered }
+            };
             let has_policy = session
                 .security_policy
                 .as_ref()
@@ -1831,7 +1884,9 @@ async fn dispatch_tool_inner(
                 }
             }
 
-            let tab = browser::new_tab(&session.cdp, url).await?;
+            let cdp = session.cdp.clone();
+            let tab = browser::new_tab(&cdp, url).await?;
+            session.owned_targets.insert(tab.target_id.clone());
             Ok(serde_json::json!({
                 "ok": true,
                 "target_id": tab.target_id,
@@ -1849,7 +1904,25 @@ async fn dispatch_tool_inner(
                 .ok_or_else(|| PagerunnerError::Config("Missing target_id".into()))?;
             let mut mgr = sessions.lock().await;
             let session = mgr.get_live(sid)?;
-            browser::close_tab(&session.cdp, target_id).await?;
+            let cdp = session.cdp.clone();
+            let target_id_owned = target_id.to_string();
+            browser::close_tab(&cdp, target_id).await?;
+            session.owned_targets.remove(&target_id_owned);
+            Ok(serde_json::json!({"ok": true, "target_id": target_id}).to_string())
+        }
+
+        "activate_tab" => {
+            let sid = args["session_id"]
+                .as_str()
+                .ok_or_else(|| PagerunnerError::Config("Missing session_id".into()))?;
+            let target_id = args["target_id"]
+                .as_str()
+                .ok_or_else(|| PagerunnerError::Config("Missing target_id".into()))?;
+            let mut mgr = sessions.lock().await;
+            let session = mgr.get_live(sid)?;
+            let cdp = session.cdp.clone();
+            drop(mgr);
+            cdp.send("Target.activateTarget", serde_json::json!({ "targetId": target_id })).await?;
             Ok(serde_json::json!({"ok": true, "target_id": target_id}).to_string())
         }
 

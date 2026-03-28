@@ -235,6 +235,24 @@ fn test_list_sessions_returns_json() {
     assert!(!s.is_empty(), "expected some output from list-sessions");
 }
 
+/// attach_session with no port/url prints an error and exits non-zero
+#[test]
+#[serial]
+fn test_attach_session_missing_args_exits_nonzero() {
+    let out = run(&["attach-session"]);
+    assert!(!out.status.success(), "expected non-zero exit when no port/url given");
+}
+
+/// attach_session with an unreachable port returns an error (no Chrome running there)
+#[test]
+#[serial]
+fn test_attach_session_unreachable_port_exits_nonzero() {
+    // Port 19999 is extremely unlikely to have Chrome
+    let out = run(&["attach-session", "--debug-port", "19999"]);
+    assert!(!out.status.success(), "expected non-zero exit for unreachable port");
+    assert!(!stderr(&out).is_empty(), "expected error on stderr");
+}
+
 /// list_sessions output includes a "status" field for each session
 #[test]
 #[serial]
@@ -245,13 +263,15 @@ fn test_list_sessions_has_status_field() {
     assert!(out.status.success(), "stderr: {}", stderr(&out));
     let s = stdout(&out);
     let v: serde_json::Value = serde_json::from_str(s.trim()).expect("must be JSON");
-    // Response is either a raw JSON array or wrapped in {"result": [...], "_metadata": {...}}
+    // Response is wrapped: {"result": {"data": [...], "ok": true}, "_metadata": {...}}
     let arr = if v.is_array() {
         v.as_array().unwrap().clone()
+    } else if v["result"].is_array() {
+        v["result"].as_array().unwrap().clone()
     } else {
-        v["result"]
+        v["result"]["data"]
             .as_array()
-            .expect("expected array at 'result' key")
+            .expect("expected array at result.data")
             .clone()
     };
     // If the array has entries, each must have a "status" field
@@ -2280,4 +2300,245 @@ fn test_cli_delete_session_checkpoint_not_found() {
         "--checkpoint-id", "nonexistent-uuid",
     ]);
     assert!(!output.status.success(), "should fail for missing checkpoint");
+}
+
+// ─────────────────────────────────────────────────────────────
+// attach_session — connect to user-launched Chrome
+// ─────────────────────────────────────────────────────────────
+
+const ATTACH_DEBUG_PORT: u16 = 19222;
+
+/// Start a Chrome process with --remote-debugging-port and return a guard that
+/// kills it on drop. Uses a temp profile dir so it never conflicts with the
+/// user's Chrome. Blocks until the DevTools HTTP endpoint is ready.
+fn start_chrome_with_debug_port(port: u16) -> (std::process::Child, tempfile::TempDir) {
+    let profile_dir = tempfile::tempdir().expect("tempdir");
+    let child = std::process::Command::new(
+        "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+    )
+    .args(&[
+        &format!("--remote-debugging-port={}", port),
+        "--no-first-run",
+        "--no-default-browser-check",
+        "--disable-sync",
+        "--disable-extensions",
+        "--remote-allow-origins=*",
+        &format!("--user-data-dir={}", profile_dir.path().display()),
+        "about:blank",
+    ])
+    .stdout(std::process::Stdio::null())
+    .stderr(std::process::Stdio::null())
+    .spawn()
+    .expect("failed to start Chrome — is it installed at /Applications/Google Chrome.app?");
+
+    // Poll the DevTools HTTP endpoint until Chrome is ready (up to 6s)
+    let version_url = format!("http://localhost:{}/json/version", port);
+    let mut ready = false;
+    for _ in 0..60 {
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        if reqwest::blocking::get(&version_url)
+            .map(|r| r.status().is_success())
+            .unwrap_or(false)
+        {
+            ready = true;
+            break;
+        }
+    }
+    assert!(ready, "Chrome did not start remote-debugging at port {} in time", port);
+
+    (child, profile_dir)
+}
+
+#[test]
+#[ignore] // requires Chrome running with --remote-debugging-port=19222
+#[cfg_attr(not(target_os = "macos"), ignore)]
+#[serial]
+fn test_attach_session_connects_and_lists_tabs() {
+    let _daemon = start_test_daemon();
+    let (mut chrome, _profile_dir) = start_chrome_with_debug_port(ATTACH_DEBUG_PORT);
+
+    // Attach
+    let attach_out = run_live(&[
+        "attach-session",
+        "--debug-port",
+        &ATTACH_DEBUG_PORT.to_string(),
+        "--profile",
+        "test-attached",
+    ]);
+    assert!(
+        attach_out.status.success(),
+        "attach-session failed: {}",
+        stderr(&attach_out)
+    );
+    let v: serde_json::Value = serde_json::from_str(&stdout(&attach_out)).unwrap();
+    assert_eq!(v["ok"], true, "response: {}", stdout(&attach_out));
+    let session_id = v["session_id"].as_str().expect("session_id missing").to_string();
+    assert!(
+        v["attached_to"].as_str().unwrap_or("").contains(&ATTACH_DEBUG_PORT.to_string()),
+        "attached_to should include port: {}",
+        stdout(&attach_out)
+    );
+
+    // list-sessions: attached session should appear with the given label
+    let sessions_out = run_live(&["list-sessions"]);
+    assert!(sessions_out.status.success());
+    let sessions: serde_json::Value = serde_json::from_str(&stdout(&sessions_out)).unwrap();
+    let list = sessions["result"]["data"].as_array().expect("data array");
+    let found = list
+        .iter()
+        .any(|s| s["id"].as_str() == Some(&session_id));
+    assert!(found, "attached session not in list-sessions: {}", stdout(&sessions_out));
+
+    // list-tabs: should return at least one tab (the about:blank Chrome opened)
+    let tabs_out = run_live(&["list-tabs", &session_id]);
+    assert!(
+        tabs_out.status.success(),
+        "list-tabs failed: {}",
+        stderr(&tabs_out)
+    );
+    let tabs_v: serde_json::Value = serde_json::from_str(&stdout(&tabs_out)).unwrap();
+    let tabs = tabs_v["data"].as_array().expect("tabs data array");
+    assert!(!tabs.is_empty(), "expected at least one tab from attached Chrome");
+
+    // Navigate in the attached tab
+    let target_id = tabs[0]["target_id"].as_str().expect("target_id").to_string();
+    let nav_out = run_live(&["navigate", &session_id, &target_id, "https://example.com"]);
+    assert!(
+        nav_out.status.success(),
+        "navigate failed: {}",
+        stderr(&nav_out)
+    );
+
+    // Detach via close-session
+    let close_out = run_live(&["close-session", &session_id]);
+    assert!(
+        close_out.status.success(),
+        "close-session (detach) failed: {}",
+        stderr(&close_out)
+    );
+
+    // Chrome should still be reachable at the debug port after detach
+    let still_alive = reqwest::blocking::get(&format!(
+        "http://localhost:{}/json/version",
+        ATTACH_DEBUG_PORT
+    ))
+    .map(|r| r.status().is_success())
+    .unwrap_or(false);
+    assert!(
+        still_alive,
+        "Chrome should still be running after detaching pagerunner"
+    );
+
+    chrome.kill().ok();
+    chrome.wait().ok();
+}
+
+#[test]
+#[ignore] // requires Chrome running with --remote-debugging-port=19222
+#[cfg_attr(not(target_os = "macos"), ignore)]
+#[serial]
+fn test_attach_session_navigate_and_get_content() {
+    // Verifies that all the normal browsing tools work on an attached session.
+    let _daemon = start_test_daemon();
+    let (mut chrome, _profile_dir) = start_chrome_with_debug_port(ATTACH_DEBUG_PORT);
+
+    let attach_out = run_live(&["attach-session", "--debug-port", &ATTACH_DEBUG_PORT.to_string()]);
+    assert!(attach_out.status.success(), "{}", stderr(&attach_out));
+    let session_id = parse_json_field(&stdout(&attach_out), "session_id");
+
+    let tabs_out = run_live(&["list-tabs", &session_id]);
+    let tabs_v: serde_json::Value = serde_json::from_str(&stdout(&tabs_out)).unwrap();
+    let target_id = tabs_v["data"][0]["target_id"].as_str().expect("target_id").to_string();
+
+    let nav = run_live(&["navigate", &session_id, &target_id, "https://example.com"]);
+    assert!(nav.status.success(), "navigate failed: {}", stderr(&nav));
+
+    let content = run_live(&["get-content", &session_id, &target_id]);
+    assert!(content.status.success(), "get-content failed: {}", stderr(&content));
+    assert!(
+        stdout(&content).contains("Example Domain"),
+        "expected page content in attached session, got: {}",
+        stdout(&content)
+    );
+
+    run_live(&["close-session", &session_id]);
+    chrome.kill().ok();
+    chrome.wait().ok();
+}
+
+// ─────────────────────────────────────────────────────────────
+// Multi-window — two sessions sharing one Chrome process
+// ─────────────────────────────────────────────────────────────
+
+#[test]
+#[ignore] // requires a configured profile; run manually after open-session is verified working
+#[cfg_attr(not(target_os = "macos"), ignore)]
+#[serial]
+fn test_multi_window_two_sessions_same_profile() {
+    // Opens two sessions for the same profile. The second one reuses the
+    // existing Chrome process (Target.createTarget newWindow:true).
+    // Each session must see only its own tabs via list-tabs.
+    let _daemon = start_test_daemon();
+    let profile = first_profile();
+
+    let open1 = run_live(&["open-session", &profile]);
+    assert!(open1.status.success(), "open-session 1: {}", stderr(&open1));
+    let sid1 = parse_json_field(&stdout(&open1), "session_id");
+
+    let open2 = run_live(&["open-session", &profile]);
+    assert!(open2.status.success(), "open-session 2: {}", stderr(&open2));
+    let sid2 = parse_json_field(&stdout(&open2), "session_id");
+
+    assert_ne!(sid1, sid2, "each open-session must return a distinct session_id");
+
+    // Both sessions visible in list-sessions
+    let sessions_out = run_live(&["list-sessions"]);
+    let sv: serde_json::Value = serde_json::from_str(&stdout(&sessions_out)).unwrap();
+    let list = sv["result"]["data"].as_array().expect("data array");
+    let ids: Vec<&str> = list.iter().filter_map(|s| s["id"].as_str()).collect();
+    assert!(ids.contains(&sid1.as_str()), "session 1 missing from list-sessions");
+    assert!(ids.contains(&sid2.as_str()), "session 2 missing from list-sessions");
+
+    // Each session's tab list must be non-empty and disjoint from the other
+    let tabs1_v: serde_json::Value = serde_json::from_str(&stdout(&run_live(&["list-tabs", &sid1]))).unwrap();
+    let tabs2_v: serde_json::Value = serde_json::from_str(&stdout(&run_live(&["list-tabs", &sid2]))).unwrap();
+    let tabs1: Vec<&str> = tabs1_v["data"]
+        .as_array()
+        .expect("tabs1 data")
+        .iter()
+        .filter_map(|t| t["target_id"].as_str())
+        .collect();
+    let tabs2: Vec<&str> = tabs2_v["data"]
+        .as_array()
+        .expect("tabs2 data")
+        .iter()
+        .filter_map(|t| t["target_id"].as_str())
+        .collect();
+
+    assert!(!tabs1.is_empty(), "session 1 should have at least one tab");
+    assert!(!tabs2.is_empty(), "session 2 should have at least one tab");
+
+    // Tab ownership is disjoint — no target_id shared between sessions
+    for tid in &tabs1 {
+        assert!(
+            !tabs2.contains(tid),
+            "target_id {} appears in both session 1 and session 2",
+            tid
+        );
+    }
+
+    // Close session 2 (secondary): Chrome should stay alive for session 1
+    let close2 = run_live(&["close-session", &sid2]);
+    assert!(close2.status.success(), "close session 2: {}", stderr(&close2));
+
+    // Session 1 still works
+    let tabs1_after = run_live(&["list-tabs", &sid1]);
+    assert!(
+        tabs1_after.status.success(),
+        "session 1 should still be alive after closing session 2: {}",
+        stderr(&tabs1_after)
+    );
+
+    // Close primary session
+    run_live(&["close-session", &sid1]);
 }

@@ -41,10 +41,12 @@ public struct Profile: Codable, Identifiable, Sendable {
     public let name: String
     public let displayName: String
     public let kind: String       // "personal" | "agent"
+    public let userDataDir: String?
 
     enum CodingKeys: String, CodingKey {
         case name, kind
         case displayName = "display_name"
+        case userDataDir = "user_data_dir"
     }
 }
 

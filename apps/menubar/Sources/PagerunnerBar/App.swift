@@ -59,11 +59,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 if let data = profilesRaw["data"]?.arrayValue {
                     appState.profiles = data.compactMap { item -> Profile? in
                         guard let obj = item.objectValue else { return nil }
-                        let dict: [String: Any] = [
+                        var dict: [String: Any] = [
                             "name": obj["name"]?.stringValue as Any,
                             "display_name": obj["display_name"]?.stringValue as Any,
                             "kind": obj["kind"]?.stringValue ?? "personal"
                         ]
+                        if let udd = obj["user_data_dir"]?.stringValue {
+                            dict["user_data_dir"] = udd
+                        }
                         guard let jsonData = try? JSONSerialization.data(withJSONObject: dict),
                               let profile = try? JSONDecoder().decode(Profile.self, from: jsonData) else { return nil }
                         return profile
@@ -78,8 +81,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 guard let obj = item.objectValue,
                       let id = obj["id"]?.stringValue,
                       let profile = obj["profile"]?.stringValue,
-                      let displayName = obj["display_name"]?.stringValue,
-                      let statusStr = obj["status"]?.stringValue else { return nil }
+                      let displayName = obj["display_name"]?.stringValue else { return nil }
+                let statusStr = obj["status"]?.stringValue ?? "alive"
                 let stealth = obj["stealth"]?.boolValue ?? false
                 // Re-encode as JSON and decode via Codable to respect CodingKeys mapping.
                 let dict: [String: Any] = [
@@ -94,6 +97,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 return session
             }
             appState.sessions = sessions
+            // Track which sessions have ever been alive
+            for s in sessions where s.status == .alive {
+                appState.everAliveSessions.insert(s.id)
+            }
             appState.recordSuccess()
 
             // 2. list_tabs for each alive session (serial, best-effort)

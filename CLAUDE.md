@@ -71,6 +71,19 @@ user_data_dir = "/Users/user/Library/Application Support/Google/Chrome/Default"
 ```
 **Note:** Chrome locks profile directories — close any Chrome window using the profile before opening a pagerunner session on it.
 
+## Attaching to Existing Chrome (`attach_session`)
+
+To attach pagerunner to a Chrome instance the user already has running, Chrome must be started with `--remote-debugging-port`:
+
+```bash
+/Applications/Google\ Chrome.app/Contents/MacOS/Google\ Chrome \
+  --remote-debugging-port=9222
+```
+
+This exposes a WebSocket CDP endpoint at `http://localhost:9222`. The `attach_session` tool connects to it, discovers open tabs, and creates a session without spawning or owning the Chrome process. Calling `close_session` on an attached session disconnects pagerunner but does not close Chrome tabs.
+
+**User responsibility:** Chrome must be launched with the flag before calling `attach_session`. There is no way to retroactively enable remote debugging on an already-running Chrome without `--remote-debugging-port`.
+
 ## Audit CLI
 ```bash
 pagerunner audit --tail 50
@@ -140,6 +153,8 @@ All 27 MCP tools are exposed as direct CLI subcommands — no MCP registration r
 ```bash
 pagerunner list-profiles
 pagerunner open-session <profile> [--stealth] [--anonymize] [--allowed-domains d1,d2]
+pagerunner attach-session --debug-port 9222 [--profile <label>]
+pagerunner attach-session --debug-url http://localhost:9222 [--profile <label>]
 pagerunner close-session <session-id>
 pagerunner list-sessions
 pagerunner list-tabs <session-id>
@@ -214,23 +229,63 @@ Tests use `PAGERUNNER_DB_PATH=/tmp/pagerunner_integration_test.db` automatically
 ### Last CLI Test Run: 2026-03-26 (`cargo test --test cli_tools_integration`)
 | Category | Pass | Notes |
 |----------|------|-------|
-| Non-Chrome (profiles, sessions, KV, errors, help) | 23/23 | |
-| Non-Chrome: init --json | 3/3 | |
-| Non-Chrome (profiles, sessions, KV, errors, help) | 24/24 | includes `test_list_sessions_has_status_field` |
-| Non-Chrome (profiles, sessions, KV, errors, help) | 24/24 | |
-| Chrome: sessions + tabs | 4/4 | |
-| Chrome: screenshot, evaluate | 3/3 | |
-| Chrome: interactions (click, fill, type, select, scroll) | 8/8 | |
-| Chrome: wait-for | 4/4 | +2 new: stability_ms (selector + url) |
-| Chrome: anonymization | 2/2 | |
-| Chrome: security (allowed-domains) | 1/1 | |
+| Non-Chrome (profiles, sessions, KV, errors, help, init) | 27/27 | |
+| Non-Chrome: network log + site knowledge errors | 9/9 | includes generate_adapter missing API key, stale adapter error |
+| Non-Chrome: session checkpoint errors | 2/2 | invalid session returns error for checkpoint commands |
+| Non-Chrome: attach_session errors | 2/2 | missing args + unreachable port |
+| Chrome: sessions + tabs (incl. close-tab) | 6/6 | macOS only |
+| Chrome: screenshot, evaluate | 3/3 | macOS only |
+| Chrome: interactions (click, fill, type, select, scroll) | 8/8 | macOS only |
+| Chrome: wait-for | 4/4 | macOS only |
+| Chrome: anonymization | 2/2 | macOS only |
+| Chrome: security (allowed-domains) | 1/1 | macOS only |
+| Chrome: kv-roundtrip, snapshots, tab-state | 3/3 | macOS only |
+| Chrome: network log + console log | 4/4 | macOS only |
+| Chrome: site intelligence (adapter roundtrip, origin mismatch, selector fragility) | 3/3 | macOS only |
+| Chrome: session checkpoints (save, restore, list, delete) | 1/1 | macOS only |
 | Chrome: NER CLI | 1/1 | `#[ignore]` — requires `--features ner` + model |
-| Chrome: kv-roundtrip, snapshots, tab-state | 3/3 | |
-| **Total** | **48/48** | macOS: 47 pass + 1 ignored; Linux CI: 26 pass + 22 cfg_attr-ignored + 1 ignored |
-| **Total** | **46/46** | macOS: 45 pass + 1 ignored; Linux CI: 24 pass + 21 cfg_attr-ignored + 1 ignored |
-| **Total** | **47/47** | macOS: 46 pass + 1 ignored; Linux CI: 23 pass + 24 cfg_attr-ignored + 1 ignored |
-| Chrome: network log (get_network_log) | 3/3 | macOS only |
-| **Total** | **50/50** | macOS: 49 pass + 1 ignored; Linux CI: 24 pass + 25 cfg_attr-ignored + 1 ignored |
+| **Total** | **76/76** | macOS: 75 pass + 1 ignored; Linux CI: 40 pass + 35 cfg_attr-ignored + 1 ignored |
+
+## macOS Menu Bar App
+
+Native Swift companion app at `apps/menubar/`.
+
+### Build
+
+```bash
+cd apps/menubar
+swift build            # debug build
+swift build -c release # release binary → .build/release/PagerunnerBar
+swift test             # run PagerunnerCoreTests (11 tests, no Chrome needed)
+```
+
+### Run locally (with live daemon)
+
+```bash
+pagerunner daemon &    # start daemon
+./.build/release/PagerunnerBar  # run from apps/menubar/
+```
+
+### Distribution
+
+```bash
+cd apps/menubar/scripts
+./package.sh           # builds .app bundle + signs + .zip
+./notarize.sh          # submits to Apple notarization + staples
+```
+
+Requires: `CODE_SIGN_IDENTITY`, `APPLE_TEAM_ID`, `APPLE_ID`, `NOTARIZE_PASSWORD` env vars for signing + notarization.
+
+### Architecture
+
+- `Sources/PagerunnerCore/` — zero-UI, fully testable: `Models.swift`, `DaemonClient.swift`, `PollingService.swift`
+- `Sources/PagerunnerBar/` — app target: `App.swift`, `AppState.swift`, `StatusItemController.swift`, `NotificationService.swift`, `Views/`
+- `Tests/PagerunnerCoreTests/` — unit tests for Core (no UI, no live daemon)
+
+### Dependencies
+
+- Sparkle 2.x (auto-update framework)
+- KeyboardShortcuts 1.15.0 (global hotkey, sindresorhus)
 
 ### Last Full Live Test Run: [2026-03-21-run-6](docs/test-runs/2026-03-21-run-6.md)
 | Category | Pass | Notes |

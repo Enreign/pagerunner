@@ -25,7 +25,7 @@ final class StatusItemController {
     private func setupStatusButton() {
         guard let button = statusItem.button else { return }
         // Template image auto-adapts dark/light mode
-        button.image = NSImage(systemSymbolName: "safari", accessibilityDescription: "Pagerunner")
+        button.image = NSImage(systemSymbolName: "figure.run", accessibilityDescription: "Pagerunner")
         button.image?.isTemplate = true
         button.action = #selector(togglePopover)
         button.target = self
@@ -34,8 +34,7 @@ final class StatusItemController {
     private func setupPopover() {
         let contentView = PanelView(appState: appState, pollingService: pollingService, controller: self)
             .environment(\.daemonClient, DaemonClient())
-        let hostingVC = NSHostingController(rootView: contentView)
-        hostingVC.view.frame = NSRect(x: 0, y: 0, width: 310, height: 560)
+        let hostingVC = FirstClickHostingController(rootView: contentView)
         popover.contentViewController = hostingVC
         popover.contentSize = NSSize(width: 310, height: 560)
     }
@@ -52,6 +51,8 @@ final class StatusItemController {
         guard let button = statusItem.button else { return }
         pollingService.panelDidOpen()
         popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
+        // Make popover the key window so clicks register immediately
+        popover.contentViewController?.view.window?.makeKey()
     }
 
     func closePopover() {
@@ -59,25 +60,33 @@ final class StatusItemController {
         popover.performClose(nil)
     }
 
-    /// Focus a Chrome tab by URL using AppleScript.
-    func focusTab(url: String) {
-        let script = """
-        tell application "Google Chrome"
-            set winList to every window
-            repeat with w in winList
-                set tabList to every tab of w
-                repeat with t in tabList
-                    if URL of t is "\(url)" then
-                        set index of w to 1
-                        set active tab index of w to (get index of t)
-                        activate
-                        return
-                    end if
-                end repeat
-            end repeat
-        end tell
-        """
-        var error: NSDictionary?
-        NSAppleScript(source: script)?.executeAndReturnError(&error)
+}
+
+/// NSHostingView subclass that accepts first mouse click without requiring window activation.
+private class FirstClickView<Content: View>: NSHostingView<Content> {
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+}
+
+/// NSHostingController that uses FirstClickView so popover buttons respond on first click.
+class FirstClickHostingController<Content: View>: NSHostingController<Content> {
+    override func loadView() {
+        view = FirstClickView(rootView: rootView)
+    }
+}
+
+extension StatusItemController {
+    /// Focus a specific Chrome tab by session + targetId via CDP, then bring Chrome to front.
+    func focusTab(sessionId: String, targetId: String) {
+        let daemon = DaemonClient()
+        Task {
+            _ = try? await daemon.call(tool: "activate_tab", args: [
+                "session_id": sessionId,
+                "target_id": targetId
+            ])
+            // Bring Chrome to front after activating the tab
+            let script = "tell application \"Google Chrome\" to activate"
+            var error: NSDictionary?
+            NSAppleScript(source: script)?.executeAndReturnError(&error)
+        }
     }
 }

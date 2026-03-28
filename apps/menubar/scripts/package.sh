@@ -27,9 +27,13 @@ lipo -create \
 echo "Bundling .app..."
 mkdir -p "$APP_DIR/Contents/MacOS"
 mkdir -p "$APP_DIR/Contents/Resources"
-cp "$BUILD_DIR/PagerunnerBar" "$APP_DIR/Contents/MacOS/$APP_NAME"
+cp "$BUILD_DIR/PagerunnerBar" "$APP_DIR/Contents/MacOS/PagerunnerBar"
 cp "$MENUBAR_DIR/Sources/PagerunnerBar/Info.plist" "$APP_DIR/Contents/Info.plist"
-# Embed Sparkle.framework if needed (SPM artifact)
+
+# Embed Sparkle.framework
+mkdir -p "$APP_DIR/Contents/Frameworks"
+cp -R "$MENUBAR_DIR/.build/arm64-apple-macosx/release/Sparkle.framework" "$APP_DIR/Contents/Frameworks/"
+install_name_tool -add_rpath @executable_path/../Frameworks "$APP_DIR/Contents/MacOS/PagerunnerBar"
 
 # Code sign
 if [ -n "${CODE_SIGN_IDENTITY:-}" ]; then

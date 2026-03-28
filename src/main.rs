@@ -105,6 +105,19 @@ enum Commands {
         #[arg(long)]
         anonymization_mode: Option<String>,
     },
+    /// Attach to an already-running Chrome (must be launched with --remote-debugging-port)
+    #[command(name = "attach-session")]
+    AttachSession {
+        /// Port Chrome was launched with (e.g. 9222)
+        #[arg(long)]
+        debug_port: Option<u16>,
+        /// Full base URL if Chrome is non-local (e.g. http://localhost:9222)
+        #[arg(long)]
+        debug_url: Option<String>,
+        /// Optional display label for this session
+        #[arg(long)]
+        profile: Option<String>,
+    },
     /// Close a Chrome session
     CloseSession { session_id: String },
     /// List open sessions
@@ -747,6 +760,28 @@ async fn run() -> anyhow::Result<()> {
             }
             crate::cli_tools::run_tool(
                 "open_session",
+                args,
+                crate::cli_tools::ScreenshotMode::File,
+                &config,
+            )
+            .await?;
+        }
+        Commands::AttachSession { debug_port, debug_url, profile } => {
+            let config = config::PagerunnerConfig::load()?;
+            let mut args = serde_json::json!({});
+            if let Some(port) = debug_port {
+                args["debug_port"] = serde_json::json!(port);
+            } else if let Some(url) = debug_url {
+                args["debug_url"] = serde_json::json!(url);
+            } else {
+                eprintln!("error: attach-session requires --debug-port <PORT> or --debug-url <URL>");
+                std::process::exit(1);
+            }
+            if let Some(p) = profile {
+                args["profile"] = serde_json::json!(p);
+            }
+            crate::cli_tools::run_tool(
+                "attach_session",
                 args,
                 crate::cli_tools::ScreenshotMode::File,
                 &config,

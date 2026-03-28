@@ -47,7 +47,6 @@ impl ChromeProcess {
             "--no-first-run".into(),
             "--no-default-browser-check".into(),
             format!("--user-data-dir={}", user_data_dir),
-            "--restore-last-session".into(),
         ];
 
         args.push("--disable-blink-features=AutomationControlled".into());

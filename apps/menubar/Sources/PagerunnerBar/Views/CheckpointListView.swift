@@ -4,8 +4,6 @@ import PagerunnerCore
 struct CheckpointListView: View {
     @Bindable var appState: AppState
     let profileName: String
-    /// ID of the first alive session for this profile — used as the restore target.
-    /// Nil if no sessions are running (Restore button is disabled).
     var activeSessionId: String? {
         appState.sessionsFor(profile: profileName).first(where: { $0.status == .alive })?.id
     }
@@ -13,40 +11,49 @@ struct CheckpointListView: View {
 
     private var checkpoints: [Checkpoint] { appState.checkpointsFor(profile: profileName) }
 
+    @ViewBuilder
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
+        if !checkpoints.isEmpty {
+            checkpointSection
+        }
+    }
+
+    private var checkpointSection: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            // Toggle header (spec: ckpt-toggle)
             Button {
                 isExpanded.toggle()
             } label: {
-                HStack {
-                    Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
+                HStack(spacing: 5) {
+                    Text(isExpanded ? "▸" : "▸")
                         .font(.system(size: 9))
-                        .foregroundStyle(.secondary)
-                    Text("Saved sessions")
-                        .font(.system(size: 11, weight: .medium))
+                        .foregroundColor(.secondary)
+                        .rotationEffect(isExpanded ? .degrees(90) : .degrees(0))
+                        .animation(.easeInOut(duration: 0.18), value: isExpanded)
+                    Text("Snapshots")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundColor(.secondary)
+                        .textCase(.uppercase)
+                        .tracking(0.4)
                     Spacer()
-                    Text("\(checkpoints.count)")
-                        .font(.system(size: 10))
-                        .foregroundStyle(.secondary)
                 }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 5)
+                .background(Color.primary.opacity(0.04))
             }
             .buttonStyle(.plain)
+            .overlay(alignment: .top) {
+                Rectangle().fill(Color.primary.opacity(0.1)).frame(height: 0.5)
+            }
 
             if isExpanded {
-                if checkpoints.isEmpty {
-                    Text("No saved checkpoints")
-                        .font(.system(size: 10))
-                        .foregroundStyle(.secondary)
-                        .padding(.leading, 14)
-                } else {
-                    ForEach(checkpoints) { checkpoint in
-                        CheckpointRow(
-                            checkpoint: checkpoint,
-                            profileName: profileName,
-                            sessionId: activeSessionId,
-                            appState: appState
-                        )
-                    }
+                ForEach(checkpoints) { checkpoint in
+                    CheckpointRow(
+                        checkpoint: checkpoint,
+                        profileName: profileName,
+                        sessionId: activeSessionId,
+                        appState: appState
+                    )
                 }
             }
         }
@@ -56,69 +63,60 @@ struct CheckpointListView: View {
 struct CheckpointRow: View {
     let checkpoint: Checkpoint
     let profileName: String
-    let sessionId: String?   // nil = no active session for this profile
+    let sessionId: String?
     @Bindable var appState: AppState
     @Environment(\.daemonClient) private var daemon
 
     var body: some View {
-        HStack(alignment: .top, spacing: 8) {
-            VStack(alignment: .leading, spacing: 3) {
+        VStack(alignment: .leading, spacing: 2) {
+            // Top line: name + age + restore + delete (spec: cktop)
+            HStack(spacing: 5) {
                 Text(checkpoint.name)
-                    .font(.system(size: 11, weight: .medium))
+                    .font(.system(size: 12, weight: .medium))
+                Spacer()
+                Text(formatTimestamp(checkpoint.savedAt))
+                    .font(.system(size: 11))
+                    .foregroundColor(.secondary)
 
-                // Origin preview
-                HStack(spacing: 4) {
-                    ForEach(checkpoint.origins.prefix(3), id: \.self) { origin in
-                        Text(origin)
-                            .font(.system(size: 9))
-                            .foregroundStyle(.secondary)
-                            .padding(.horizontal, 4)
-                            .padding(.vertical, 1)
-                            .background(Color.gray.opacity(0.12))
-                            .cornerRadius(3)
-                    }
-                    if checkpoint.origins.count > 3 {
-                        Text("+\(checkpoint.origins.count - 3)")
-                            .font(.system(size: 9))
-                            .foregroundStyle(.tertiary)
-                    }
-                }
-
-                Text("\(checkpoint.tabCount) tabs · \(formatTimestamp(checkpoint.savedAt))")
-                    .font(.system(size: 9))
-                    .foregroundStyle(.tertiary)
-            }
-
-            Spacer()
-
-            VStack(spacing: 4) {
-                // Restore button — disabled if no active session or daemon stopped
                 Button("Restore") {
                     guard let sid = sessionId else { return }
                     Task { @MainActor in
                         _ = try? await daemon.call(tool: "restore_session_checkpoint", args: ["session_id": sid, "checkpoint_id": checkpoint.id])
                     }
                 }
-                .buttonStyle(.borderedProminent)
-                .controlSize(.mini)
+                .font(.system(size: 11))
+                .foregroundColor(Color(red: 0, green: 0.478, blue: 1))
+                .buttonStyle(.plain)
                 .disabled(sessionId == nil || appState.daemonStatus == .stopped)
-                .help(sessionId == nil ? "Open a session first to restore" : "Restore checkpoint")
 
-                // Delete button
                 Button {
                     Task { @MainActor in
                         _ = try? await daemon.call(tool: "delete_session_checkpoint", args: ["profile": profileName, "checkpoint_id": checkpoint.id])
                     }
                 } label: {
-                    Image(systemName: "xmark")
+                    Text("✕")
                         .font(.system(size: 9))
+                        .foregroundColor(.secondary)
+                        .frame(width: 14, height: 14)
+                        .clipShape(Circle())
                 }
                 .buttonStyle(.plain)
-                .foregroundStyle(.secondary)
             }
+
+            // Tab info (spec: cktabs 11px #888)
+            Text(checkpoint.origins.prefix(3).joined(separator: " · ") +
+                 (checkpoint.origins.count > 3 ? " +\(checkpoint.origins.count - 3)" : "") +
+                 " — \(checkpoint.tabCount) tabs")
+                .font(.system(size: 11))
+                .foregroundColor(.secondary)
+                .lineLimit(1)
+                .truncationMode(.tail)
         }
-        .padding(.leading, 14)
-        .padding(.vertical, 4)
+        .padding(.horizontal, 18)
+        .padding(.vertical, 5)
+        .overlay(alignment: .bottom) {
+            Rectangle().fill(Color.primary.opacity(0.05)).frame(height: 0.5)
+        }
     }
 
     private func formatTimestamp(_ unix: Int) -> String {

@@ -1,4 +1,5 @@
 use crate::error::{PagerunnerError, Result};
+use futures_util::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
@@ -7,6 +8,7 @@ use std::sync::Mutex;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::{broadcast, mpsc, oneshot};
 use tokio::task::JoinHandle;
+use tokio_tungstenite::tungstenite::Message;
 
 #[derive(Debug, Serialize)]
 pub struct CdpMessage {
@@ -66,6 +68,31 @@ impl CdpConn {
         let reader_handle = tokio::spawn(reader_task(read_fd, reader_inner));
 
         (CdpConn { inner }, reader_handle)
+    }
+
+    /// Connect to a Chrome instance via WebSocket (for `--remote-debugging-port` instances).
+    /// `ws_url` is the `webSocketDebuggerUrl` from `GET http://localhost:<port>/json/version`.
+    pub async fn connect_ws(ws_url: &str) -> Result<(Self, JoinHandle<()>)> {
+        let (event_tx, _) = broadcast::channel(1024);
+        let (write_tx, write_rx) = mpsc::channel::<Vec<u8>>(256);
+
+        let (ws_stream, _) = tokio_tungstenite::connect_async(ws_url)
+            .await
+            .map_err(|e| PagerunnerError::Cdp(format!("WebSocket connect failed: {}", e)))?;
+        let (ws_sink, ws_recv) = ws_stream.split();
+
+        let inner = std::sync::Arc::new(CdpInner {
+            pending: Mutex::new(HashMap::new()),
+            event_tx,
+            next_id: AtomicU64::new(1),
+            write_tx,
+        });
+
+        tokio::spawn(ws_writer_task(ws_sink, write_rx));
+        let reader_inner = inner.clone();
+        let reader_handle = tokio::spawn(ws_reader_task(ws_recv, reader_inner));
+
+        Ok((CdpConn { inner }, reader_handle))
     }
 
     pub async fn send(&self, method: &str, params: Value) -> Result<Value> {
@@ -137,6 +164,53 @@ async fn reader_task(read_fd: tokio::fs::File, inner: std::sync::Arc<CdpInner>) 
             continue;
         }
         let v: Value = match serde_json::from_slice(&buf) {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+        if let Some(id) = v.get("id").and_then(|id| id.as_u64()) {
+            if let Ok(mut pending) = inner.pending.lock() {
+                if let Some(tx) = pending.remove(&id) {
+                    if let Some(err) = v.get("error") {
+                        let _ = tx.send(Err(PagerunnerError::Cdp(err.to_string())));
+                    } else {
+                        let _ = tx.send(Ok(v["result"].clone()));
+                    }
+                }
+            }
+        } else {
+            let _ = inner.event_tx.send(v);
+        }
+    }
+}
+
+async fn ws_writer_task(
+    mut sink: impl SinkExt<Message, Error = tokio_tungstenite::tungstenite::Error> + Unpin,
+    mut rx: mpsc::Receiver<Vec<u8>>,
+) {
+    while let Some(mut data) = rx.recv().await {
+        // frame() appends a null byte for pipe transport; strip it for WebSocket
+        if data.last() == Some(&b'\0') {
+            data.pop();
+        }
+        let text = String::from_utf8_lossy(&data).into_owned();
+        if sink.send(Message::Text(text)).await.is_err() {
+            break;
+        }
+    }
+}
+
+async fn ws_reader_task(
+    mut stream: impl StreamExt<Item = std::result::Result<Message, tokio_tungstenite::tungstenite::Error>>
+        + Unpin,
+    inner: std::sync::Arc<CdpInner>,
+) {
+    while let Some(msg) = stream.next().await {
+        let text = match msg {
+            Ok(Message::Text(t)) => t,
+            Ok(Message::Close(_)) | Err(_) => break,
+            _ => continue,
+        };
+        let v: Value = match serde_json::from_str(&text) {
             Ok(v) => v,
             Err(_) => continue,
         };
