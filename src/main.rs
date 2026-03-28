@@ -606,7 +606,7 @@ async fn run() -> anyhow::Result<()> {
         Commands::Profiles => {
             let config = config::PagerunnerConfig::load()?;
             for p in &config.profiles {
-                println!("{}: {}", p.name, p.user_data_dir);
+                println!("{}: {}", p.name, p.user_data_dir.as_deref().unwrap_or("(attached)"));
             }
         }
         Commands::ExampleConfig => {

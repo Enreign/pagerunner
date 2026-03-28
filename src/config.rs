@@ -5,7 +5,10 @@ use serde::{Deserialize, Serialize};
 pub struct ChromeProfile {
     pub name: String,
     pub display_name: String,
-    pub user_data_dir: String,
+    #[serde(default)]
+    pub user_data_dir: Option<String>,
+    #[serde(default)]
+    pub debug_port: Option<u16>,
     #[serde(default)]
     pub kind: Option<String>,
 }
@@ -293,7 +296,7 @@ user_data_dir = "/tmp/chrome-test"
         let config: PagerunnerConfig = toml::from_str(toml).unwrap();
         assert_eq!(config.profiles.len(), 1);
         assert_eq!(config.profiles[0].name, "test");
-        assert_eq!(config.profiles[0].user_data_dir, "/tmp/chrome-test");
+        assert_eq!(config.profiles[0].user_data_dir.as_deref(), Some("/tmp/chrome-test"));
     }
 
     #[test]
@@ -302,7 +305,8 @@ user_data_dir = "/tmp/chrome-test"
             profiles: vec![ChromeProfile {
                 name: "a".into(),
                 display_name: "A".into(),
-                user_data_dir: "/tmp/a".into(),
+                user_data_dir: Some("/tmp/a".into()),
+                debug_port: None,
                 kind: None,
             }],
             ..Default::default()
@@ -465,5 +469,34 @@ kind = "agent"
 "#;
         let cfg: PagerunnerConfig = toml::from_str(toml).unwrap();
         assert_eq!(cfg.profiles[0].kind.as_deref(), Some("agent"));
+    }
+
+    #[test]
+    fn test_attached_profile_parses_without_user_data_dir() {
+        let toml = r#"
+[[profiles]]
+name = "chrome-9225"
+display_name = "Chrome :9225"
+kind = "attached"
+debug_port = 9225
+"#;
+        let cfg: PagerunnerConfig = toml::from_str(toml).unwrap();
+        assert_eq!(cfg.profiles[0].name, "chrome-9225");
+        assert_eq!(cfg.profiles[0].kind.as_deref(), Some("attached"));
+        assert_eq!(cfg.profiles[0].debug_port, Some(9225u16));
+        assert!(cfg.profiles[0].user_data_dir.is_none());
+    }
+
+    #[test]
+    fn test_existing_profile_still_parses_with_user_data_dir() {
+        let toml = r#"
+[[profiles]]
+name = "personal"
+display_name = "Personal"
+user_data_dir = "/tmp/chrome"
+"#;
+        let cfg: PagerunnerConfig = toml::from_str(toml).unwrap();
+        assert_eq!(cfg.profiles[0].user_data_dir.as_deref(), Some("/tmp/chrome"));
+        assert!(cfg.profiles[0].debug_port.is_none());
     }
 }

@@ -57,7 +57,8 @@ pub fn generate_config_toml(profiles: &[DetectedProfile]) -> String {
         chrome_profiles.push(crate::config::ChromeProfile {
             name,
             display_name,
-            user_data_dir: p.user_data_dir.clone(),
+            user_data_dir: Some(p.user_data_dir.clone()),
+            debug_port: None,
             kind: None,
         });
     }

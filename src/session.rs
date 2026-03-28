@@ -180,7 +180,9 @@ impl SessionManager {
             }
         }
 
-        let result = crate::chrome::ChromeProcess::spawn(&profile.user_data_dir, stealth).await?;
+        let user_data_dir = profile.user_data_dir.as_deref()
+            .ok_or_else(|| crate::error::PagerunnerError::Config("Profile has no user_data_dir".into()))?;
+        let result = crate::chrome::ChromeProcess::spawn(user_data_dir, stealth).await?;
         let (cdp, reader_task) = CdpConn::new(result.cmd_write, result.evt_read);
         let id = Uuid::new_v4().to_string();
         let cdp_sessions_rev = std::sync::Arc::new(std::sync::RwLock::new(HashMap::new()));
@@ -633,7 +635,8 @@ mod tests {
         ChromeProfile {
             name: "test".into(),
             display_name: "Test".into(),
-            user_data_dir: "/tmp/pagerunner-test-profile".into(),
+            user_data_dir: Some("/tmp/pagerunner-test-profile".into()),
+            debug_port: None,
             kind: None,
         }
     }

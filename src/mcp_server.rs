@@ -1697,6 +1697,21 @@ async fn dispatch_tool_inner(
                 }
             }
 
+            // Route attached profiles through attach_session logic
+            if profile.kind.as_deref() == Some("attached") {
+                let port = profile.debug_port
+                    .ok_or_else(|| PagerunnerError::Config("Attached profile missing debug_port".into()))?;
+                let debug_url = format!("http://localhost:{}", port);
+                let profile_label = Some(profile.display_name.clone());
+
+                let mut mgr = sessions.lock().await;
+                let id = mgr
+                    .attach(&debug_url, profile_label, Arc::clone(&db), &config.network, Some(std::sync::Arc::clone(&site_store)))
+                    .await?;
+
+                return Ok(serde_json::json!({"ok": true, "session_id": id, "attached_to": debug_url}).to_string());
+            }
+
             // Capture summary BEFORE policy is moved into mgr.open()
             let policy_summary = policy.to_policy_summary();
             let stealth_val = stealth;
@@ -3883,7 +3898,8 @@ Normal visible content here."#;
             profiles: vec![crate::config::ChromeProfile {
                 name: "personal".into(),
                 display_name: "Personal".into(),
-                user_data_dir: "/tmp/p".into(),
+                user_data_dir: Some("/tmp/p".into()),
+                debug_port: None,
                 kind: None,
             }],
             ..Default::default()
@@ -3907,13 +3923,15 @@ Normal visible content here."#;
                 crate::config::ChromeProfile {
                     name: "personal".into(),
                     display_name: "Personal".into(),
-                    user_data_dir: "/tmp/p".into(),
+                    user_data_dir: Some("/tmp/p".into()),
+                    debug_port: None,
                     kind: None,
                 },
                 crate::config::ChromeProfile {
                     name: "agent-1".into(),
                     display_name: "Agent 1".into(),
-                    user_data_dir: "/tmp/a".into(),
+                    user_data_dir: Some("/tmp/a".into()),
+                    debug_port: None,
                     kind: Some("agent".into()),
                 },
             ],
