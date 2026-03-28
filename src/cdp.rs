@@ -124,9 +124,8 @@ async fn reader_task(read_fd: tokio::fs::File, inner: std::sync::Arc<CdpInner>) 
         let mut buf = Vec::new();
         loop {
             let mut byte = [0u8; 1];
-            match reader.read_exact(&mut byte).await {
-                Err(_) => return,
-                Ok(_) => {}
+            if reader.read_exact(&mut byte).await.is_err() {
+                return;
             }
             if byte[0] == b'\0' {
                 break;

@@ -201,10 +201,7 @@ impl SiteKnowledgeStore {
 }
 
 fn urlencoded_origin(origin: &str) -> String {
-    origin
-        .replace("://", "_")
-        .replace('/', "_")
-        .replace(':', "_")
+    origin.replace("://", "_").replace(['/', ':'], "_")
 }
 
 pub fn now_micros() -> u64 {

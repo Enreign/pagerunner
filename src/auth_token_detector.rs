@@ -90,6 +90,7 @@ pub fn redact_detected_tokens(headers: &HashMap<String, String>) -> HashMap<Stri
 /// Returns the (possibly redacted) headers:
 /// - On success: returns headers unchanged
 /// - On any encryption error: returns headers with detected token values replaced by [REDACTED]
+///
 /// Best-effort: logs warnings on vault/storage failure, never propagates errors.
 pub fn detect_and_vault(
     headers: &HashMap<String, String>,

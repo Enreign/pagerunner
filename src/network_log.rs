@@ -50,6 +50,7 @@ pub struct NetworkQuery {
     pub limit: usize,
     pub include_request_body: bool,
     pub full_response: bool,
+    #[allow(dead_code)]
     pub all_tabs: bool,
 }
 

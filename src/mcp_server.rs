@@ -1743,7 +1743,7 @@ async fn dispatch_tool_inner(
             })?;
             let mut mgr = sessions.lock().await;
             let session = mgr.get_live(id)?;
-            let tabs = browser::list_tabs(&mut session.cdp).await?;
+            let tabs = browser::list_tabs(&session.cdp).await?;
             let has_policy = session
                 .security_policy
                 .as_ref()
@@ -2160,7 +2160,7 @@ async fn dispatch_tool_inner(
             // Compute fragility warning before propagating error — useful on both paths
             let fragility = tab_url
                 .as_deref()
-                .and_then(|u| crate::network_log::url_to_origin(u))
+                .and_then(crate::network_log::url_to_origin)
                 .and_then(|origin| browser::fragility_warning(&site_store, &origin, selector));
             if let Err(e) = click_result {
                 if let Some(ref warning) = fragility {
@@ -2373,7 +2373,7 @@ async fn dispatch_tool_inner(
             // Compute fragility warning before propagating error — useful on both paths
             let fragility = tab_url
                 .as_deref()
-                .and_then(|u| crate::network_log::url_to_origin(u))
+                .and_then(crate::network_log::url_to_origin)
                 .and_then(|origin| browser::fragility_warning(&site_store, &origin, selector));
             if let Err(e) = fill_result {
                 if let Some(ref warning) = fragility {
@@ -2429,7 +2429,7 @@ async fn dispatch_tool_inner(
             // Compute fragility warning before propagating error — useful on both paths
             let fragility = tab_url
                 .as_deref()
-                .and_then(|u| crate::network_log::url_to_origin(u))
+                .and_then(crate::network_log::url_to_origin)
                 .and_then(|origin| browser::fragility_warning(&site_store, &origin, selector));
             if let Err(e) = select_result {
                 if let Some(ref warning) = fragility {
