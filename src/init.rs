@@ -58,6 +58,7 @@ pub fn generate_config_toml(profiles: &[DetectedProfile]) -> String {
             name,
             display_name,
             user_data_dir: p.user_data_dir.clone(),
+            kind: None,
         });
     }
 

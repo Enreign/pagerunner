@@ -339,6 +339,7 @@ mod tests {
             name: "test".into(),
             display_name: "Test".into(),
             user_data_dir: "/tmp/pagerunner-test-profile".into(),
+            kind: None,
         }
     }
 }

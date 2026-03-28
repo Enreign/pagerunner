@@ -2140,3 +2140,144 @@ fn test_selector_fragility_warning_appears() {
 
     run_live(&["close-session", &sid]);
 }
+
+#[test]
+#[cfg_attr(not(target_os = "macos"), ignore)]
+#[serial]
+fn test_cli_close_tab_last_tab_returns_error() {
+    let _daemon = start_test_daemon();
+
+    let profiles_out = run_live(&["list-profiles"]);
+    let profiles: serde_json::Value = serde_json::from_str(&stdout(&profiles_out)).unwrap();
+    let profile = profiles["data"][0]["name"].as_str().unwrap().to_string();
+
+    let open_out = run_live(&["open-session", &profile]);
+    let session_id = serde_json::from_str::<serde_json::Value>(&stdout(&open_out))
+        .unwrap()["session_id"].as_str().unwrap().to_string();
+
+    let tabs_out = run_live(&["list-tabs", &session_id]);
+    let tabs: serde_json::Value = serde_json::from_str(&stdout(&tabs_out)).unwrap();
+    let target_id = tabs["data"][0]["target_id"].as_str().unwrap().to_string();
+
+    // Closing the only tab must fail
+    let close_out = run_live(&["close-tab", &session_id, &target_id]);
+    assert!(
+        !close_out.status.success(),
+        "close-tab on last tab should exit non-zero"
+    );
+    assert!(
+        stderr(&close_out).contains("Cannot close last tab") || stderr(&close_out).contains("last tab"),
+        "error message should mention last tab: {}", stderr(&close_out)
+    );
+
+    run_live(&["close-session", &session_id]);
+}
+
+#[test]
+#[cfg_attr(not(target_os = "macos"), ignore)]
+#[serial]
+fn test_cli_close_tab_succeeds_with_multiple_tabs() {
+    let _daemon = start_test_daemon();
+
+    let profiles_out = run_live(&["list-profiles"]);
+    let profiles: serde_json::Value = serde_json::from_str(&stdout(&profiles_out)).unwrap();
+    let profile = profiles["data"][0]["name"].as_str().unwrap().to_string();
+
+    let open_out = run_live(&["open-session", &profile]);
+    let session_id = serde_json::from_str::<serde_json::Value>(&stdout(&open_out))
+        .unwrap()["session_id"].as_str().unwrap().to_string();
+
+    // Open a second tab so we have 2 total
+    run_live(&["new-tab", &session_id]);
+
+    let tabs_out = run_live(&["list-tabs", &session_id]);
+    let tabs: serde_json::Value = serde_json::from_str(&stdout(&tabs_out)).unwrap();
+    let target_id = tabs["data"][0]["target_id"].as_str().unwrap().to_string();
+
+    // Closing one of two tabs should succeed
+    let close_out = run_live(&["close-tab", &session_id, &target_id]);
+    assert!(close_out.status.success(), "stderr: {}", stderr(&close_out));
+    let v: serde_json::Value = serde_json::from_str(&stdout(&close_out)).unwrap();
+    assert_eq!(v["ok"], true);
+
+    run_live(&["close-session", &session_id]);
+}
+
+#[test]
+#[cfg_attr(not(target_os = "macos"), ignore)]
+#[serial]
+fn test_cli_save_session_checkpoint_returns_checkpoint_id() {
+    let _daemon = start_test_daemon();
+
+    let profiles_out = run_live(&["list-profiles"]);
+    let profiles: serde_json::Value = serde_json::from_str(&stdout(&profiles_out)).unwrap();
+    let profile = profiles["data"][0]["name"].as_str().unwrap().to_string();
+
+    let open_out = run_live(&["open-session", &profile]);
+    let session_id = serde_json::from_str::<serde_json::Value>(&stdout(&open_out))
+        .unwrap()["session_id"].as_str().unwrap().to_string();
+
+    let save_out = run_live(&["save-session-checkpoint", &session_id]);
+    assert!(save_out.status.success(), "save-session-checkpoint failed: {}", stderr(&save_out));
+    let result: serde_json::Value = serde_json::from_str(&stdout(&save_out)).unwrap();
+    assert_eq!(result["ok"], true);
+    assert!(result["checkpoint_id"].as_str().is_some(), "must return checkpoint_id");
+    assert!(result["name"].as_str().is_some(), "must return name");
+
+    run_live(&["close-session", &session_id]);
+}
+
+#[test]
+#[cfg_attr(not(target_os = "macos"), ignore)]
+#[serial]
+fn test_cli_restore_session_checkpoint_roundtrip() {
+    let _daemon = start_test_daemon();
+
+    let profiles_out = run_live(&["list-profiles"]);
+    let profiles: serde_json::Value = serde_json::from_str(&stdout(&profiles_out)).unwrap();
+    let profile = profiles["data"][0]["name"].as_str().unwrap().to_string();
+
+    let open_out = run_live(&["open-session", &profile]);
+    let session_id = serde_json::from_str::<serde_json::Value>(&stdout(&open_out))
+        .unwrap()["session_id"].as_str().unwrap().to_string();
+
+    // Save a checkpoint
+    let save_out = run_live(&["save-session-checkpoint", &session_id, "--name", "Test checkpoint"]);
+    assert!(save_out.status.success(), "{}", stderr(&save_out));
+    let saved: serde_json::Value = serde_json::from_str(&stdout(&save_out)).unwrap();
+    assert_eq!(saved["ok"], true);
+    let ckpt_id = saved["checkpoint_id"].as_str().unwrap().to_string();
+
+    // Restore it
+    let restore_out = run_live(&["restore-session-checkpoint", &session_id, &ckpt_id]);
+    assert!(restore_out.status.success(), "{}", stderr(&restore_out));
+    let restored: serde_json::Value = serde_json::from_str(&stdout(&restore_out)).unwrap();
+    assert_eq!(restored["ok"], true);
+    assert!(restored["tabs_restored"].as_u64().is_some());
+
+    run_live(&["close-session", &session_id]);
+}
+
+#[test]
+#[serial]
+fn test_cli_list_session_checkpoints_no_chrome() {
+    // Uses isolated test DB — no Chrome, no daemon needed.
+    // Verifies subcommand exists and returns empty list.
+    let output = run(&["list-session-checkpoints", "--profile", "personal"]);
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    let v: serde_json::Value = serde_json::from_str(&stdout(&output)).unwrap();
+    assert_eq!(v["ok"], true);
+    assert_eq!(v["data"].as_array().unwrap().len(), 0);
+}
+
+#[test]
+#[serial]
+fn test_cli_delete_session_checkpoint_not_found() {
+    // Uses isolated test DB — no Chrome, no daemon needed.
+    let output = run(&[
+        "delete-session-checkpoint",
+        "--profile", "personal",
+        "--checkpoint-id", "nonexistent-uuid",
+    ]);
+    assert!(!output.status.success(), "should fail for missing checkpoint");
+}

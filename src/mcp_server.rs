@@ -117,6 +117,18 @@ pub fn all_tools() -> Vec<Value> {
             }
         }),
         json!({
+            "name": "close_tab",
+            "description": "Close a specific browser tab. Returns an error if this is the last tab in the session (use close_session instead).",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "session_id": { "type": "string" },
+                    "target_id": { "type": "string" }
+                },
+                "required": ["session_id", "target_id"]
+            }
+        }),
+        json!({
             "name": "navigate",
             "description": "Navigate a tab to a URL",
             "inputSchema": {
@@ -329,6 +341,53 @@ pub fn all_tools() -> Vec<Value> {
                     "session_id": { "type": "string" }
                 },
                 "required": ["session_id"]
+            }
+        }),
+        json!({
+            "name": "save_session_checkpoint",
+            "description": "Save the current session state (tabs + auth) as a named checkpoint for later restore.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "session_id": { "type": "string" },
+                    "name": { "type": "string", "description": "Optional name. Auto-named if omitted." }
+                },
+                "required": ["session_id"]
+            }
+        }),
+        json!({
+            "name": "restore_session_checkpoint",
+            "description": "Restore a session to a saved checkpoint: closes current tabs, reopens saved tabs, and restores auth state.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "session_id": { "type": "string" },
+                    "checkpoint_id": { "type": "string" }
+                },
+                "required": ["session_id", "checkpoint_id"]
+            }
+        }),
+        json!({
+            "name": "list_session_checkpoints",
+            "description": "List saved session checkpoints for a profile, sorted newest first.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "profile": { "type": "string" }
+                },
+                "required": ["profile"]
+            }
+        }),
+        json!({
+            "name": "delete_session_checkpoint",
+            "description": "Delete a saved session checkpoint (does not delete constituent snapshots).",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "profile": { "type": "string" },
+                    "checkpoint_id": { "type": "string" }
+                },
+                "required": ["profile", "checkpoint_id"]
             }
         }),
         json!({
@@ -1066,6 +1125,7 @@ pub(crate) fn list_profiles_response(config: &PagerunnerConfig) -> String {
             json!({
                 "name": p.name,
                 "display_name": p.display_name,
+                "kind": p.kind.as_deref().unwrap_or("personal"),
             })
         })
         .collect();
@@ -1780,6 +1840,19 @@ async fn dispatch_tool_inner(
             }).to_string())
         }
 
+        "close_tab" => {
+            let sid = args["session_id"]
+                .as_str()
+                .ok_or_else(|| PagerunnerError::Config("Missing session_id".into()))?;
+            let target_id = args["target_id"]
+                .as_str()
+                .ok_or_else(|| PagerunnerError::Config("Missing target_id".into()))?;
+            let mut mgr = sessions.lock().await;
+            let session = mgr.get_live(sid)?;
+            browser::close_tab(&session.cdp, target_id).await?;
+            Ok(serde_json::json!({"ok": true, "target_id": target_id}).to_string())
+        }
+
         "navigate" => {
             let sid = args["session_id"]
                 .as_str()
@@ -2462,6 +2535,71 @@ async fn dispatch_tool_inner(
             Ok(serde_json::json!({"ok": true, "tabs_restored": urls.len(), "urls": urls}).to_string())
         }
 
+        "save_session_checkpoint" => {
+            let sid = args["session_id"]
+                .as_str()
+                .ok_or_else(|| PagerunnerError::Config("Missing session_id".into()))?;
+            let name = args["name"].as_str();
+            let mut mgr = sessions.lock().await;
+            let session = mgr.get_live(sid)?;
+            let ckpt = crate::checkpoint::save_session_checkpoint(session, name, &db).await?;
+            Ok(serde_json::json!({
+                "ok": true,
+                "checkpoint_id": ckpt.checkpoint_id,
+                "name": ckpt.name,
+            }).to_string())
+        }
+
+        "restore_session_checkpoint" => {
+            let sid = args["session_id"]
+                .as_str()
+                .ok_or_else(|| PagerunnerError::Config("Missing session_id".into()))?;
+            let ckpt_id = args["checkpoint_id"]
+                .as_str()
+                .ok_or_else(|| PagerunnerError::Config("Missing checkpoint_id".into()))?;
+            let mut mgr = sessions.lock().await;
+            let session = mgr.get_live(sid)?;
+            let result = crate::checkpoint::restore_session_checkpoint(session, ckpt_id, &db).await?;
+            Ok(result.to_string())
+        }
+
+        "list_session_checkpoints" => {
+            let profile = args["profile"]
+                .as_str()
+                .ok_or_else(|| PagerunnerError::Config("Missing profile".into()))?;
+            let checkpoints = crate::checkpoint::list_checkpoints(&db, profile)?;
+            let data: Vec<serde_json::Value> = checkpoints
+                .iter()
+                .map(|c| {
+                    let mut seen = std::collections::HashSet::new();
+                    let origins: Vec<&str> = c.tabs.iter()
+                        .filter(|t| seen.insert(t.origin.as_str()))
+                        .map(|t| t.origin.as_str())
+                        .collect();
+                    serde_json::json!({
+                        "checkpoint_id": c.checkpoint_id,
+                        "name": c.name,
+                        "saved_at": c.saved_at,
+                        "profile": c.profile,
+                        "tab_count": c.tabs.len(),
+                        "origins": origins,
+                    })
+                })
+                .collect();
+            Ok(serde_json::json!({"ok": true, "data": data}).to_string())
+        }
+
+        "delete_session_checkpoint" => {
+            let profile = args["profile"]
+                .as_str()
+                .ok_or_else(|| PagerunnerError::Config("Missing profile".into()))?;
+            let ckpt_id = args["checkpoint_id"]
+                .as_str()
+                .ok_or_else(|| PagerunnerError::Config("Missing checkpoint_id".into()))?;
+            crate::checkpoint::delete_checkpoint(&db, profile, ckpt_id)?;
+            Ok(serde_json::json!({"ok": true}).to_string())
+        }
+
         "kv_set" => {
             let ns = args["namespace"]
                 .as_str()
@@ -3026,9 +3164,14 @@ mod tests {
         assert!(tools.iter().any(|t| t["name"] == "open_session"));
         assert!(tools.iter().any(|t| t["name"] == "screenshot"));
         assert!(tools.iter().any(|t| t["name"] == "new_tab"));
+        assert!(tools.iter().any(|t| t["name"] == "close_tab"));
         assert!(tools.iter().any(|t| t["name"] == "evaluate"));
         assert!(tools.iter().any(|t| t["name"] == "click"));
         assert!(tools.iter().any(|t| t["name"] == "type_text"));
+        assert!(tools.iter().any(|t| t["name"] == "save_session_checkpoint"));
+        assert!(tools.iter().any(|t| t["name"] == "restore_session_checkpoint"));
+        assert!(tools.iter().any(|t| t["name"] == "list_session_checkpoints"));
+        assert!(tools.iter().any(|t| t["name"] == "delete_session_checkpoint"));
     }
 
     #[test]
@@ -3668,6 +3811,7 @@ Normal visible content here."#;
                 name: "personal".into(),
                 display_name: "Personal".into(),
                 user_data_dir: "/tmp/p".into(),
+                kind: None,
             }],
             ..Default::default()
         };
@@ -3681,6 +3825,32 @@ Normal visible content here."#;
             !result.contains("pagerunner init"),
             "should not show hint when profiles exist"
         );
+    }
+
+    #[test]
+    fn list_profiles_response_includes_kind_field() {
+        let config = crate::config::PagerunnerConfig {
+            profiles: vec![
+                crate::config::ChromeProfile {
+                    name: "personal".into(),
+                    display_name: "Personal".into(),
+                    user_data_dir: "/tmp/p".into(),
+                    kind: None,
+                },
+                crate::config::ChromeProfile {
+                    name: "agent-1".into(),
+                    display_name: "Agent 1".into(),
+                    user_data_dir: "/tmp/a".into(),
+                    kind: Some("agent".into()),
+                },
+            ],
+            ..Default::default()
+        };
+        let result = list_profiles_response(&config);
+        let v: serde_json::Value = serde_json::from_str(&result).unwrap();
+        let data = v["data"].as_array().unwrap();
+        assert_eq!(data[0]["kind"], "personal"); // None → "personal"
+        assert_eq!(data[1]["kind"], "agent");
     }
 
     #[tokio::test]

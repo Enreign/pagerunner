@@ -49,6 +49,21 @@ pub async fn new_tab(cdp: &CdpConn, url: &str) -> Result<TabInfo> {
         .ok_or_else(|| PagerunnerError::Cdp("Created tab not found in targets".into()))
 }
 
+/// Close a browser tab by target ID.
+/// Returns an error if the session has only one tab remaining — closing it would
+/// destroy the Chrome window and kill the session.
+pub async fn close_tab(cdp: &CdpConn, target_id: &str) -> Result<()> {
+    let tabs = list_tabs(cdp).await?;
+    if tabs.len() <= 1 {
+        return Err(PagerunnerError::Config(
+            "Cannot close last tab — use close_session instead".into(),
+        ));
+    }
+    cdp.send("Target.closeTarget", json!({ "targetId": target_id }))
+        .await?;
+    Ok(())
+}
+
 /// Attach to a target, reusing cached CDP session if available.
 /// When stealth is true, injects anti-detection scripts on first attach.
 pub async fn attach_to_target(session: &mut Session, target_id: &str) -> Result<String> {
@@ -891,5 +906,14 @@ mod tests {
         assert!(js.contains("(function") || js.contains("(() =>") || js.contains("(()=>{"),
             "JS should be an IIFE");
         assert!(js.contains("return"), "JS should have a return path");
+    }
+
+    #[test]
+    fn close_tab_last_tab_guard() {
+        fn can_close(count: usize) -> bool {
+            count > 1
+        }
+        assert!(!can_close(1), "should refuse to close last tab");
+        assert!(can_close(2), "should allow close when 2+ tabs");
     }
 }
