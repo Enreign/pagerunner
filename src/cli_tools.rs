@@ -73,6 +73,26 @@ pub async fn run_tool(
     Ok(())
 }
 
+/// Generate a JS adapter via the Claude API and store it in site knowledge.
+/// Fails with a clear error if ANTHROPIC_API_KEY is not set.
+pub async fn run_generate_adapter(
+    origin: &str,
+    name: &str,
+    description: Option<&str>,
+    config: &PagerunnerConfig,
+) -> anyhow::Result<()> {
+    // Fail fast with a clear message if the API key is missing.
+    if std::env::var("ANTHROPIC_API_KEY").is_err() {
+        anyhow::bail!("ANTHROPIC_API_KEY not set — cannot generate adapter");
+    }
+
+    let mut args = serde_json::json!({"origin": origin, "name": name});
+    if let Some(desc) = description {
+        args["description"] = serde_json::Value::String(desc.to_string());
+    }
+    run_tool("generate_adapter", args, ScreenshotMode::File, config).await
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

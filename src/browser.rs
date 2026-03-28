@@ -242,15 +242,7 @@ pub async fn click(session: &mut Session, target_id: &str, selector: &str) -> Re
     let session_id = attach_to_target(session, target_id).await?;
     let stealth = session.stealth;
 
-    let js = format!(
-        r#"(() => {{
-            const el = document.querySelector({});
-            if (!el) return null;
-            const r = el.getBoundingClientRect();
-            return {{ x: r.x + r.width / 2, y: r.y + r.height / 2 }};
-        }})()"#,
-        serde_json::to_string(selector).unwrap_or_else(|_| format!("\"{}\"", selector))
-    );
+    let js = build_selector_chain_js(selector);
 
     let result = session
         .cdp
@@ -503,21 +495,44 @@ pub async fn fill(
     value: &str,
 ) -> Result<()> {
     let session_id = attach_to_target(session, target_id).await?;
+    let sel_json = serde_json::to_string(selector)
+        .unwrap_or_else(|_| format!("\"{}\"", selector.replace('"', "\\\"")));
+    let val_json = serde_json::to_string(value)
+        .unwrap_or_else(|_| format!("\"{}\"", value.replace('"', "\\\"")));
     let js = format!(
         r#"(() => {{
-            const el = document.querySelector({sel});
+            const _sel = {sel};
+            let el = document.querySelector(_sel);
+            if (!el) {{
+                const _hint = (() => {{
+                    const _td = _sel.match(/data-testid=["']?([^"'\]]+)/);
+                    if (_td) return _td[1].toLowerCase().replace(/-/g, ' ');
+                    if (_sel.startsWith('#')) return _sel.slice(1).replace(/-/g, ' ');
+                    if (_sel.startsWith('.')) return _sel.replace(/^\./, '').replace(/-/g, ' ');
+                    const _cm = _sel.match(/\.([a-zA-Z0-9_-]+)/);
+                    if (_cm) return _cm[1].replace(/-/g, ' ');
+                    return null;
+                }})();
+                if (_hint) {{
+                    el = document.querySelector('[data-testid*="' + _hint + '"]')
+                      || document.querySelector('[aria-label*="' + _hint + '"]')
+                      || Array.from(document.querySelectorAll('button,a,[role="button"],[type="submit"]'))
+                             .find(function(b) {{ return b.textContent.toLowerCase().includes(_hint); }})
+                      || null;
+                }}
+            }}
             if (!el) return false;
             const proto = el instanceof HTMLTextAreaElement
                 ? window.HTMLTextAreaElement.prototype
                 : window.HTMLInputElement.prototype;
-            const nativeSetter = Object.getOwnPropertyDescriptor(proto, 'value').set;
-            nativeSetter.call(el, {val});
-            el.dispatchEvent(new Event('input',  {{ bubbles: true }}));
+            const nativeInputValueSetter = Object.getOwnPropertyDescriptor(proto, 'value').set;
+            nativeInputValueSetter.call(el, {val});
+            el.dispatchEvent(new Event('input', {{ bubbles: true }}));
             el.dispatchEvent(new Event('change', {{ bubbles: true }}));
             return true;
         }})()"#,
-        sel = serde_json::to_string(selector).unwrap(),
-        val = serde_json::to_string(value).unwrap(),
+        sel = sel_json,
+        val = val_json,
     );
     let result = session
         .cdp
@@ -587,16 +602,37 @@ pub async fn select_option(
     value: &str,
 ) -> Result<()> {
     let session_id = attach_to_target(session, target_id).await?;
+    let sel_json = serde_json::to_string(selector)
+        .unwrap_or_else(|_| format!("\"{}\"", selector.replace('"', "\\\"")));
+    let val_json = serde_json::to_string(value)
+        .unwrap_or_else(|_| format!("\"{}\"", value.replace('"', "\\\"")));
     let js = format!(
         r#"(() => {{
-            const el = document.querySelector({sel});
+            const _sel = {sel};
+            let el = document.querySelector(_sel);
+            if (!el) {{
+                const _hint = (() => {{
+                    const _td = _sel.match(/data-testid=["']?([^"'\]]+)/);
+                    if (_td) return _td[1].toLowerCase().replace(/-/g, ' ');
+                    if (_sel.startsWith('#')) return _sel.slice(1).replace(/-/g, ' ');
+                    if (_sel.startsWith('.')) return _sel.replace(/^\./, '').replace(/-/g, ' ');
+                    const _cm = _sel.match(/\.([a-zA-Z0-9_-]+)/);
+                    if (_cm) return _cm[1].replace(/-/g, ' ');
+                    return null;
+                }})();
+                if (_hint) {{
+                    el = document.querySelector('[data-testid*="' + _hint + '"]')
+                      || document.querySelector('[aria-label*="' + _hint + '"]')
+                      || null;
+                }}
+            }}
             if (!el) return false;
             el.value = {val};
             el.dispatchEvent(new Event('change', {{ bubbles: true }}));
             return true;
         }})()"#,
-        sel = serde_json::to_string(selector).unwrap(),
-        val = serde_json::to_string(value).unwrap(),
+        sel = sel_json,
+        val = val_json,
     );
     let result = session
         .cdp
@@ -654,6 +690,89 @@ pub async fn navigate_to_blank(cdp: &CdpConn, target_id: &str) -> Result<()> {
     Ok(())
 }
 
+/// Build a JavaScript IIFE that tries the given selector and falls back to
+/// data-testid / aria-label / text-content alternatives when querySelector fails.
+/// Returns `null` only if all strategies fail.
+/// The result is `{x, y}` (click coordinates) for use in the `click` function,
+/// or a boolean (true = found) for use in fill/select.
+pub fn build_selector_chain_js(selector: &str) -> String {
+    let sel_json = serde_json::to_string(selector)
+        .unwrap_or_else(|_| format!("\"{}\"", selector.replace('"', "\\\"")));
+    format!(
+        r#"(() => {{
+            const _sel = {sel};
+            let _el = document.querySelector(_sel);
+            if (!_el) {{
+                const _hint = (() => {{
+                    const _td = _sel.match(/data-testid=["']?([^"'\]]+)/);
+                    if (_td) return _td[1].toLowerCase().replace(/-/g, ' ');
+                    if (_sel.startsWith('#')) return _sel.slice(1).replace(/-/g, ' ');
+                    if (_sel.startsWith('.')) return _sel.replace(/^\./, '').replace(/-/g, ' ');
+                    const _cm = _sel.match(/\.([a-zA-Z0-9_-]+)/);
+                    if (_cm) return _cm[1].replace(/-/g, ' ');
+                    return null;
+                }})();
+                if (_hint) {{
+                    _el = document.querySelector('[data-testid*="' + _hint + '"]')
+                       || document.querySelector('[aria-label*="' + _hint + '"]')
+                       || Array.from(document.querySelectorAll('button,a,[role="button"],[type="submit"]'))
+                              .find(function(b) {{ return b.textContent.toLowerCase().includes(_hint); }})
+                       || null;
+                }}
+            }}
+            if (!_el) return null;
+            const _r = _el.getBoundingClientRect();
+            return {{ x: _r.x + _r.width / 2, y: _r.y + _r.height / 2, _fallback: !document.querySelector(_sel) }};
+        }})()"#,
+        sel = sel_json
+    )
+}
+
+/// Update selector stability in site_knowledge. Best-effort — never fails the tool call.
+pub fn update_selector_stability(
+    store: &crate::site_knowledge::SiteKnowledgeStore,
+    origin: &str,
+    selector: &str,
+    success: bool,
+) {
+    if selector.len() > 2048 {
+        return; // cap: silently drop oversized selectors
+    }
+    let now = crate::site_knowledge::now_micros();
+    let mut entry = store.get(origin).unwrap_or_default().unwrap_or_default();
+    let sel = entry.selectors.entry(selector.to_string()).or_default();
+    if success {
+        sel.successes += 1;
+    } else {
+        sel.failures += 1;
+    }
+    sel.last_seen = now;
+    entry.last_updated = now;
+    let _ = store.put(origin, &entry);
+}
+
+/// Build fragility warning metadata if the selector is fragile.
+pub fn fragility_warning(
+    store: &crate::site_knowledge::SiteKnowledgeStore,
+    origin: &str,
+    selector: &str,
+) -> Option<serde_json::Value> {
+    let entry = store.get(origin).ok()??;
+    let sel = entry.selectors.get(selector)?;
+    if !crate::site_knowledge::SiteKnowledgeStore::is_fragile(sel) {
+        return None;
+    }
+    let total = sel.successes + sel.failures;
+    let rate = (sel.failures as f64 / total as f64 * 100.0) as u32;
+    Some(serde_json::json!({
+        "_warning": format!(
+            "Selector '{}' has a {}% failure rate ({}/{} uses) on {} — consider finding a more stable selector",
+            selector, rate, sel.failures, total, origin
+        ),
+        "_hint": format!("Use get_site_knowledge('{}') to see alternative selectors with better reliability", origin)
+    }))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -675,5 +794,102 @@ mod tests {
     fn test_scroll_selector_error_message() {
         let err = PagerunnerError::Cdp("Selector not found: #off-screen".into());
         assert!(err.to_string().contains("#off-screen"));
+    }
+
+    #[test]
+    fn update_selector_stability_records_success() {
+        let dir = tempfile::tempdir().unwrap();
+        let key = crate::db::Db::generate_key();
+        let db = std::sync::Arc::new(
+            crate::db::Db::open_with_key(dir.path().join("t.db").to_str().unwrap(), key).unwrap()
+        );
+        let store = crate::site_knowledge::SiteKnowledgeStore::new(db, key);
+
+        update_selector_stability(&store, "https://linear.app", ".submit-btn", true);
+
+        let entry = store.get("https://linear.app").unwrap().unwrap();
+        let sel = entry.selectors.get(".submit-btn").unwrap();
+        assert_eq!(sel.successes, 1);
+        assert_eq!(sel.failures, 0);
+    }
+
+    #[test]
+    fn update_selector_stability_records_failure() {
+        let dir = tempfile::tempdir().unwrap();
+        let key = crate::db::Db::generate_key();
+        let db = std::sync::Arc::new(
+            crate::db::Db::open_with_key(dir.path().join("t.db").to_str().unwrap(), key).unwrap()
+        );
+        let store = crate::site_knowledge::SiteKnowledgeStore::new(db, key);
+
+        update_selector_stability(&store, "https://linear.app", ".submit-btn", false);
+
+        let entry = store.get("https://linear.app").unwrap().unwrap();
+        let sel = entry.selectors.get(".submit-btn").unwrap();
+        assert_eq!(sel.successes, 0);
+        assert_eq!(sel.failures, 1);
+    }
+
+    #[test]
+    fn fragility_warning_returned_when_failure_rate_exceeds_threshold() {
+        let dir = tempfile::tempdir().unwrap();
+        let key = crate::db::Db::generate_key();
+        let db = std::sync::Arc::new(
+            crate::db::Db::open_with_key(dir.path().join("t.db").to_str().unwrap(), key).unwrap()
+        );
+        let store = crate::site_knowledge::SiteKnowledgeStore::new(db, key);
+        let origin = "https://linear.app";
+        let selector = ".submit-btn";
+
+        // 3 successes + 7 failures = 70% failure rate (> 30%, >= 5 samples)
+        for _ in 0..3 { update_selector_stability(&store, origin, selector, true); }
+        for _ in 0..7 { update_selector_stability(&store, origin, selector, false); }
+
+        let warning = fragility_warning(&store, origin, selector);
+        assert!(warning.is_some(), "expected fragility warning");
+        let w = warning.unwrap();
+        let warning_text = w["_warning"].as_str().unwrap();
+        assert!(warning_text.contains("linear.app"));
+        assert!(warning_text.contains(".submit-btn"));
+        assert!(w["_hint"].as_str().is_some());
+    }
+
+    #[test]
+    fn fragility_warning_absent_below_5_samples() {
+        let dir = tempfile::tempdir().unwrap();
+        let key = crate::db::Db::generate_key();
+        let db = std::sync::Arc::new(
+            crate::db::Db::open_with_key(dir.path().join("t.db").to_str().unwrap(), key).unwrap()
+        );
+        let store = crate::site_knowledge::SiteKnowledgeStore::new(db, key);
+        let origin = "https://linear.app";
+        let selector = ".btn";
+
+        // 4 failures but only 4 total — under the 5-sample minimum
+        for _ in 0..4 { update_selector_stability(&store, origin, selector, false); }
+
+        assert!(fragility_warning(&store, origin, selector).is_none());
+    }
+
+    #[test]
+    fn selector_chain_js_includes_original_selector() {
+        let js = build_selector_chain_js("#my-btn");
+        assert!(js.contains("#my-btn"), "JS should include original selector");
+    }
+
+    #[test]
+    fn selector_chain_js_includes_data_testid_fallback() {
+        let js = build_selector_chain_js("#my-btn");
+        assert!(js.contains("data-testid") || js.contains("aria-label"),
+            "JS should include attribute fallbacks");
+    }
+
+    #[test]
+    fn selector_chain_js_is_valid_js_expression() {
+        // Must be an IIFE returning a value
+        let js = build_selector_chain_js("button.submit");
+        assert!(js.contains("(function") || js.contains("(() =>") || js.contains("(()=>{"),
+            "JS should be an IIFE");
+        assert!(js.contains("return"), "JS should have a return path");
     }
 }

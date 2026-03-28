@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0] — Site Intelligence Tier
+
+### Added
+
+- `site_knowledge` encrypted ReDB table: persistent per-origin store for adapters, selector stability, and auth token vault refs
+- `get_site_knowledge` MCP tool + CLI: inspect what pagerunner has learned about a site
+- `register_adapter` MCP tool + CLI: store a JS adapter (agent-written) for direct API calls
+- `call_site_api` MCP tool + CLI: execute a stored adapter via AsyncFunction in the browser tab
+- Auth token detection at network ingestion: Bearer, Basic, X-API-Key, session cookies → encrypted site vault (never in ring buffer or logs)
+- Selector stability tracking: `click`/`fill`/`select` update per-origin per-selector success/failure counters; fragility warning appears in tool response when failure rate >30% over ≥5 uses
+- Seed adapters (compiled-in, trusted): GitHub (list-issues, create-issue, search-issues), Linear (create-issue, create-comment, update-status), Jira (create-issue, transition-issue), Notion (create-page, append-block), Gmail (list-messages, get-message)
+- `Page.frameNavigated` CDP event handler updates `tab_urls` in real-time via `frame_nav_processor` task
+- New audit events: `AdapterRegistered`, `AuthTokenDetected`, `SiteApiCalled`
+
 ## [0.1.1] — 2026-03-22
 
 ### Added - Hallucination Prevention

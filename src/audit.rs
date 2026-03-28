@@ -58,6 +58,19 @@ pub enum AuditEventKind {
         mode: String, // "tokenize" or "redact"
         entity_counts: std::collections::HashMap<String, usize>,
     },
+    AdapterRegistered {
+        origin: String,
+        name: String,
+        trusted: bool,
+    },
+    AuthTokenDetected {
+        origin: String,
+        kind: String, // "bearer", "basic", "api_key", "session_cookie" — never the raw value
+    },
+    SiteApiCalled {
+        origin: String,
+        adapter_name: String,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -166,6 +179,19 @@ pub fn build_args_summary(tool: &str, args: &serde_json::Value) -> String {
             } else {
                 "ms".to_string()
             }
+        }
+        "get_site_knowledge" => args["origin"].as_str().unwrap_or("?").to_string(),
+        "register_adapter" => {
+            let origin = args["origin"].as_str().unwrap_or("?");
+            let name = args["name"].as_str().unwrap_or("?");
+            format!("{}/{}", origin, name)
+            // NOTE: js_code is deliberately excluded
+        }
+        "call_site_api" => {
+            let origin = args["origin"].as_str().unwrap_or("?");
+            let name = args["name"].as_str().unwrap_or("?");
+            format!("{}/{}", origin, name)
+            // NOTE: params is deliberately excluded
         }
         // NEVER log the text/value for these — could be passwords
         "type_text" | "fill" | "select" => tool.to_string(),
@@ -282,6 +308,77 @@ mod tests {
         assert!(json.contains("ContentAnonymized"));
         assert!(json.contains("EMAIL"));
         assert!(!json.contains("user@example.com")); // values never logged
+    }
+
+    #[test]
+    fn build_args_summary_get_site_knowledge_logs_origin() {
+        let args = serde_json::json!({ "origin": "https://linear.app" });
+        let s = build_args_summary("get_site_knowledge", &args);
+        assert_eq!(s, "https://linear.app");
+    }
+
+    #[test]
+    fn build_args_summary_register_adapter_never_logs_js_code() {
+        let args = serde_json::json!({
+            "origin": "https://linear.app",
+            "name": "create-comment",
+            "js_code": "const secret = 'fetch(evil.com)';"
+        });
+        let s = build_args_summary("register_adapter", &args);
+        assert!(s.contains("linear.app"));
+        assert!(s.contains("create-comment"));
+        assert!(!s.contains("secret"));
+        assert!(!s.contains("evil"));
+    }
+
+    #[test]
+    fn build_args_summary_call_site_api_never_logs_params() {
+        let args = serde_json::json!({
+            "origin": "https://linear.app",
+            "name": "create-comment",
+            "params": { "secret_key": "hunter2" }
+        });
+        let s = build_args_summary("call_site_api", &args);
+        assert!(s.contains("linear.app"));
+        assert!(s.contains("create-comment"));
+        assert!(!s.contains("hunter2"));
+    }
+
+    #[test]
+    fn audit_event_adapter_registered_serializes() {
+        let kind = AuditEventKind::AdapterRegistered {
+            origin: "https://linear.app".into(),
+            name: "create-comment".into(),
+            trusted: false,
+        };
+        let json = serde_json::to_string(&kind).unwrap();
+        assert!(json.contains("AdapterRegistered"));
+        assert!(json.contains("linear.app"));
+        assert!(!json.contains("js_code"));
+        assert!(json.contains("trusted"));
+    }
+
+    #[test]
+    fn audit_event_auth_token_detected_serializes() {
+        let kind = AuditEventKind::AuthTokenDetected {
+            origin: "https://github.com".into(),
+            kind: "bearer".into(),
+        };
+        let json = serde_json::to_string(&kind).unwrap();
+        assert!(json.contains("AuthTokenDetected"));
+        assert!(!json.contains("token_value"));
+        assert!(json.contains("bearer")); // kind field is present in serialized output
+    }
+
+    #[test]
+    fn audit_event_site_api_called_serializes() {
+        let kind = AuditEventKind::SiteApiCalled {
+            origin: "https://linear.app".into(),
+            adapter_name: "create-comment".into(),
+        };
+        let json = serde_json::to_string(&kind).unwrap();
+        assert!(json.contains("SiteApiCalled"));
+        assert!(!json.contains("params"));
     }
 
     #[tokio::test]

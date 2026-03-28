@@ -1,5 +1,8 @@
+mod adapter_generator;
+mod adapters;
 mod anonymizer;
 mod audit;
+mod auth_token_detector;
 mod browser;
 mod cdp;
 mod chrome;
@@ -18,6 +21,9 @@ mod console_log;
 mod network_log;
 mod sanitizer;
 mod security;
+mod endpoint_mapper;
+mod schema_inference;
+mod site_knowledge;
 mod session;
 mod snapshot;
 mod stealth;
@@ -281,6 +287,50 @@ enum Commands {
         #[arg(long, default_value = "10")]
         limit: u64,
     },
+    /// Get what pagerunner knows about a site
+    #[command(name = "get-site-knowledge")]
+    GetSiteKnowledge {
+        /// Site origin, e.g. 'https://linear.app'
+        origin: String,
+    },
+    /// Register a JS adapter for direct API calls to a site
+    #[command(name = "register-adapter")]
+    RegisterAdapter {
+        /// Site origin
+        origin: String,
+        /// Unique adapter name
+        name: String,
+        /// Description of what this adapter does
+        description: String,
+        /// JS function body (receives 'params' and 'session' args)
+        js_code: String,
+    },
+    /// Call a registered site adapter
+    #[command(name = "call-site-api")]
+    CallSiteApi {
+        /// Session ID
+        session_id: String,
+        /// Target (tab) ID
+        target_id: String,
+        /// Site origin
+        origin: String,
+        /// Adapter name
+        name: String,
+        /// JSON params to pass to adapter
+        #[arg(long, default_value = "{}")]
+        params: String,
+    },
+    /// Generate a JS adapter for a site using the Claude API
+    #[command(name = "generate-adapter")]
+    GenerateAdapter {
+        /// Site origin, e.g. https://linear.app
+        origin: String,
+        /// Adapter name
+        name: String,
+        /// Optional description
+        #[arg(long)]
+        description: Option<String>,
+    },
     /// Download the NER model for PERSON/ORG name detection (requires --features ner build)
     DownloadModel,
 }
@@ -462,6 +512,21 @@ fn format_audit_event(event: &crate::audit::AuditEvent) -> String {
                 target_id,
                 mode,
                 counts.join(",")
+            )
+        }
+        crate::audit::AuditEventKind::AdapterRegistered { origin, name, trusted } => {
+            format!("[{}] ADAPTER_REGISTERED origin={} name={} trusted={}", ts, origin, name, trusted)
+        }
+        crate::audit::AuditEventKind::AuthTokenDetected { origin, kind } => {
+            format!("[{}] AUTH_TOKEN_DETECTED origin={} kind={}", ts, origin, kind)
+        }
+        crate::audit::AuditEventKind::SiteApiCalled {
+            origin,
+            adapter_name,
+        } => {
+            format!(
+                "[{}] SITE_API_CALLED origin={} adapter={}",
+                ts, origin, adapter_name
             )
         }
     }
@@ -1062,6 +1127,41 @@ async fn run() -> anyhow::Result<()> {
             )
             .await?;
         }
+        Commands::GetSiteKnowledge { origin } => {
+            let config = config::PagerunnerConfig::load()?;
+            crate::cli_tools::run_tool(
+                "get_site_knowledge",
+                serde_json::json!({"origin": origin}),
+                crate::cli_tools::ScreenshotMode::File,
+                &config,
+            )
+            .await?;
+        }
+        Commands::RegisterAdapter { origin, name, description, js_code } => {
+            let config = config::PagerunnerConfig::load()?;
+            crate::cli_tools::run_tool(
+                "register_adapter",
+                serde_json::json!({"origin": origin, "name": name, "description": description, "js_code": js_code}),
+                crate::cli_tools::ScreenshotMode::File,
+                &config,
+            )
+            .await?;
+        }
+        Commands::CallSiteApi { session_id, target_id, origin, name, params } => {
+            let config = config::PagerunnerConfig::load()?;
+            crate::cli_tools::run_tool(
+                "call_site_api",
+                serde_json::json!({"session_id": session_id, "target_id": target_id, "origin": origin, "name": name, "params": serde_json::from_str::<serde_json::Value>(&params).unwrap_or(serde_json::json!({}))}),
+                crate::cli_tools::ScreenshotMode::File,
+                &config,
+            )
+            .await?;
+        }
+        Commands::GenerateAdapter { origin, name, description } => {
+            let config = config::PagerunnerConfig::load()?;
+            crate::cli_tools::run_generate_adapter(&origin, &name, description.as_deref(), &config)
+                .await?;
+        }
         Commands::DownloadModel => {
             #[cfg(not(feature = "ner"))]
             {
@@ -1126,6 +1226,9 @@ async fn run() -> anyhow::Result<()> {
                         crate::audit::AuditEventKind::ContentAnonymized { session_id, .. } => {
                             Some(session_id)
                         }
+                        crate::audit::AuditEventKind::AdapterRegistered { .. }
+                        | crate::audit::AuditEventKind::AuthTokenDetected { .. }
+                        | crate::audit::AuditEventKind::SiteApiCalled { .. } => None,
                     };
                     event_sid == Some(sid.as_str())
                 });

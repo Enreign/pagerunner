@@ -426,6 +426,81 @@ pub fn all_tools() -> Vec<Value> {
                 "required": ["session_id"]
             }
         }),
+        json!({
+            "name": "get_site_knowledge",
+            "description": "Return what pagerunner has learned about a site: registered adapters (JS code for direct API calls), selector reliability scores, and detected auth token kinds. Use this before registering a new adapter to avoid duplicates.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "origin": {
+                        "type": "string",
+                        "description": "Site origin, e.g. 'https://linear.app'"
+                    }
+                },
+                "required": ["origin"]
+            }
+        }),
+        json!({
+            "name": "register_adapter",
+            "description": "Store a JS adapter for direct API calls to a site (bypasses DOM). The adapter body is executed via AsyncFunction in the browser tab. Use get_network_log to observe API calls, then write an adapter that replicates them with fetch().",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "origin": { "type": "string", "description": "Site origin, e.g. 'https://linear.app'" },
+                    "name": { "type": "string", "description": "Unique name for this adapter, e.g. 'create-comment'" },
+                    "description": { "type": "string", "description": "Human-readable description of what this adapter does" },
+                    "js_code": {
+                        "type": "string",
+                        "description": "JS function body. Receives 'params' (object from call_site_api) and 'session' ({origin}). Must return a value (use return or top-level await). Browser context provides cookies/auth automatically."
+                    },
+                    "params_schema": {
+                        "type": "object",
+                        "description": "Optional JSON schema describing the params this adapter expects. Informational only — not validated at runtime."
+                    }
+                },
+                "required": ["origin", "name", "description", "js_code"]
+            }
+        }),
+        json!({
+            "name": "call_site_api",
+            "description": "Execute a registered adapter by name, passing params. The adapter runs in the browser tab via AsyncFunction — it has full access to the session's cookies and auth. Faster and more reliable than DOM interactions for sites with stable APIs.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "session_id": { "type": "string" },
+                    "target_id": { "type": "string" },
+                    "origin": { "type": "string", "description": "Site origin the adapter is registered for" },
+                    "name": { "type": "string", "description": "Adapter name" },
+                    "params": {
+                        "type": "object",
+                        "description": "Parameters to pass to the adapter function"
+                    }
+                },
+                "required": ["session_id", "target_id", "origin", "name"]
+            }
+        }),
+        json!({
+            "name": "generate_adapter",
+            "description": "Generate a JavaScript adapter for a site using the Claude API, based on observed network traffic and endpoint knowledge. Requires ANTHROPIC_API_KEY env var. The generated adapter is stored and immediately available via call_site_api.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "origin": {
+                        "type": "string",
+                        "description": "Site origin to generate adapter for, e.g. 'https://linear.app'"
+                    },
+                    "name": {
+                        "type": "string",
+                        "description": "Adapter name, e.g. 'create_issue'"
+                    },
+                    "description": {
+                        "type": "string",
+                        "description": "Optional description of what the adapter should do. If omitted, Claude infers from observed endpoints."
+                    }
+                },
+                "required": ["origin", "name"]
+            }
+        }),
     ]
 }
 
@@ -1262,6 +1337,174 @@ fn check_ner_model(
     Ok(model_path)
 }
 
+fn validate_register_adapter_args(js_code: &str, name: &str, description: &str) -> crate::error::Result<()> {
+    if js_code.len() > 64 * 1024 {
+        return Err(crate::error::PagerunnerError::Config("js_code exceeds 64KB limit".into()));
+    }
+    if name.len() > 128 {
+        return Err(crate::error::PagerunnerError::Config("name exceeds 128 character limit".into()));
+    }
+    if description.len() > 1024 {
+        return Err(crate::error::PagerunnerError::Config("description exceeds 1KB limit".into()));
+    }
+    Ok(())
+}
+
+fn wrap_untrusted_web_content(s: &str) -> String {
+    format!("<<<UNTRUSTED_WEB_CONTENT>>>\n{}\n<<<UNTRUSTED_WEB_CONTENT>>>", s)
+}
+
+fn ensure_seed_adapters_loaded(
+    store: &crate::site_knowledge::SiteKnowledgeStore,
+    origin: &str,
+) -> crate::error::Result<()> {
+    let matching: Vec<_> = crate::adapters::seed_adapters()
+        .iter()
+        .filter(|a| a.origin == origin)
+        .collect();
+
+    if matching.is_empty() {
+        return Ok(());
+    }
+
+    let mut entry = store.get(origin)?.unwrap_or_default();
+    let mut changed = false;
+    let now = crate::site_knowledge::now_micros();
+
+    for seed in matching {
+        // Skip only if the adapter already exists AND is trusted (already loaded).
+        // If it's not trusted (user-registered with same name), overwrite with seed.
+        let should_insert = match entry.adapters.get(seed.name) {
+            None => true,
+            Some(a) if a.trusted => false,
+            Some(_) => true,
+        };
+        if should_insert {
+            entry.adapters.insert(seed.name.to_string(), crate::site_knowledge::AdapterEntry {
+                js_code: seed.js_code.to_string(),
+                description: seed.description.to_string(),
+                params_schema: None,
+                trusted: true,
+                created_at: now,
+                last_used: 0,
+                last_error: None,
+                ..Default::default()
+            });
+            changed = true;
+        }
+    }
+
+    if changed {
+        entry.last_updated = now;
+        store.put(origin, &entry)?;
+    }
+    Ok(())
+}
+
+fn check_call_site_api_origin(
+    mgr: &crate::session::SessionManager,
+    session_id: &str,
+    target_id: &str,
+    origin: &str,
+) -> crate::error::Result<()> {
+    let session = mgr.get(session_id)
+        .ok_or_else(|| crate::error::PagerunnerError::SessionNotFound(session_id.into()))?;
+    let tab_url = session.tab_urls.read()
+        .map_err(|_| crate::error::PagerunnerError::Config("tab_urls lock poisoned".into()))?
+        .get(target_id)
+        .cloned()
+        .ok_or_else(|| crate::error::PagerunnerError::Config(
+            format!("Target '{}' not found or no URL recorded", target_id)
+        ))?;
+    let tab_origin = crate::network_log::url_to_origin(&tab_url)
+        .ok_or_else(|| crate::error::PagerunnerError::Config("Cannot determine tab origin".into()))?;
+    if tab_origin != origin {
+        return Err(crate::error::PagerunnerError::Config(format!(
+            "Adapter origin '{}' does not match tab origin '{}'. Navigate to the correct origin first.",
+            origin, tab_origin
+        )));
+    }
+    Ok(())
+}
+
+fn check_call_site_api_allowed_domains(
+    mgr: &crate::session::SessionManager,
+    session_id: &str,
+    origin: &str,
+) -> crate::error::Result<()> {
+    let session = mgr.get(session_id)
+        .ok_or_else(|| crate::error::PagerunnerError::SessionNotFound(session_id.into()))?;
+    if let Some(policy) = &session.security_policy {
+        // Use check_navigate which enforces both private-IP blocking and allowed_domains list.
+        // Append "/" so check_navigate can parse it as a valid URL.
+        let check_url = if origin.ends_with('/') {
+            origin.to_string()
+        } else {
+            format!("{}/", origin)
+        };
+        policy.check_navigate(&check_url)
+            .map_err(|e| crate::error::PagerunnerError::Config(format!(
+                "Origin '{}' is not permitted by the session's allowed_domains policy: {}", origin, e
+            )))?;
+    }
+    Ok(())
+}
+
+fn build_site_knowledge_response(
+    entry: &crate::site_knowledge::SiteKnowledgeEntry,
+    origin: &str,
+) -> serde_json::Value {
+    let adapters: serde_json::Value = entry.adapters.iter().map(|(name, adapter)| {
+        (name.clone(), serde_json::json!({
+            "description": adapter.description,
+            "trusted": adapter.trusted,
+            "js_code": format!("<<<ADAPTER_CODE>>>\n{}\n<<<ADAPTER_CODE>>>", adapter.js_code),
+            "params_schema": adapter.params_schema,
+            "last_used": adapter.last_used,
+        }))
+    }).collect::<serde_json::Map<_, _>>().into();
+
+    let selectors: serde_json::Value = {
+        let mut sel_list: Vec<_> = entry.selectors.iter().collect();
+        sel_list.sort_by(|(_, a), (_, b)| {
+            let score_a = crate::site_knowledge::SiteKnowledgeStore::reliability_score(a).unwrap_or(0.5);
+            let score_b = crate::site_knowledge::SiteKnowledgeStore::reliability_score(b).unwrap_or(0.5);
+            score_b.partial_cmp(&score_a).unwrap_or(std::cmp::Ordering::Equal)
+        });
+        sel_list.iter().map(|(sel, s)| serde_json::json!({
+            "selector": sel,
+            "successes": s.successes,
+            "failures": s.failures,
+            "reliability": crate::site_knowledge::SiteKnowledgeStore::reliability_score(s),
+        })).collect::<Vec<_>>().into()
+    };
+
+    // Auth tokens: vault refs only (never raw values)
+    let auth_tokens: serde_json::Value = entry.auth_tokens.iter()
+        .map(|(k, v)| (k.clone(), serde_json::Value::String(v.vault_ref.clone())))
+        .collect::<serde_json::Map<_, _>>().into();
+
+    let endpoints: Vec<serde_json::Value> = entry.endpoints.iter().map(|(key, ep)| {
+        serde_json::json!({
+            "key": key,
+            "method": ep.method,
+            "path_pattern": ep.path_pattern,
+            "api_kind": format!("{:?}", ep.api_kind),
+            "crud_op": ep.crud_op.as_ref().map(|c| format!("{:?}", c)),
+            "observations": ep.observation_count,
+            "has_schema": ep.schema.is_some(),
+        })
+    }).collect();
+
+    serde_json::json!({
+        "origin": origin,
+        "adapters": adapters,
+        "selectors": selectors,
+        "auth_tokens": auth_tokens,
+        "endpoints": endpoints,
+    })
+}
+
 async fn dispatch_tool_inner(
     tool: &str,
     args: &Value,
@@ -1271,6 +1514,13 @@ async fn dispatch_tool_inner(
     audit: Option<&crate::audit::AuditLog>,
     sec_violation: &mut bool,
 ) -> crate::error::Result<String> {
+    // Site knowledge store is available to all tool handlers (get_site_knowledge,
+    // register_adapter, call_site_api, open_session for token detection).
+    let site_store = std::sync::Arc::new(crate::site_knowledge::SiteKnowledgeStore::new(
+        Arc::clone(&db),
+        db.master_key(),
+    ));
+
     match tool {
         "list_profiles" => Ok(list_profiles_response(config)),
 
@@ -1372,7 +1622,7 @@ async fn dispatch_tool_inner(
 
             let id = {
                 let mut mgr = sessions.lock().await;
-                let session_id = mgr.open(&profile, stealth, Some(policy), Arc::clone(&db), &config.network).await?;
+                let session_id = mgr.open(&profile, stealth, Some(policy), Arc::clone(&db), &config.network, Some(std::sync::Arc::clone(&site_store))).await?;
                 if anon_config_result.is_some() {
                     if let Some(session) = mgr.get_mut(&session_id) {
                         session.anon_config = anon_config_result;
@@ -1574,7 +1824,9 @@ async fn dispatch_tool_inner(
 
             browser::navigate(session, tid, url).await?;
             // Record URL after successful navigation for untrusted-content domain labeling.
-            session.tab_urls.insert(tid.to_string(), url.to_string());
+            if let Ok(mut map) = session.tab_urls.write() {
+                map.insert(tid.to_string(), url.to_string());
+            }
             Ok(serde_json::json!({"ok": true, "url": url, "target_id": tid}).to_string())
         }
 
@@ -1592,8 +1844,10 @@ async fn dispatch_tool_inner(
             // Use the URL recorded at navigate time for the untrusted-content domain label.
             let domain = session
                 .tab_urls
-                .get(tid)
-                .and_then(|u| url::Url::parse(u).ok())
+                .read()
+                .ok()
+                .and_then(|map| map.get(tid).cloned())
+                .and_then(|u| url::Url::parse(&u).ok())
                 .and_then(|u| u.host_str().map(|h| h.to_string()))
                 .unwrap_or_else(|| "unknown".to_string());
 
@@ -1786,8 +2040,10 @@ async fn dispatch_tool_inner(
                 if policy.sanitize_content {
                     let domain = session
                         .tab_urls
-                        .get(tid)
-                        .and_then(|u| url::Url::parse(u).ok())
+                        .read()
+                        .ok()
+                        .and_then(|map| map.get(tid).cloned())
+                        .and_then(|u| url::Url::parse(&u).ok())
                         .and_then(|u| u.host_str().map(|h| h.to_string()))
                         .unwrap_or_else(|| "unknown".to_string());
                     let sanitized =
@@ -1836,8 +2092,35 @@ async fn dispatch_tool_inner(
                 .ok_or_else(|| crate::error::PagerunnerError::Config("Missing selector".into()))?;
             let mut mgr = sessions.lock().await;
             let session = mgr.get_live(sid)?;
-            browser::click(session, tid, selector).await?;
-            Ok(serde_json::json!({"ok": true, "selector": selector}).to_string())
+            let tab_url = session.tab_urls.read().ok().and_then(|m| m.get(tid).cloned());
+            let click_result = browser::click(session, tid, selector).await;
+            // Track selector stability — best-effort, never fails the tool call
+            if let Some(ref tab_url) = tab_url {
+                if let Some(origin) = crate::network_log::url_to_origin(tab_url) {
+                    let success = click_result.is_ok();
+                    browser::update_selector_stability(&site_store, &origin, selector, success);
+                }
+            }
+            // Compute fragility warning before propagating error — useful on both paths
+            let fragility = tab_url.as_deref()
+                .and_then(|u| crate::network_log::url_to_origin(u))
+                .and_then(|origin| browser::fragility_warning(&site_store, &origin, selector));
+            if let Err(e) = click_result {
+                if let Some(ref warning) = fragility {
+                    let warn_text = warning.get("_warning").and_then(|v| v.as_str()).unwrap_or("");
+                    return Err(crate::error::PagerunnerError::Config(format!("{e}. {warn_text}")));
+                }
+                return Err(e);
+            }
+            let mut resp = serde_json::json!({"ok": true, "selector": selector});
+            if let Some(ref warning) = fragility {
+                if let (Some(obj), Some(warn_obj)) = (resp.as_object_mut(), warning.as_object()) {
+                    for (k, v) in warn_obj {
+                        obj.insert(k.clone(), v.clone());
+                    }
+                }
+            }
+            Ok(resp.to_string())
         }
 
         "type_text" => {
@@ -1933,9 +2216,9 @@ async fn dispatch_tool_inner(
                         let _ = browser::navigate_to_blank(&session.cdp, tid).await;
                         // Evict stale cdp_sessions entry so next attach goes through fresh_attach cleanly.
                         session.cdp_sessions.remove(tid);
-                        session
-                            .tab_urls
-                            .insert(tid.to_string(), "about:blank".to_string());
+                        if let Ok(mut map) = session.tab_urls.write() {
+                            map.insert(tid.to_string(), "about:blank".to_string());
+                        }
                         record_security(
                             audit,
                             sec_violation,
@@ -1950,7 +2233,9 @@ async fn dispatch_tool_inner(
                         )));
                     }
                     // Update tab_urls with the actual URL for correct domain labeling in get_content.
-                    session.tab_urls.insert(tid.to_string(), actual.clone());
+                    if let Ok(mut map) = session.tab_urls.write() {
+                        map.insert(tid.to_string(), actual.clone());
+                    }
                 }
 
                 Ok(serde_json::json!({
@@ -2010,8 +2295,35 @@ async fn dispatch_tool_inner(
             } else {
                 value.to_string()
             };
-            browser::fill(session, tid, selector, &fill_value).await?;
-            Ok(serde_json::json!({"ok": true, "selector": selector}).to_string())
+            let tab_url = session.tab_urls.read().ok().and_then(|m| m.get(tid).cloned());
+            let fill_result = browser::fill(session, tid, selector, &fill_value).await;
+            // Track selector stability — best-effort, never fails the tool call
+            if let Some(ref tab_url) = tab_url {
+                if let Some(origin) = crate::network_log::url_to_origin(tab_url) {
+                    let success = fill_result.is_ok();
+                    browser::update_selector_stability(&site_store, &origin, selector, success);
+                }
+            }
+            // Compute fragility warning before propagating error — useful on both paths
+            let fragility = tab_url.as_deref()
+                .and_then(|u| crate::network_log::url_to_origin(u))
+                .and_then(|origin| browser::fragility_warning(&site_store, &origin, selector));
+            if let Err(e) = fill_result {
+                if let Some(ref warning) = fragility {
+                    let warn_text = warning.get("_warning").and_then(|v| v.as_str()).unwrap_or("");
+                    return Err(crate::error::PagerunnerError::Config(format!("{e}. {warn_text}")));
+                }
+                return Err(e);
+            }
+            let mut resp = serde_json::json!({"ok": true, "selector": selector});
+            if let Some(ref warning) = fragility {
+                if let (Some(obj), Some(warn_obj)) = (resp.as_object_mut(), warning.as_object()) {
+                    for (k, v) in warn_obj {
+                        obj.insert(k.clone(), v.clone());
+                    }
+                }
+            }
+            Ok(resp.to_string())
         }
 
         "select" => {
@@ -2029,8 +2341,35 @@ async fn dispatch_tool_inner(
                 .ok_or_else(|| crate::error::PagerunnerError::Config("Missing value".into()))?;
             let mut mgr = sessions.lock().await;
             let session = mgr.get_live(sid)?;
-            browser::select_option(session, tid, selector, value).await?;
-            Ok(serde_json::json!({"ok": true, "selector": selector, "value": value}).to_string())
+            let tab_url = session.tab_urls.read().ok().and_then(|m| m.get(tid).cloned());
+            let select_result = browser::select_option(session, tid, selector, value).await;
+            // Track selector stability — best-effort, never fails the tool call
+            if let Some(ref tab_url) = tab_url {
+                if let Some(origin) = crate::network_log::url_to_origin(tab_url) {
+                    let success = select_result.is_ok();
+                    browser::update_selector_stability(&site_store, &origin, selector, success);
+                }
+            }
+            // Compute fragility warning before propagating error — useful on both paths
+            let fragility = tab_url.as_deref()
+                .and_then(|u| crate::network_log::url_to_origin(u))
+                .and_then(|origin| browser::fragility_warning(&site_store, &origin, selector));
+            if let Err(e) = select_result {
+                if let Some(ref warning) = fragility {
+                    let warn_text = warning.get("_warning").and_then(|v| v.as_str()).unwrap_or("");
+                    return Err(crate::error::PagerunnerError::Config(format!("{e}. {warn_text}")));
+                }
+                return Err(e);
+            }
+            let mut resp = serde_json::json!({"ok": true, "selector": selector, "value": value});
+            if let Some(ref warning) = fragility {
+                if let (Some(obj), Some(warn_obj)) = (resp.as_object_mut(), warning.as_object()) {
+                    for (k, v) in warn_obj {
+                        obj.insert(k.clone(), v.clone());
+                    }
+                }
+            }
+            Ok(resp.to_string())
         }
 
         "scroll" => {
@@ -2324,6 +2663,307 @@ async fn dispatch_tool_inner(
                 "exceptions": exceptions,
             })
             .to_string())
+        }
+
+        "get_site_knowledge" => {
+            let origin = args["origin"].as_str()
+                .ok_or_else(|| PagerunnerError::Config("origin required".into()))?;
+            ensure_seed_adapters_loaded(&site_store, origin)?;
+            let now = crate::site_knowledge::now_micros();
+            match site_store.get(origin)? {
+                None => Ok(serde_json::to_string(&serde_json::Value::Null)?),
+                Some(mut entry) => {
+                    // Lazy TTL: if entry is expired, delete and return null
+                    if crate::site_knowledge::SiteKnowledgeStore::is_expired(&entry, now) {
+                        let _ = site_store.delete(origin);
+                        return Ok(serde_json::to_string(&serde_json::Value::Null)?);
+                    }
+                    // Prune stale adapters
+                    crate::site_knowledge::SiteKnowledgeStore::prune_stale_adapters(&mut entry, now);
+                    let response = build_site_knowledge_response(&entry, origin);
+                    Ok(serde_json::to_string(&response)?)
+                }
+            }
+        }
+
+        "register_adapter" => {
+            let origin = args["origin"].as_str()
+                .ok_or_else(|| PagerunnerError::Config("origin required".into()))?;
+            let name = args["name"].as_str()
+                .ok_or_else(|| PagerunnerError::Config("name required".into()))?;
+            let description = args["description"].as_str()
+                .ok_or_else(|| PagerunnerError::Config("description required".into()))?;
+            let js_code = args["js_code"].as_str()
+                .ok_or_else(|| PagerunnerError::Config("js_code required".into()))?;
+
+            validate_register_adapter_args(js_code, name, description)?;
+
+            let now = crate::site_knowledge::now_micros();
+            let mut entry = site_store.get(origin)?.unwrap_or_default();
+
+            // Block overwrite of trusted adapters
+            if let Some(existing) = entry.adapters.get(name) {
+                if existing.trusted {
+                    return Err(PagerunnerError::Config(format!(
+                        "Cannot overwrite trusted seed adapter '{}'. Use a different name to register a custom adapter for this origin.",
+                        name
+                    )));
+                }
+            }
+
+            entry.adapters.insert(name.to_string(), crate::site_knowledge::AdapterEntry {
+                js_code: js_code.to_string(),
+                description: description.to_string(),
+                params_schema: args.get("params_schema").cloned(),
+                trusted: false,
+                created_at: now,
+                last_used: 0,
+                last_error: None,
+                ..Default::default()
+            });
+            entry.last_updated = now;
+            site_store.put(origin, &entry)?;
+
+            if let Some(a) = audit {
+                let _ = a.record(crate::audit::AuditEvent::new(
+                    crate::audit::AuditEventKind::AdapterRegistered {
+                        origin: origin.to_string(),
+                        name: name.to_string(),
+                        trusted: false,
+                    }
+                )).await;
+            }
+
+            Ok(serde_json::to_string(&serde_json::json!({
+                "ok": true,
+                "origin": origin,
+                "name": name,
+            }))?)
+        }
+
+        "call_site_api" => {
+            let session_id = args["session_id"].as_str()
+                .ok_or_else(|| PagerunnerError::Config("session_id required".into()))?;
+            let target_id = args["target_id"].as_str()
+                .ok_or_else(|| PagerunnerError::Config("target_id required".into()))?;
+            let origin = args["origin"].as_str()
+                .ok_or_else(|| PagerunnerError::Config("origin required".into()))?;
+            let adapter_name = args["name"].as_str()
+                .ok_or_else(|| PagerunnerError::Config("name required".into()))?;
+            let params = args.get("params").cloned().unwrap_or(serde_json::json!({}));
+
+            ensure_seed_adapters_loaded(&site_store, origin)?;
+
+            // Get adapter (check it exists before locking session)
+            let sk_entry = site_store.get(origin)?
+                .ok_or_else(|| PagerunnerError::Config(format!(
+                    "No site knowledge for '{}'. Use register_adapter to add adapters, or get_site_knowledge to list available ones.", origin
+                )))?;
+            let adapter_entry = sk_entry.adapters.get(adapter_name)
+                .ok_or_else(|| PagerunnerError::Config(format!(
+                    "Adapter '{}' not found for origin '{}'. Use get_site_knowledge('{}') to list available adapters, or register_adapter to create one.",
+                    adapter_name, origin, origin
+                )))?;
+
+            // Check staleness BEFORE executing
+            if adapter_entry.is_stale {
+                // Trigger background regeneration if API key available
+                if std::env::var("ANTHROPIC_API_KEY").is_ok() {
+                    let store_clone = Arc::clone(&site_store);
+                    let origin_owned = origin.to_string();
+                    let name_owned = adapter_name.to_string();
+                    tokio::spawn(async move {
+                        let entry = store_clone.get(&origin_owned).unwrap_or_default().unwrap_or_default();
+                        match crate::adapter_generator::generate(&origin_owned, &entry, &name_owned).await {
+                            Ok(js_code) => {
+                                let mut updated = store_clone.get(&origin_owned).unwrap_or_default().unwrap_or_default();
+                                if let Some(adapter) = updated.adapters.get_mut(&name_owned) {
+                                    adapter.js_code = js_code;
+                                    adapter.consecutive_failures = 0;
+                                    adapter.is_stale = false;
+                                    updated.last_updated = crate::site_knowledge::now_micros();
+                                    let _ = store_clone.put(&origin_owned, &updated);
+                                }
+                            }
+                            Err(e) => {
+                                tracing::warn!("Background adapter regen failed for {}/{}: {}", origin_owned, name_owned, e);
+                            }
+                        }
+                    });
+                }
+
+                let site_warn = {
+                    let sk = site_store.get(origin)?.unwrap_or_default();
+                    if crate::site_knowledge::SiteKnowledgeStore::is_site_stale(&sk) {
+                        Some("Warning: more than 50% of adapters for this site are stale — the site API may have changed significantly.")
+                    } else {
+                        None
+                    }
+                };
+
+                return Ok(serde_json::to_string(&serde_json::json!({
+                    "error": format!("Adapter '{}' is stale after 3+ consecutive failures. Use DOM tools (click, fill, etc.) or call generate_adapter to regenerate it.", adapter_name),
+                    "adapter_status": "stale_using_dom_fallback",
+                    "site_changed": site_warn,
+                }))?);
+            }
+
+            let js_code = adapter_entry.js_code.clone();
+
+            // Security checks (non-async, using the sessions lock briefly)
+            {
+                let mgr = sessions.lock().await;
+                check_call_site_api_origin(&mgr, session_id, target_id, origin)?;
+                check_call_site_api_allowed_domains(&mgr, session_id, origin)?;
+            }
+
+            // Build AsyncFunction wrapper
+            let wrapped_js = format!(
+                r#"(async () => {{
+                    const AsyncFunction = Object.getPrototypeOf(async function(){{}}).constructor;
+                    const fn = new AsyncFunction('params', 'session', {js_code_json});
+                    return await fn({params_json}, {{ origin: {origin_json} }});
+                }})()"#,
+                js_code_json = serde_json::to_string(&js_code)?,
+                params_json = serde_json::to_string(&params)?,
+                origin_json = serde_json::to_string(origin)?,
+            );
+
+            // Execute via browser::evaluate — track success/failure for staleness detection
+            let result_value = {
+                let mut mgr = sessions.lock().await;
+                let session = mgr.get_live(session_id)?;
+                match browser::evaluate(session, target_id, &wrapped_js).await {
+                    Ok(v) => {
+                        // Reset failure count on success
+                        drop(mgr);
+                        if let Ok(Some(mut sk)) = site_store.get(origin) {
+                            if let Some(adapter) = sk.adapters.get_mut(adapter_name) {
+                                if adapter.consecutive_failures > 0 {
+                                    adapter.consecutive_failures = 0;
+                                    adapter.last_error = None;
+                                    sk.last_updated = crate::site_knowledge::now_micros();
+                                    let _ = site_store.put(origin, &sk);
+                                }
+                            }
+                        }
+                        v
+                    }
+                    Err(e) => {
+                        // Increment failure count, mark stale at threshold
+                        drop(mgr);
+                        if let Ok(Some(mut sk)) = site_store.get(origin) {
+                            if let Some(adapter) = sk.adapters.get_mut(adapter_name) {
+                                adapter.consecutive_failures += 1;
+                                adapter.last_error = Some(e.to_string());
+                                if adapter.consecutive_failures >= 3 {
+                                    adapter.is_stale = true;
+                                }
+                                sk.last_updated = crate::site_knowledge::now_micros();
+                                let _ = site_store.put(origin, &sk);
+                            }
+                        }
+                        return Err(e);
+                    }
+                }
+            };
+
+            let result_text = serde_json::to_string_pretty(&result_value)?;
+
+            // Apply anonymization if session has it enabled
+            let result_text = {
+                let mgr = sessions.lock().await;
+                if let Some(session) = mgr.get(session_id) {
+                    if let Some(anon_config) = session.anon_config.clone() {
+                        let decoded = crate::sanitizer::html_entity_decode(&result_text);
+                        let vault = crate::anonymizer::vault::Vault::new(Arc::clone(&db));
+                        #[cfg(feature = "ner")]
+                        let ner_disabled = config.ner.enabled == Some(false);
+                        let mut engine = {
+                            #[cfg(feature = "ner")]
+                            if ner_disabled {
+                                crate::anonymizer::AnonEngine::new_with_ner_disabled(vault, anon_config)
+                            } else {
+                                crate::anonymizer::AnonEngine::new(vault, anon_config)
+                            }
+                            #[cfg(not(feature = "ner"))]
+                            crate::anonymizer::AnonEngine::new(vault, anon_config)
+                        };
+                        engine.process(session_id, None, &decoded)
+                            .map(|r| r.output)
+                            .map_err(|e| crate::error::PagerunnerError::Config(e.to_string()))?
+                    } else {
+                        result_text
+                    }
+                } else {
+                    result_text
+                }
+            };
+
+            // Update last_used on adapter (best-effort)
+            if let Ok(Some(mut sk_entry)) = site_store.get(origin) {
+                if let Some(adapter) = sk_entry.adapters.get_mut(adapter_name) {
+                    adapter.last_used = crate::site_knowledge::now_micros();
+                    adapter.last_error = None;
+                }
+                sk_entry.last_updated = crate::site_knowledge::now_micros();
+                let _ = site_store.put(origin, &sk_entry);
+            }
+
+            if let Some(a) = audit {
+                let _ = a.record(crate::audit::AuditEvent::new(
+                    crate::audit::AuditEventKind::SiteApiCalled {
+                        origin: origin.to_string(),
+                        adapter_name: adapter_name.to_string(),
+                    }
+                )).await;
+            }
+
+            Ok(wrap_untrusted_web_content(&result_text))
+        }
+
+        "generate_adapter" => {
+            let origin = args["origin"].as_str()
+                .ok_or_else(|| PagerunnerError::Config("origin required".into()))?;
+            let adapter_name = args["name"].as_str()
+                .ok_or_else(|| PagerunnerError::Config("name required".into()))?;
+
+            ensure_seed_adapters_loaded(&site_store, origin)?;
+
+            let sk_entry = site_store.get(origin)?.unwrap_or_default();
+            let js_code = crate::adapter_generator::generate(origin, &sk_entry, adapter_name).await?;
+
+            // Validate size (same 64KB limit as register_adapter)
+            if js_code.len() > 65_536 {
+                return Err(PagerunnerError::Config(
+                    "Generated adapter exceeds 64KB limit — try requesting a more focused adapter".into()
+                ));
+            }
+
+            // Store the generated adapter
+            let mut entry = site_store.get(origin)?.unwrap_or_default();
+            let now = crate::site_knowledge::now_micros();
+            entry.adapters.insert(adapter_name.to_string(), crate::site_knowledge::AdapterEntry {
+                js_code: js_code.clone(),
+                description: args["description"].as_str()
+                    .unwrap_or("Auto-generated adapter")
+                    .to_string(),
+                params_schema: None,
+                trusted: false,
+                created_at: now,
+                last_used: 0,
+                last_error: None,
+                ..Default::default()
+            });
+            entry.last_updated = now;
+            site_store.put(origin, &entry)?;
+
+            Ok(serde_json::to_string(&serde_json::json!({
+                "ok": true,
+                "origin": origin,
+                "name": adapter_name,
+                "js_code_preview": &js_code[..js_code.len().min(200)]
+            }))?)
         }
 
         _ => Err(crate::error::PagerunnerError::Cdp(format!(
@@ -3451,5 +4091,189 @@ mod anon_detokenize_tests {
         vault.purge_session("sess1").unwrap();
         // Confirm it's gone
         assert!(vault.lookup_token("sess1", &token).unwrap().is_none());
+    }
+}
+
+#[cfg(test)]
+mod site_knowledge_response_tests {
+    use super::*;
+
+    #[test]
+    fn build_site_knowledge_response_wraps_js_code_in_adapter_code_markers() {
+        let mut entry = crate::site_knowledge::SiteKnowledgeEntry::default();
+        entry.adapters.insert("test-adapter".into(), crate::site_knowledge::AdapterEntry {
+            js_code: "return fetch('https://api.example.com').then(r => r.json());".into(),
+            description: "Test adapter".into(),
+            params_schema: None,
+            trusted: false,
+            created_at: 0,
+            last_used: 0,
+            last_error: None,
+            ..Default::default()
+        });
+
+        let response = build_site_knowledge_response(&entry, "https://example.com");
+        let js_code_field = response["adapters"]["test-adapter"]["js_code"].as_str().unwrap();
+        assert!(js_code_field.contains("<<<ADAPTER_CODE>>>"),
+            "js_code must be wrapped in ADAPTER_CODE markers, got: {}", js_code_field);
+        // Markers appear twice (open and close)
+        assert_eq!(js_code_field.matches("<<<ADAPTER_CODE>>>").count(), 2);
+        // Raw JS is still present between the markers
+        assert!(js_code_field.contains("fetch("));
+    }
+
+    #[test]
+    fn build_site_knowledge_response_returns_vault_refs_not_raw_tokens() {
+        let mut entry = crate::site_knowledge::SiteKnowledgeEntry::default();
+        entry.auth_tokens.insert("bearer".into(), crate::site_knowledge::AuthTokenEntry {
+            vault_ref: "site_vault:a3f9b2".into(),
+        });
+
+        let response = build_site_knowledge_response(&entry, "https://example.com");
+        let bearer = response["auth_tokens"]["bearer"].as_str().unwrap();
+        assert_eq!(bearer, "site_vault:a3f9b2");
+        // No raw token value
+        assert!(!bearer.contains("raw_") && !bearer.starts_with("Bearer "));
+    }
+
+    #[test]
+    fn build_site_knowledge_response_sorts_selectors_by_reliability_descending() {
+        let mut entry = crate::site_knowledge::SiteKnowledgeEntry::default();
+        // good selector: 9/10 success = 0.9
+        entry.selectors.insert("#good-btn".into(), crate::site_knowledge::SelectorEntry {
+            successes: 9, failures: 1, last_seen: 0,
+        });
+        // bad selector: 4/10 = 0.4
+        entry.selectors.insert(".bad-btn".into(), crate::site_knowledge::SelectorEntry {
+            successes: 4, failures: 6, last_seen: 0,
+        });
+
+        let response = build_site_knowledge_response(&entry, "https://example.com");
+        let selectors = response["selectors"].as_array().unwrap();
+        assert_eq!(selectors.len(), 2);
+        // First entry should be the more reliable one
+        assert_eq!(selectors[0]["selector"].as_str().unwrap(), "#good-btn");
+    }
+}
+
+#[cfg(test)]
+mod register_adapter_tests {
+    use super::*;
+
+    #[test]
+    fn register_adapter_rejects_oversized_js_code() {
+        let big = "x".repeat(64 * 1024 + 1);
+        let err = validate_register_adapter_args(&big, "test", "desc").unwrap_err();
+        assert!(err.to_string().contains("64KB"), "error was: {}", err);
+    }
+
+    #[test]
+    fn register_adapter_rejects_long_name() {
+        let long = "a".repeat(129);
+        let err = validate_register_adapter_args("return 1;", &long, "desc").unwrap_err();
+        assert!(err.to_string().contains("128"), "error was: {}", err);
+    }
+
+    #[test]
+    fn register_adapter_rejects_long_description() {
+        let long_desc = "d".repeat(1025);
+        let err = validate_register_adapter_args("return 1;", "name", &long_desc).unwrap_err();
+        assert!(err.to_string().contains("1KB"), "error was: {}", err);
+    }
+
+    #[test]
+    fn register_adapter_accepts_valid_args() {
+        assert!(validate_register_adapter_args("return fetch('/api').then(r=>r.json());", "my-adapter", "Does something").is_ok());
+    }
+
+    #[test]
+    fn wrap_untrusted_web_content_adds_markers() {
+        let raw = r#"{"data":"test"}"#;
+        let wrapped = wrap_untrusted_web_content(raw);
+        assert!(wrapped.starts_with("<<<UNTRUSTED_WEB_CONTENT>>>"));
+        assert!(wrapped.ends_with("<<<UNTRUSTED_WEB_CONTENT>>>"));
+        assert!(wrapped.contains(raw));
+        assert_eq!(wrapped.matches("<<<UNTRUSTED_WEB_CONTENT>>>").count(), 2);
+    }
+
+    #[test]
+    fn build_async_function_wrapper_includes_params_and_session() {
+        let js_code = "return params.foo + session.origin;";
+        let params = serde_json::json!({ "foo": "bar" });
+        let origin = "https://example.com";
+        let wrapped = format!(
+            r#"(async () => {{
+                const AsyncFunction = Object.getPrototypeOf(async function(){{}}).constructor;
+                const fn = new AsyncFunction('params', 'session', {js_code_json});
+                return await fn({params_json}, {{ origin: {origin_json} }});
+            }})()"#,
+            js_code_json = serde_json::to_string(js_code).unwrap(),
+            params_json = serde_json::to_string(&params).unwrap(),
+            origin_json = serde_json::to_string(origin).unwrap(),
+        );
+        assert!(wrapped.contains("AsyncFunction"));
+        assert!(wrapped.contains("params"));
+        assert!(wrapped.contains("session"));
+        assert!(wrapped.contains("example.com"));
+        assert!(wrapped.contains("params.foo"));
+    }
+
+    #[tokio::test]
+    async fn call_site_api_origin_mismatch_returns_error() {
+        let mut mgr = crate::session::SessionManager::new();
+        let sid = mgr.insert_stub(None).await;
+        let target_id = "T1".to_string();
+        // Tab is on example.com, not linear.app
+        {
+            let session = mgr.get_mut(&sid).unwrap();
+            session.tab_urls.write().unwrap().insert(target_id.clone(), "https://example.com/".into());
+        }
+
+        let result = check_call_site_api_origin(&mgr, &sid, &target_id, "https://linear.app");
+        assert!(result.is_err());
+        let msg = result.unwrap_err().to_string();
+        assert!(msg.contains("does not match") || msg.contains("origin"),
+            "unexpected error: {}", msg);
+    }
+
+    #[tokio::test]
+    async fn call_site_api_allowed_domains_blocks_disallowed_origin() {
+        use crate::security::SecurityPolicy;
+        use crate::config::SecurityConfig;
+
+        let policy = SecurityPolicy::from_config_with_overrides(
+            &SecurityConfig::default(),
+            Some(vec!["github.com".into()]),
+            None, None, None, None, None,
+        );
+        let mut mgr = crate::session::SessionManager::new();
+        let sid = mgr.insert_stub(Some(policy)).await;
+
+        // linear.app not in allowed_domains — should be blocked
+        let result = check_call_site_api_allowed_domains(&mgr, &sid, "https://linear.app");
+        assert!(result.is_err());
+        let msg = result.unwrap_err().to_string();
+        assert!(msg.contains("allowed_domains") || msg.contains("not permitted") || msg.contains("not in"),
+            "unexpected error: {}", msg);
+    }
+
+    #[tokio::test]
+    async fn call_site_api_blocked_by_tool_permission() {
+        use crate::security::SecurityPolicy;
+        use crate::config::SecurityConfig;
+
+        let cfg = SecurityConfig {
+            allowed_tools: vec!["navigate".into(), "get_content".into()],
+            ..SecurityConfig::default()
+        };
+        let policy = SecurityPolicy::from_config_with_overrides(
+            &cfg, None, None, None, None, None, None,
+        );
+        let mut mgr = crate::session::SessionManager::new();
+        let sid = mgr.insert_stub(Some(policy)).await;
+
+        let session = mgr.get(&sid).unwrap();
+        let permitted = session.security_policy.as_ref().unwrap().check_tool_permitted("call_site_api");
+        assert!(permitted.is_err(), "call_site_api should be blocked by tool permission policy");
     }
 }
