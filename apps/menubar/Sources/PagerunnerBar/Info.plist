@@ -14,6 +14,8 @@
     <string>1</string>
     <key>CFBundleShortVersionString</key>
     <string>0.1.0</string>
+    <key>CFBundleIconFile</key>
+    <string>AppIcon</string>
     <key>NSUserNotificationsUsageDescription</key>
     <string>Pagerunner notifies you about session crashes and daemon status changes.</string>
 </dict>

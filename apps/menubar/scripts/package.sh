@@ -29,6 +29,7 @@ mkdir -p "$APP_DIR/Contents/MacOS"
 mkdir -p "$APP_DIR/Contents/Resources"
 cp "$BUILD_DIR/PagerunnerBar" "$APP_DIR/Contents/MacOS/PagerunnerBar"
 cp "$MENUBAR_DIR/Sources/PagerunnerBar/Info.plist" "$APP_DIR/Contents/Info.plist"
+cp "$MENUBAR_DIR/Sources/PagerunnerBar/Resources/AppIcon.icns" "$APP_DIR/Contents/Resources/AppIcon.icns"
 
 # Embed Sparkle.framework
 mkdir -p "$APP_DIR/Contents/Frameworks"

@@ -26,7 +26,8 @@ let package = Package(
                 .product(name: "KeyboardShortcuts", package: "KeyboardShortcuts"),
             ],
             path: "Sources/PagerunnerBar",
-            exclude: ["Info.plist"]
+            exclude: ["Info.plist"],
+            resources: [.copy("Resources/AppIcon.icns")]
         ),
         .testTarget(
             name: "PagerunnerCoreTests",
