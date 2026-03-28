@@ -75,4 +75,91 @@ struct ModelsTests {
         // result should be the raw escaped string
         #expect(resp.result?.contains("\"ok\"") == true)
     }
+
+    // MARK: - AttachState tests
+
+    @Test("AttachState cases exist and Equatable works")
+    func attachStateEquatable() {
+        let idle = AttachState.idle
+        let attaching = AttachState.attaching
+        let attached = AttachState.attached
+        let failed = AttachState.failed("err")
+
+        #expect(idle == .idle)
+        #expect(attaching == .attaching)
+        #expect(attached == .attached)
+        #expect(failed == .failed("err"))
+
+        // Different cases are not equal
+        #expect(idle != attaching)
+        #expect(attached != failed)
+        #expect(AttachState.failed("a") != AttachState.failed("b"))
+    }
+
+    // MARK: - DiscoveredInstance tests
+
+    @Test("DiscoveredInstance initializes with correct values")
+    func discoveredInstanceCreation() {
+        let instance = DiscoveredInstance(
+            id: "port-9225",
+            port: 9225,
+            tabCount: 3,
+            isVM: true,
+            attachState: .idle
+        )
+
+        #expect(instance.id == "port-9225")
+        #expect(instance.port == 9225)
+        #expect(instance.tabCount == 3)
+        #expect(instance.isVM == true)
+        #expect(instance.attachState == .idle)
+    }
+
+    @Test("DiscoveredInstance attachState can be mutated")
+    func discoveredInstanceAttachStateMutation() {
+        var instance = DiscoveredInstance(
+            id: "port-9226",
+            port: 9226,
+            tabCount: 1,
+            isVM: false,
+            attachState: .idle
+        )
+
+        instance.attachState = .attaching
+        #expect(instance.attachState == .attaching)
+
+        instance.attachState = .attached
+        #expect(instance.attachState == .attached)
+
+        instance.attachState = .failed("connection refused")
+        #expect(instance.attachState == .failed("connection refused"))
+    }
+
+    // MARK: - Profile.debugPort and kind? tests
+
+    @Test("Profile decodes with debugPort and kind present")
+    func profileDecodesWithDebugPortAndKind() throws {
+        let json = """
+        {"ok":true,"data":[
+            {"name":"attached-1","display_name":"Chrome 9225","kind":"attached","debug_port":9225}
+        ]}
+        """
+        let resp = try JSONDecoder().decode(ListProfilesResponse.self, from: Data(json.utf8))
+        #expect(resp.data[0].name == "attached-1")
+        #expect(resp.data[0].kind == "attached")
+        #expect(resp.data[0].debugPort == 9225)
+    }
+
+    @Test("Profile decodes without debugPort and kind (existing profiles still decode)")
+    func profileDecodesWithoutDebugPortAndKind() throws {
+        let json = """
+        {"ok":true,"data":[
+            {"name":"personal","display_name":"Stas"}
+        ]}
+        """
+        let resp = try JSONDecoder().decode(ListProfilesResponse.self, from: Data(json.utf8))
+        #expect(resp.data[0].name == "personal")
+        #expect(resp.data[0].kind == nil)
+        #expect(resp.data[0].debugPort == nil)
+    }
 }

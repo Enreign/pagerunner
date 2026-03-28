@@ -40,13 +40,15 @@ public struct Profile: Codable, Identifiable, Sendable {
     public var id: String { name }
     public let name: String
     public let displayName: String
-    public let kind: String       // "personal" | "agent"
+    public let kind: String?      // "personal" | "agent" | "attached" | nil
     public let userDataDir: String?
+    public let debugPort: Int?
 
     enum CodingKeys: String, CodingKey {
         case name, kind
         case displayName = "display_name"
         case userDataDir = "user_data_dir"
+        case debugPort = "debug_port"
     }
 }
 
@@ -94,6 +96,31 @@ public struct Checkpoint: Codable, Identifiable, Sendable {
         case checkpointId = "checkpoint_id"
         case savedAt = "saved_at"
         case tabCount = "tab_count"
+    }
+}
+
+// MARK: - Discovery models (not Codable — purely in-memory UI state)
+
+public enum AttachState: Equatable, Sendable {
+    case idle
+    case attaching
+    case attached
+    case failed(String)
+}
+
+public struct DiscoveredInstance: Identifiable, Sendable {
+    public let id: String        // "port-9225"
+    public let port: Int
+    public let tabCount: Int
+    public let isVM: Bool        // true if owning process is gvproxy
+    public var attachState: AttachState
+
+    public init(id: String, port: Int, tabCount: Int, isVM: Bool, attachState: AttachState) {
+        self.id = id
+        self.port = port
+        self.tabCount = tabCount
+        self.isVM = isVM
+        self.attachState = attachState
     }
 }
 
