@@ -1,5 +1,6 @@
 import AppKit
 import SwiftUI
+import UserNotifications
 import PagerunnerCore
 
 struct SessionBlockView: View {
@@ -122,7 +123,7 @@ struct SessionBlockView: View {
                     if !checkpointsForSession.isEmpty {
                         Menu("Restore checkpoint…") {
                             ForEach(checkpointsForSession, id: \.checkpointId) { cp in
-                                Button(cp.name) {
+                                Button(cp.name.isEmpty ? "Checkpoint \(cp.checkpointId.prefix(6))" : cp.name) {
                                     Task { @MainActor in
                                         _ = try? await daemon.call(
                                             tool: "restore_session_checkpoint",
@@ -145,6 +146,15 @@ struct SessionBlockView: View {
                             "pagerunner audit --session \(session.id)",
                             forType: .string
                         )
+                        let content = UNMutableNotificationContent()
+                        content.title = "Command copied to clipboard"
+                        content.body = "pagerunner audit --session \(session.id.prefix(8))…"
+                        let request = UNNotificationRequest(
+                            identifier: "clipboard-\(UUID().uuidString)",
+                            content: content,
+                            trigger: nil
+                        )
+                        UNUserNotificationCenter.current().add(request)
                     }
 
                     Divider()
