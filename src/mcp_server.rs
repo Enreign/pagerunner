@@ -3229,6 +3229,10 @@ async fn dispatch_tool_inner(
             handle_notify(&db, args, profile_name)
         }
 
+        "list_notifications" => {
+            handle_list_notifications(&db)
+        }
+
         _ => Err(crate::error::PagerunnerError::Cdp(format!(
             "Unknown tool: {}",
             tool
@@ -3254,6 +3258,23 @@ fn handle_notify(
     let session_id = args["session_id"].as_str();
     crate::notification::push_notification(db, title, body, level, session_id, profile_name.as_deref())?;
     Ok(serde_json::json!({"ok": true}).to_string())
+}
+
+fn handle_list_notifications(db: &crate::db::Db) -> crate::error::Result<String> {
+    let notifs = crate::notification::drain_notifications(db)?;
+    let json_notifs: Vec<serde_json::Value> = notifs
+        .iter()
+        .map(|n| serde_json::json!({
+            "id": n.id,
+            "title": n.title,
+            "body": n.body,
+            "level": n.level,
+            "session_id": n.session_id,
+            "profile_name": n.profile_name,
+            "created_at": n.created_at,
+        }))
+        .collect();
+    Ok(serde_json::json!({"notifications": json_notifs}).to_string())
 }
 
 #[cfg(test)]
@@ -3300,6 +3321,30 @@ mod tests {
             std::sync::Arc::clone(&db),
         ));
         (sessions, db, config, audit, dir)
+    }
+
+    #[test]
+    fn test_list_notifications_drains_and_returns_json() {
+        let dir = tempfile::tempdir().unwrap();
+        let key = crate::db::Db::generate_key();
+        let db = crate::db::Db::open_with_key(
+            dir.path().join("test.db").to_str().unwrap(), key
+        ).unwrap();
+
+        crate::notification::push_notification(&db, "N1", None, "info", None, None).unwrap();
+        crate::notification::push_notification(&db, "N2", None, "warning", None, Some("myprofile")).unwrap();
+
+        let result = handle_list_notifications(&db).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&result).unwrap();
+        let notifs = parsed["notifications"].as_array().unwrap();
+        assert_eq!(notifs.len(), 2);
+        assert!(notifs.iter().any(|n| n["title"] == "N1"));
+        assert!(notifs.iter().any(|n| n["profile_name"] == "myprofile"));
+
+        // Second call returns empty
+        let result2 = handle_list_notifications(&db).unwrap();
+        let parsed2: serde_json::Value = serde_json::from_str(&result2).unwrap();
+        assert!(parsed2["notifications"].as_array().unwrap().is_empty());
     }
 
     #[test]
