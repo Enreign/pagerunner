@@ -266,6 +266,14 @@ pagerunner daemon &    # start daemon
 ./.build/release/PagerunnerBar  # run from apps/menubar/
 ```
 
+For notifications to work, macOS requires the app to be codesigned. Use `package.sh` which ad-hoc signs automatically when no `CODE_SIGN_IDENTITY` is set:
+
+```bash
+cd apps/menubar/scripts
+./package.sh           # ad-hoc signs → open Pagerunner.app
+open Pagerunner.app    # permission dialog appears on first launch
+```
+
 ### Distribution
 
 ```bash

@@ -35,14 +35,20 @@ mkdir -p "$APP_DIR/Contents/Frameworks"
 cp -R "$MENUBAR_DIR/.build/arm64-apple-macosx/release/Sparkle.framework" "$APP_DIR/Contents/Frameworks/"
 install_name_tool -add_rpath @executable_path/../Frameworks "$APP_DIR/Contents/MacOS/PagerunnerBar"
 
-# Code sign
-if [ -n "${CODE_SIGN_IDENTITY:-}" ]; then
-    echo "Signing with $CODE_SIGN_IDENTITY..."
-    codesign --force --deep --sign "$CODE_SIGN_IDENTITY" \
-        --options runtime \
-        --entitlements "$SCRIPT_DIR/entitlements.plist" \
-        "$APP_DIR"
+# Code sign — use real identity for distribution, ad-hoc (-) for local dev.
+# Ad-hoc signing is required for UNUserNotificationCenter to work on macOS.
+SIGN_IDENTITY="${CODE_SIGN_IDENTITY:--}"
+RUNTIME_FLAG=""
+if [ "$SIGN_IDENTITY" = "-" ]; then
+    echo "No CODE_SIGN_IDENTITY set — using ad-hoc signature (local dev only)"
+else
+    echo "Signing with $SIGN_IDENTITY..."
+    RUNTIME_FLAG="--options runtime"
 fi
+codesign --force --deep --sign "$SIGN_IDENTITY" \
+    $RUNTIME_FLAG \
+    --entitlements "$SCRIPT_DIR/entitlements.plist" \
+    "$APP_DIR"
 
 # Zip
 ZIP_PATH="$SCRIPT_DIR/$APP_NAME.zip"
