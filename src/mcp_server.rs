@@ -1735,6 +1735,8 @@ async fn dispatch_tool_inner(
                     .attach(&debug_url, Some(profile.name.clone()), Some(profile.display_name.clone()), Arc::clone(&db), &config.network, Some(std::sync::Arc::clone(&site_store)))
                     .await?;
 
+                // Attached-profile sessions are managed by the user's Chrome process — don't write
+                // to the session registry (reattach would be invalid after restart).
                 return Ok(serde_json::json!({"ok": true, "session_id": id, "attached_to": debug_url}).to_string());
             }
 
