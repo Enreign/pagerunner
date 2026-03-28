@@ -72,7 +72,7 @@ Two categories of unmanaged Chrome:
 
 **Port range rationale:** 9222 is Chrome's default debug port. The range 9222–9239 (18 ports) covers common manual usage patterns (e.g. multiple profiles each on successive ports). Broader scanning (e.g. full 1024–65535) is deferred — the narrow range keeps probe latency bounded.
 
-**Self-discovery exclusion:** Before probing, exclude any port already used by a pagerunner-managed session. The app can determine this by checking whether any live `Session` was opened on a given port (not currently tracked, so for v1 all 18 ports are probed, but any port that returns a browser fingerprint matching a session already in `appState.sessions` is excluded from the discovered list by comparing the `webSocketDebuggerUrl` field in `/json/version`).
+**Self-discovery exclusion:** All 18 ports are probed. After probes complete, the results are post-filtered in `AppState`: any discovered instance whose `/json/version` `webSocketDebuggerUrl` matches a URL already present in a live session is dropped before updating `discoveredInstances`. This means `DiscoveryService.probe()` takes no `excludingPorts` parameter — filtering is done by the caller (AppState) after the fact.
 
 **Port already covered by a profile:** If a discovered port's `/json/version` response matches the `user_data_dir` of an existing `[[profiles]]` entry, suppress that row — the user already has it as a named profile.
 
@@ -161,6 +161,8 @@ kind = "attached"
 debug_port = 9225
 ```
 
+**Required Rust backend change:** `src/config.rs` `ChromeProfile` struct currently has `user_data_dir: String` (required). This must be changed to `user_data_dir: Option<String>` and `debug_port: Option<u16>` added. This is a backward-compatible change — existing profiles still deserialize correctly since `user_data_dir` will just be `Some(...)`. The daemon's `open_session` logic must check: if `kind == "attached"`, route through `attach_session` using `debug_port` instead of launching Chrome via `user_data_dir`.
+
 ---
 
 ## Settings Page Changes
@@ -185,6 +187,15 @@ BEHAVIOR
 
 ## Architecture
 
+### Required Rust Changes
+
+| File | Change |
+|------|--------|
+| `src/config.rs` | `ChromeProfile.user_data_dir: String` → `Option<String>`; add `debug_port: Option<u16>` |
+| `src/mcp_server.rs` | `open_session` handler: if `profile.kind == Some("attached")`, call `attach_session` logic using `debug_port` instead of launching Chrome |
+
+The Rust changes are backward-compatible. Existing profiles with `user_data_dir` set continue to work unchanged. Tests for the new `kind = "attached"` deserialization must be added to `src/config.rs`.
+
 ### New/Modified Swift Files
 
 | File | Change |
@@ -194,7 +205,7 @@ BEHAVIOR
 | `Sources/PagerunnerCore/DaemonClient.swift` | Add `attachSession` call (no `reloadConfig` — daemon restart used instead) |
 | `Sources/PagerunnerBar/AppState.swift` | Add `discoveredInstances: [DiscoveredInstance]`, trigger discovery on panel open |
 | `Sources/PagerunnerBar/Views/OverviewView.swift` | Render discovered rows below profile list |
-| `Sources/PagerunnerBar/Views/ProfileRowView.swift` | Add right-click context menu (Rename / Remove) |
+| `Sources/PagerunnerBar/Views/ProfileRowView.swift` | **New** — extract `ProfileRow` from `OverviewView.swift` into its own file, then add right-click context menu (Rename / Remove) |
 | `Sources/PagerunnerBar/Views/SettingsView.swift` | Add Profiles section |
 | `Sources/PagerunnerBar/Views/RenameSheet.swift` | **New** — reusable sheet with text input, OK/Cancel |
 | `Sources/PagerunnerBar/ConfigEditor.swift` | **New** — read/write `~/.pagerunner/config.toml` for rename/remove/addAttached operations |
@@ -221,12 +232,13 @@ actor DiscoveryService {
     private let probeTimeout: TimeInterval = 0.4
     private let portRange: ClosedRange<Int> = 9222...9239
 
-    func probe(excludingPorts: Set<Int>) async -> [DiscoveredInstance]
+    func probe() async -> [DiscoveredInstance]
     // runs all probes concurrently via withTaskGroup
     // each probe: URLSession GET /json/version with 400ms timeout
     // non-200 / malformed JSON / timeout → skip silently
     // on success: lsof to detect gvproxy parent
     // returns cached result if within TTL
+    // post-filtering (self-discovery exclusion) is done by AppState after calling probe()
 }
 ```
 
