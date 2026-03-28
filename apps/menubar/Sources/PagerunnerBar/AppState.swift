@@ -247,11 +247,14 @@ final class AppState {
         if transition == .stopping {
             // Stopping confirmed — daemon is dead
             daemonStatus = .stopped
+            consecutiveFailures = 0
             transition = .none
         } else if transition == .none {
+            // Already intentionally stopped — don't oscillate back to stale
+            guard daemonStatus != .stopped else { return }
             daemonStatus = DaemonStatus.fromFailureCount(consecutiveFailures, lastSeenAt: lastSuccessAt)
         }
-        // If .starting, ignore failures (daemon still booting)
+        // If .starting or .restarting, ignore failures (daemon still booting)
     }
 
     /// Record a successful poll.

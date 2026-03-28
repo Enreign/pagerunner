@@ -268,7 +268,8 @@ impl SessionManager {
     pub async fn attach(
         &mut self,
         debug_url: &str,
-        profile_label: Option<String>,
+        profile_name: Option<String>,
+        display_name: Option<String>,
         db: std::sync::Arc<crate::db::Db>,
         network_config: &crate::config::NetworkConfig,
         site_store: Option<std::sync::Arc<crate::site_knowledge::SiteKnowledgeStore>>,
@@ -298,8 +299,8 @@ impl SessionManager {
             .as_str()
             .unwrap_or("Chrome (attached)")
             .to_string();
-        let display_name = profile_label.clone().unwrap_or(browser_label);
-        let profile_name = profile_label.unwrap_or_else(|| "_attached".to_string());
+        let display_name = display_name.unwrap_or_else(|| browser_label.clone());
+        let profile_name = profile_name.unwrap_or_else(|| "_attached".to_string());
 
         // Connect WebSocket
         let (cdp, reader_task) = crate::cdp::CdpConn::connect_ws(&ws_url).await?;

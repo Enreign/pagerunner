@@ -24,11 +24,39 @@ final class StatusItemController {
 
     private func setupStatusButton() {
         guard let button = statusItem.button else { return }
-        // Template image auto-adapts dark/light mode
-        button.image = NSImage(systemSymbolName: "figure.run", accessibilityDescription: "Pagerunner")
-        button.image?.isTemplate = true
         button.action = #selector(togglePopover)
         button.target = self
+        observeStatusIcon()
+    }
+
+    /// Reactively update the status bar icon based on daemon state.
+    /// Uses withObservationTracking to re-run whenever appState changes.
+    private func observeStatusIcon() {
+        withObservationTracking {
+            updateIcon()
+        } onChange: {
+            Task { @MainActor in self.observeStatusIcon() }
+        }
+    }
+
+    private func updateIcon() {
+        guard let button = statusItem.button else { return }
+        let symbolName: String
+        switch (appState.transition, appState.daemonStatus) {
+        case (.starting, _), (.restarting, _), (.stopping, _):
+            symbolName = "figure.walk"
+        case (_, .running):
+            symbolName = "figure.run"
+        case (_, .stale):
+            symbolName = "figure.walk"
+        case (_, .stopped):
+            symbolName = "figure.stand"
+        default:
+            symbolName = "figure.stand"
+        }
+        let img = NSImage(systemSymbolName: symbolName, accessibilityDescription: "Pagerunner")
+        img?.isTemplate = true
+        button.image = img
     }
 
     private func setupPopover() {
