@@ -664,6 +664,42 @@ async fn run_standalone() -> Result<()> {
 
     tracing::info!("Pagerunner MCP server ready (standalone)");
 
+    // Periodic auto-checkpoint background task
+    if config.checkpoints.enabled {
+        let sm_periodic = Arc::clone(&sessions);
+        let db_periodic = Arc::clone(&db);
+        let interval = config.checkpoints.interval_seconds;
+        tokio::spawn(async move {
+            loop {
+                tokio::time::sleep(std::time::Duration::from_secs(interval)).await;
+
+                // Step 1: collect alive session IDs without holding the lock for checkpointing
+                let session_ids: Vec<String> = {
+                    let mut sm = sm_periodic.lock().await;
+                    sm.list()
+                        .into_iter()
+                        .filter(|s| s.alive)
+                        .map(|s| s.id.clone())
+                        .collect()
+                }; // ← lock released here
+
+                // Step 2: checkpoint each session individually
+                // Each iteration: acquire lock briefly, do async checkpoint, release
+                for session_id in session_ids {
+                    let mut sm = sm_periodic.lock().await;
+                    if let Ok(session) = sm.get_live(&session_id) {
+                        let _ = crate::checkpoint::save_session_checkpoint(
+                            session,
+                            Some("Autosave · periodic"),
+                            &db_periodic,
+                        ).await;
+                    }
+                    // Lock released at end of iteration — other tool calls can proceed between sessions
+                }
+            }
+        });
+    }
+
     let mut line = String::new();
     loop {
         line.clear();

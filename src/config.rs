@@ -103,6 +103,27 @@ fn default_buffer_capacity() -> usize {
     500
 }
 
+fn default_checkpoint_interval() -> u64 {
+    300
+} // 5 minutes
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct CheckpointConfig {
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    #[serde(default = "default_checkpoint_interval")]
+    pub interval_seconds: u64,
+}
+
+impl Default for CheckpointConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            interval_seconds: default_checkpoint_interval(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct NetworkConfig {
     #[serde(default = "default_buffer_capacity")]
@@ -137,6 +158,8 @@ pub struct PagerunnerConfig {
     pub ner: NerConfig, // NEW
     #[serde(default)]
     pub network: NetworkConfig,
+    #[serde(default)]
+    pub checkpoints: CheckpointConfig,
 }
 
 impl PagerunnerConfig {
@@ -444,6 +467,25 @@ enabled = false
 "#;
         let cfg: PagerunnerConfig = toml::from_str(toml).unwrap();
         assert_eq!(cfg.ner.enabled, Some(false));
+    }
+
+    #[test]
+    fn test_checkpoint_config_defaults() {
+        let config = PagerunnerConfig::default();
+        assert_eq!(config.checkpoints.interval_seconds, 300); // 5 min default
+        assert!(config.checkpoints.enabled);
+    }
+
+    #[test]
+    fn test_checkpoint_config_from_toml() {
+        let toml = r#"
+[checkpoints]
+enabled = false
+interval_seconds = 60
+"#;
+        let config: PagerunnerConfig = toml::from_str(toml).unwrap();
+        assert!(!config.checkpoints.enabled);
+        assert_eq!(config.checkpoints.interval_seconds, 60);
     }
 
     #[test]
