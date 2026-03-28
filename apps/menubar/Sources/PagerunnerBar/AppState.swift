@@ -7,6 +7,8 @@ import PagerunnerCore
 enum PanelNavigation: Equatable {
     case overview
     case profile(String)          // profile name
+    case settings
+    case addProfile
 }
 
 /// Single source of truth for all app state. @Observable triggers SwiftUI re-renders.
@@ -18,11 +20,21 @@ final class AppState {
     var sessions: [Session] = []
     var tabs: [String: [Tab]] = [:]              // sessionId → tabs
     var checkpoints: [String: [Checkpoint]] = [:] // profileName → checkpoints
+    /// Session IDs ever observed as alive — distinguishes dead-on-arrival from crashed-later.
+    var everAliveSessions: Set<String> = []
 
     // MARK: - Daemon status
     var daemonStatus: DaemonStatus = .stopped
     var consecutiveFailures = 0
     var lastSuccessAt: Date?
+
+    /// Set during intentional start/stop — suppresses poll-driven status flicker.
+    enum TransitionState: Equatable {
+        case none
+        case starting
+        case stopping
+    }
+    var transition: TransitionState = .none
 
     // MARK: - Navigation
     var navigation: PanelNavigation = .overview
@@ -64,14 +76,28 @@ final class AppState {
     /// Record a poll failure and update daemonStatus.
     func recordFailure() {
         consecutiveFailures += 1
-        daemonStatus = DaemonStatus.fromFailureCount(consecutiveFailures, lastSeenAt: lastSuccessAt)
+        if transition == .stopping {
+            // Stopping confirmed — daemon is dead
+            daemonStatus = .stopped
+            transition = .none
+        } else if transition == .none {
+            daemonStatus = DaemonStatus.fromFailureCount(consecutiveFailures, lastSeenAt: lastSuccessAt)
+        }
+        // If .starting, ignore failures (daemon still booting)
     }
 
     /// Record a successful poll.
     func recordSuccess() {
         consecutiveFailures = 0
         lastSuccessAt = Date()
-        daemonStatus = .running
+        if transition == .starting {
+            // Start confirmed — daemon is alive
+            daemonStatus = .running
+            transition = .none
+        } else if transition == .none {
+            daemonStatus = .running
+        }
+        // If .stopping, ignore successes (race with dying daemon)
     }
 }
 
