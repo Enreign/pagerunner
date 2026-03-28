@@ -58,10 +58,7 @@ pub async fn console_event_processor(
                     .and_then(|s| s.as_str())
                     .unwrap_or("")
                     .to_string();
-                let method = event
-                    .get("method")
-                    .and_then(|m| m.as_str())
-                    .unwrap_or("");
+                let method = event.get("method").and_then(|m| m.as_str()).unwrap_or("");
                 let params = &event["params"];
 
                 let tab_id = cdp_sessions_rev
@@ -72,8 +69,7 @@ pub async fn console_event_processor(
 
                 match method {
                     "Runtime.consoleAPICalled" => {
-                        let level =
-                            params["type"].as_str().unwrap_or("log").to_string();
+                        let level = params["type"].as_str().unwrap_or("log").to_string();
                         let text = params["args"]
                             .as_array()
                             .map(|args| {
@@ -159,10 +155,7 @@ pub async fn console_event_processor(
                 }
             }
             Err(broadcast::error::RecvError::Lagged(n)) => {
-                tracing::warn!(
-                    "Console event processor lagged, dropped {} events",
-                    n
-                );
+                tracing::warn!("Console event processor lagged, dropped {} events", n);
             }
             Err(broadcast::error::RecvError::Closed) => break,
         }

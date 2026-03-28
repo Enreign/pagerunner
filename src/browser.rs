@@ -801,7 +801,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let key = crate::db::Db::generate_key();
         let db = std::sync::Arc::new(
-            crate::db::Db::open_with_key(dir.path().join("t.db").to_str().unwrap(), key).unwrap()
+            crate::db::Db::open_with_key(dir.path().join("t.db").to_str().unwrap(), key).unwrap(),
         );
         let store = crate::site_knowledge::SiteKnowledgeStore::new(db, key);
 
@@ -818,7 +818,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let key = crate::db::Db::generate_key();
         let db = std::sync::Arc::new(
-            crate::db::Db::open_with_key(dir.path().join("t.db").to_str().unwrap(), key).unwrap()
+            crate::db::Db::open_with_key(dir.path().join("t.db").to_str().unwrap(), key).unwrap(),
         );
         let store = crate::site_knowledge::SiteKnowledgeStore::new(db, key);
 
@@ -835,15 +835,19 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let key = crate::db::Db::generate_key();
         let db = std::sync::Arc::new(
-            crate::db::Db::open_with_key(dir.path().join("t.db").to_str().unwrap(), key).unwrap()
+            crate::db::Db::open_with_key(dir.path().join("t.db").to_str().unwrap(), key).unwrap(),
         );
         let store = crate::site_knowledge::SiteKnowledgeStore::new(db, key);
         let origin = "https://linear.app";
         let selector = ".submit-btn";
 
         // 3 successes + 7 failures = 70% failure rate (> 30%, >= 5 samples)
-        for _ in 0..3 { update_selector_stability(&store, origin, selector, true); }
-        for _ in 0..7 { update_selector_stability(&store, origin, selector, false); }
+        for _ in 0..3 {
+            update_selector_stability(&store, origin, selector, true);
+        }
+        for _ in 0..7 {
+            update_selector_stability(&store, origin, selector, false);
+        }
 
         let warning = fragility_warning(&store, origin, selector);
         assert!(warning.is_some(), "expected fragility warning");
@@ -859,14 +863,16 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let key = crate::db::Db::generate_key();
         let db = std::sync::Arc::new(
-            crate::db::Db::open_with_key(dir.path().join("t.db").to_str().unwrap(), key).unwrap()
+            crate::db::Db::open_with_key(dir.path().join("t.db").to_str().unwrap(), key).unwrap(),
         );
         let store = crate::site_knowledge::SiteKnowledgeStore::new(db, key);
         let origin = "https://linear.app";
         let selector = ".btn";
 
         // 4 failures but only 4 total — under the 5-sample minimum
-        for _ in 0..4 { update_selector_stability(&store, origin, selector, false); }
+        for _ in 0..4 {
+            update_selector_stability(&store, origin, selector, false);
+        }
 
         assert!(fragility_warning(&store, origin, selector).is_none());
     }
@@ -874,22 +880,29 @@ mod tests {
     #[test]
     fn selector_chain_js_includes_original_selector() {
         let js = build_selector_chain_js("#my-btn");
-        assert!(js.contains("#my-btn"), "JS should include original selector");
+        assert!(
+            js.contains("#my-btn"),
+            "JS should include original selector"
+        );
     }
 
     #[test]
     fn selector_chain_js_includes_data_testid_fallback() {
         let js = build_selector_chain_js("#my-btn");
-        assert!(js.contains("data-testid") || js.contains("aria-label"),
-            "JS should include attribute fallbacks");
+        assert!(
+            js.contains("data-testid") || js.contains("aria-label"),
+            "JS should include attribute fallbacks"
+        );
     }
 
     #[test]
     fn selector_chain_js_is_valid_js_expression() {
         // Must be an IIFE returning a value
         let js = build_selector_chain_js("button.submit");
-        assert!(js.contains("(function") || js.contains("(() =>") || js.contains("(()=>{"),
-            "JS should be an IIFE");
+        assert!(
+            js.contains("(function") || js.contains("(() =>") || js.contains("(()=>{"),
+            "JS should be an IIFE"
+        );
         assert!(js.contains("return"), "JS should have a return path");
     }
 }

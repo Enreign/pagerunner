@@ -136,9 +136,9 @@ pub fn run(force: bool, json: bool) -> crate::error::Result<()> {
 
         let toml_content = generate_config_toml(&profiles);
         std::fs::create_dir_all(
-            config_path
-                .parent()
-                .ok_or_else(|| crate::error::PagerunnerError::Config("Invalid config path".into()))?,
+            config_path.parent().ok_or_else(|| {
+                crate::error::PagerunnerError::Config("Invalid config path".into())
+            })?,
         )
         .map_err(crate::error::PagerunnerError::Io)?;
         std::fs::write(&config_path, &toml_content).map_err(crate::error::PagerunnerError::Io)?;
@@ -198,7 +198,10 @@ pub fn run(force: bool, json: bool) -> crate::error::Result<()> {
                 // Non-interactive: just return the snippet in the JSON result
             } else {
                 // Interactive
-                println!("\nFound {} — pagerunner is not yet mentioned.", path.display());
+                println!(
+                    "\nFound {} — pagerunner is not yet mentioned.",
+                    path.display()
+                );
                 println!("\nSuggested snippet to add:\n");
                 println!("---\n{}\n---", SNIPPET);
                 print!("\nAppend this snippet to {}? [y/N] ", file_name);
@@ -214,7 +217,11 @@ pub fn run(force: bool, json: bool) -> crate::error::Result<()> {
                 };
 
                 if appended {
-                    let separator = if content.ends_with('\n') { "\n" } else { "\n\n" };
+                    let separator = if content.ends_with('\n') {
+                        "\n"
+                    } else {
+                        "\n\n"
+                    };
                     let new_content = format!("{}{}{}", content, separator, SNIPPET);
                     match std::fs::write(path, new_content) {
                         Ok(()) => {
@@ -233,7 +240,10 @@ pub fn run(force: bool, json: bool) -> crate::error::Result<()> {
     }
 
     if json {
-        println!("{}", serde_json::to_string(&json_result).unwrap_or_default());
+        println!(
+            "{}",
+            serde_json::to_string(&json_result).unwrap_or_default()
+        );
     }
 
     Ok(())
@@ -384,9 +394,12 @@ mod tests {
         std::fs::write(tmp.path().join("CLAUDE.md"), "# Pagerunner instructions\n").unwrap();
         let result = find_project_file(tmp.path());
         assert!(result.is_some()); // sanity check
-        // Verify case-insensitive detection
+                                   // Verify case-insensitive detection
         let content = std::fs::read_to_string(result.unwrap()).unwrap();
         let already_present = content.to_ascii_lowercase().contains("pagerunner");
-        assert!(already_present, "should detect 'Pagerunner' (capital P) as already present");
+        assert!(
+            already_present,
+            "should detect 'Pagerunner' (capital P) as already present"
+        );
     }
 }

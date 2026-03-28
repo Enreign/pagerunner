@@ -115,11 +115,8 @@ impl SessionManager {
         let rev_map3 = cdp_sessions_rev.clone();
         let tab_urls_for_proc = tab_urls.clone();
 
-        let frame_nav_processor_handle = tokio::spawn(frame_nav_processor(
-            events_rx3,
-            rev_map3,
-            tab_urls_for_proc,
-        ));
+        let frame_nav_processor_handle =
+            tokio::spawn(frame_nav_processor(events_rx3, rev_map3, tab_urls_for_proc));
 
         self.sessions.insert(
             id.clone(),
@@ -318,10 +315,7 @@ pub async fn frame_nav_processor(
                 }
             }
             Err(broadcast::error::RecvError::Lagged(n)) => {
-                tracing::warn!(
-                    "Frame nav processor lagged, dropped {} events",
-                    n
-                );
+                tracing::warn!("Frame nav processor lagged, dropped {} events", n);
             }
             Err(broadcast::error::RecvError::Closed) => {
                 break;

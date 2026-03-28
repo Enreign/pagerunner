@@ -226,7 +226,8 @@ pub fn query_entries(
                     entry.request_body = None;
                 }
                 // Truncate response body
-                let (body, truncated) = truncate_body(entry.response_body.take(), query.full_response);
+                let (body, truncated) =
+                    truncate_body(entry.response_body.take(), query.full_response);
                 entry.response_body = body;
                 entry.response_truncated = truncated;
 
@@ -279,18 +280,13 @@ pub async fn network_event_processor(
                     .and_then(|s| s.as_str())
                     .unwrap_or("")
                     .to_string();
-                let method = event
-                    .get("method")
-                    .and_then(|m| m.as_str())
-                    .unwrap_or("");
+                let method = event.get("method").and_then(|m| m.as_str()).unwrap_or("");
                 let params = &event["params"];
 
                 match method {
                     "Network.requestWillBeSent" => {
-                        let request_id =
-                            params["requestId"].as_str().unwrap_or("").to_string();
-                        let url =
-                            params["request"]["url"].as_str().unwrap_or("").to_string();
+                        let request_id = params["requestId"].as_str().unwrap_or("").to_string();
+                        let url = params["request"]["url"].as_str().unwrap_or("").to_string();
                         let req_method = params["request"]["method"]
                             .as_str()
                             .unwrap_or("GET")
@@ -315,9 +311,7 @@ pub async fn network_event_processor(
                             .as_object()
                             .map(|h| {
                                 h.iter()
-                                    .map(|(k, v)| {
-                                        (k.clone(), v.as_str().unwrap_or("").to_string())
-                                    })
+                                    .map(|(k, v)| (k.clone(), v.as_str().unwrap_or("").to_string()))
                                     .collect()
                             })
                             .unwrap_or_default();
@@ -327,13 +321,14 @@ pub async fn network_event_processor(
                         if let Some(ref store) = site_store {
                             if let Some(origin) = url_to_origin(&url) {
                                 request_headers = crate::auth_token_detector::detect_and_vault(
-                                    &request_headers, &origin, store
+                                    &request_headers,
+                                    &origin,
+                                    store,
                                 );
                             }
                         }
                         strip_sensitive_headers(&mut request_headers);
-                        let request_body =
-                            params["request"]["postData"].as_str().map(String::from);
+                        let request_body = params["request"]["postData"].as_str().map(String::from);
 
                         in_flight.insert(
                             (cdp_session, request_id),
@@ -349,19 +344,14 @@ pub async fn network_event_processor(
                         );
                     }
                     "Network.responseReceived" => {
-                        let request_id =
-                            params["requestId"].as_str().unwrap_or("").to_string();
-                        let status =
-                            params["response"]["status"].as_u64().map(|s| s as u16);
-                        if let Some(req) =
-                            in_flight.get_mut(&(cdp_session, request_id))
-                        {
+                        let request_id = params["requestId"].as_str().unwrap_or("").to_string();
+                        let status = params["response"]["status"].as_u64().map(|s| s as u16);
+                        if let Some(req) = in_flight.get_mut(&(cdp_session, request_id)) {
                             req.status = status;
                         }
                     }
                     "Network.loadingFinished" => {
-                        let request_id =
-                            params["requestId"].as_str().unwrap_or("").to_string();
+                        let request_id = params["requestId"].as_str().unwrap_or("").to_string();
                         let key = (cdp_session.clone(), request_id.clone());
                         if let Some(req) = in_flight.remove(&key) {
                             let target_id = cdp_sessions_rev
@@ -386,8 +376,8 @@ pub async fn network_event_processor(
                                 .as_f64()
                                 .map(|t| (t * 1000.0) as u64)
                                 .unwrap_or(req.start_monotonic_ms);
-                            let duration_ms = finish_monotonic_ms
-                                .saturating_sub(req.start_monotonic_ms);
+                            let duration_ms =
+                                finish_monotonic_ms.saturating_sub(req.start_monotonic_ms);
 
                             // Headers were already stripped at requestWillBeSent ingestion time.
                             let entry = NetworkEntry {
@@ -404,9 +394,7 @@ pub async fn network_event_processor(
                                 tab_id: target_id.clone(),
                             };
 
-                            let seq = seq_counters
-                                .entry(target_id.clone())
-                                .or_insert(0);
+                            let seq = seq_counters.entry(target_id.clone()).or_insert(0);
                             let _ = write_entry(
                                 &db,
                                 &session_id,
@@ -427,10 +415,7 @@ pub async fn network_event_processor(
                 }
             }
             Err(broadcast::error::RecvError::Lagged(n)) => {
-                tracing::warn!(
-                    "Network event processor lagged, dropped {} events",
-                    n
-                );
+                tracing::warn!("Network event processor lagged, dropped {} events", n);
             }
             Err(broadcast::error::RecvError::Closed) => {
                 break;
@@ -505,22 +490,46 @@ mod tests {
 
     #[test]
     fn test_matches_url_pattern_substring() {
-        assert!(matches_url_pattern("https://api.example.com/graphql", "graphql"));
-        assert!(!matches_url_pattern("https://api.example.com/users", "graphql"));
+        assert!(matches_url_pattern(
+            "https://api.example.com/graphql",
+            "graphql"
+        ));
+        assert!(!matches_url_pattern(
+            "https://api.example.com/users",
+            "graphql"
+        ));
     }
 
     #[test]
     fn test_matches_url_pattern_glob_path() {
-        assert!(matches_url_pattern("https://api.example.com/api/v1/users", "/api/v1/*"));
-        assert!(!matches_url_pattern("https://api.example.com/api/v1/users/123", "/api/v1/*"));
-        assert!(matches_url_pattern("https://api.example.com/api/v1/users/123", "/api/v1/**"));
+        assert!(matches_url_pattern(
+            "https://api.example.com/api/v1/users",
+            "/api/v1/*"
+        ));
+        assert!(!matches_url_pattern(
+            "https://api.example.com/api/v1/users/123",
+            "/api/v1/*"
+        ));
+        assert!(matches_url_pattern(
+            "https://api.example.com/api/v1/users/123",
+            "/api/v1/**"
+        ));
     }
 
     #[test]
     fn test_matches_url_pattern_glob_host() {
-        assert!(matches_url_pattern("https://api.example.com/path", "*.example.com/**"));
-        assert!(matches_url_pattern("http://sub.example.com/a/b/c", "*.example.com/**"));
-        assert!(!matches_url_pattern("https://other.net/path", "*.example.com/**"));
+        assert!(matches_url_pattern(
+            "https://api.example.com/path",
+            "*.example.com/**"
+        ));
+        assert!(matches_url_pattern(
+            "http://sub.example.com/a/b/c",
+            "*.example.com/**"
+        ));
+        assert!(!matches_url_pattern(
+            "https://other.net/path",
+            "*.example.com/**"
+        ));
     }
 
     #[test]
@@ -555,10 +564,29 @@ mod tests {
         let key = Db::generate_key();
         let db = Db::open_with_key(dir.path().join("test.db").to_str().unwrap(), key).unwrap();
 
-        write_entry(&db, "s1", "t1", 0, 500, &make_entry("https://api.example.com/users", "GET", 200, 1000)).unwrap();
-        write_entry(&db, "s1", "t1", 1, 500, &make_entry("https://api.example.com/graphql", "POST", 200, 1100)).unwrap();
+        write_entry(
+            &db,
+            "s1",
+            "t1",
+            0,
+            500,
+            &make_entry("https://api.example.com/users", "GET", 200, 1000),
+        )
+        .unwrap();
+        write_entry(
+            &db,
+            "s1",
+            "t1",
+            1,
+            500,
+            &make_entry("https://api.example.com/graphql", "POST", 200, 1100),
+        )
+        .unwrap();
 
-        let query = NetworkQuery { url_pattern: Some("graphql".into()), ..Default::default() };
+        let query = NetworkQuery {
+            url_pattern: Some("graphql".into()),
+            ..Default::default()
+        };
         let result = query_entries(&db, "s1", Some("t1"), &[], &query, 9999999).unwrap();
         assert_eq!(result.entries.len(), 1);
         assert!(result.entries[0].url.contains("graphql"));
@@ -572,11 +600,39 @@ mod tests {
         let key = Db::generate_key();
         let db = Db::open_with_key(dir.path().join("test.db").to_str().unwrap(), key).unwrap();
 
-        write_entry(&db, "s1", "t1", 0, 500, &make_entry("https://x.com/a", "GET", 200, 1000)).unwrap();
-        write_entry(&db, "s1", "t1", 1, 500, &make_entry("https://x.com/b", "GET", 404, 1100)).unwrap();
-        write_entry(&db, "s1", "t1", 2, 500, &make_entry("https://x.com/c", "GET", 500, 1200)).unwrap();
+        write_entry(
+            &db,
+            "s1",
+            "t1",
+            0,
+            500,
+            &make_entry("https://x.com/a", "GET", 200, 1000),
+        )
+        .unwrap();
+        write_entry(
+            &db,
+            "s1",
+            "t1",
+            1,
+            500,
+            &make_entry("https://x.com/b", "GET", 404, 1100),
+        )
+        .unwrap();
+        write_entry(
+            &db,
+            "s1",
+            "t1",
+            2,
+            500,
+            &make_entry("https://x.com/c", "GET", 500, 1200),
+        )
+        .unwrap();
 
-        let query = NetworkQuery { status_min: Some(400), status_max: Some(499), ..Default::default() };
+        let query = NetworkQuery {
+            status_min: Some(400),
+            status_max: Some(499),
+            ..Default::default()
+        };
         let result = query_entries(&db, "s1", Some("t1"), &[], &query, 9999999).unwrap();
         assert_eq!(result.entries.len(), 1);
         assert_eq!(result.entries[0].status, 404);
@@ -589,10 +645,21 @@ mod tests {
         let db = Db::open_with_key(dir.path().join("test.db").to_str().unwrap(), key).unwrap();
 
         for i in 0..10u64 {
-            write_entry(&db, "s1", "t1", i, 500, &make_entry("https://x.com/", "GET", 200, 1000 + i)).unwrap();
+            write_entry(
+                &db,
+                "s1",
+                "t1",
+                i,
+                500,
+                &make_entry("https://x.com/", "GET", 200, 1000 + i),
+            )
+            .unwrap();
         }
 
-        let query = NetworkQuery { limit: 3, ..Default::default() };
+        let query = NetworkQuery {
+            limit: 3,
+            ..Default::default()
+        };
         let result = query_entries(&db, "s1", Some("t1"), &[], &query, 9999999).unwrap();
         assert_eq!(result.entries.len(), 3);
         assert_eq!(result.total_matched, 10);
@@ -611,9 +678,16 @@ mod tests {
             write_entry(&db, "s1", "t1", i, 3, &entry).unwrap();
         }
 
-        let query = NetworkQuery { limit: 500, ..Default::default() };
+        let query = NetworkQuery {
+            limit: 500,
+            ..Default::default()
+        };
         let result = query_entries(&db, "s1", Some("t1"), &[], &query, 9999999).unwrap();
-        assert_eq!(result.entries.len(), 3, "only last 3 should remain after eviction");
+        assert_eq!(
+            result.entries.len(),
+            3,
+            "only last 3 should remain after eviction"
+        );
     }
 
     #[test]
@@ -622,12 +696,31 @@ mod tests {
         let key = Db::generate_key();
         let db = Db::open_with_key(dir.path().join("test.db").to_str().unwrap(), key).unwrap();
 
-        write_entry(&db, "sess_a", "tab1", 0, 500, &make_entry("https://a.com/", "GET", 200, 1000)).unwrap();
-        write_entry(&db, "sess_b", "tab1", 0, 500, &make_entry("https://b.com/", "GET", 200, 1000)).unwrap();
+        write_entry(
+            &db,
+            "sess_a",
+            "tab1",
+            0,
+            500,
+            &make_entry("https://a.com/", "GET", 200, 1000),
+        )
+        .unwrap();
+        write_entry(
+            &db,
+            "sess_b",
+            "tab1",
+            0,
+            500,
+            &make_entry("https://b.com/", "GET", 200, 1000),
+        )
+        .unwrap();
 
         delete_session_entries(&db, "sess_a").unwrap();
 
-        let q = NetworkQuery { limit: 500, ..Default::default() };
+        let q = NetworkQuery {
+            limit: 500,
+            ..Default::default()
+        };
         let r_a = query_entries(&db, "sess_a", Some("tab1"), &[], &q, 9999999).unwrap();
         let r_b = query_entries(&db, "sess_b", Some("tab1"), &[], &q, 9999999).unwrap();
         assert_eq!(r_a.entries.len(), 0, "sess_a entries should be deleted");
@@ -640,13 +733,27 @@ mod tests {
         let key = Db::generate_key();
         let db = Db::open_with_key(dir.path().join("test.db").to_str().unwrap(), key).unwrap();
 
-        write_entry(&db, "s1", "t1", 0, 500, &make_entry("https://x.com/", "POST", 200, 1000)).unwrap();
+        write_entry(
+            &db,
+            "s1",
+            "t1",
+            0,
+            500,
+            &make_entry("https://x.com/", "POST", 200, 1000),
+        )
+        .unwrap();
 
-        let query_no_body = NetworkQuery { include_request_body: false, ..Default::default() };
+        let query_no_body = NetworkQuery {
+            include_request_body: false,
+            ..Default::default()
+        };
         let r = query_entries(&db, "s1", Some("t1"), &[], &query_no_body, 9999999).unwrap();
         assert!(r.entries[0].request_body.is_none());
 
-        let query_with_body = NetworkQuery { include_request_body: true, ..Default::default() };
+        let query_with_body = NetworkQuery {
+            include_request_body: true,
+            ..Default::default()
+        };
         let r = query_entries(&db, "s1", Some("t1"), &[], &query_with_body, 9999999).unwrap();
         assert_eq!(r.entries[0].request_body, Some("req-body".into()));
     }
@@ -657,10 +764,29 @@ mod tests {
         let key = Db::generate_key();
         let db = Db::open_with_key(dir.path().join("test.db").to_str().unwrap(), key).unwrap();
 
-        write_entry(&db, "s1", "t1", 0, 500, &make_entry("https://x.com/old", "GET", 200, 8000)).unwrap();
-        write_entry(&db, "s1", "t1", 1, 500, &make_entry("https://x.com/new", "GET", 200, 9500)).unwrap();
+        write_entry(
+            &db,
+            "s1",
+            "t1",
+            0,
+            500,
+            &make_entry("https://x.com/old", "GET", 200, 8000),
+        )
+        .unwrap();
+        write_entry(
+            &db,
+            "s1",
+            "t1",
+            1,
+            500,
+            &make_entry("https://x.com/new", "GET", 200, 9500),
+        )
+        .unwrap();
 
-        let query = NetworkQuery { lookback_ms: Some(1000), ..Default::default() };
+        let query = NetworkQuery {
+            lookback_ms: Some(1000),
+            ..Default::default()
+        };
         let result = query_entries(&db, "s1", Some("t1"), &[], &query, 10000).unwrap();
         assert_eq!(result.entries.len(), 1);
         assert!(result.entries[0].url.contains("new"));
@@ -675,12 +801,35 @@ mod tests {
         let ttl_ms: u64 = 24 * 60 * 60 * 1000;
         let now_ms: u64 = ttl_ms * 2;
 
-        write_entry(&db, "s1", "t1", 0, 500, &make_entry("https://x.com/old", "GET", 200, 0)).unwrap();
-        write_entry(&db, "s1", "t1", 1, 500, &make_entry("https://x.com/new", "GET", 200, now_ms - 100)).unwrap();
+        write_entry(
+            &db,
+            "s1",
+            "t1",
+            0,
+            500,
+            &make_entry("https://x.com/old", "GET", 200, 0),
+        )
+        .unwrap();
+        write_entry(
+            &db,
+            "s1",
+            "t1",
+            1,
+            500,
+            &make_entry("https://x.com/new", "GET", 200, now_ms - 100),
+        )
+        .unwrap();
 
-        let query = NetworkQuery { limit: 500, ..Default::default() };
+        let query = NetworkQuery {
+            limit: 500,
+            ..Default::default()
+        };
         let result = query_entries(&db, "s1", Some("t1"), &[], &query, now_ms).unwrap();
-        assert_eq!(result.entries.len(), 1, "entry older than 24h should be expired");
+        assert_eq!(
+            result.entries.len(),
+            1,
+            "entry older than 24h should be expired"
+        );
         assert!(result.entries[0].url.contains("new"));
     }
 
@@ -690,7 +839,8 @@ mod tests {
         // The token detection side is tested in auth_token_detector tests.
         let dir = tempdir().unwrap();
         let key = crate::db::Db::generate_key();
-        let db = crate::db::Db::open_with_key(dir.path().join("t.db").to_str().unwrap(), key).unwrap();
+        let db =
+            crate::db::Db::open_with_key(dir.path().join("t.db").to_str().unwrap(), key).unwrap();
 
         let mut entry = NetworkEntry {
             request_id: "r1".into(),
@@ -702,7 +852,9 @@ mod tests {
             request_headers: [
                 ("authorization".into(), "Bearer secret_token".into()),
                 ("content-type".into(), "application/json".into()),
-            ].into_iter().collect(),
+            ]
+            .into_iter()
+            .collect(),
             request_body: None,
             response_body: None,
             response_truncated: false,
@@ -712,11 +864,18 @@ mod tests {
         write_entry(&db, "s1", "T1", 0, 500, &entry).unwrap();
 
         let entries = query_entries(
-            &db, "s1", Some("T1"), &["T1".to_string()],
-            &NetworkQuery::default(), 2000,
-        ).unwrap();
+            &db,
+            "s1",
+            Some("T1"),
+            &["T1".to_string()],
+            &NetworkQuery::default(),
+            2000,
+        )
+        .unwrap();
         assert_eq!(entries.entries.len(), 1);
-        assert!(!entries.entries[0].request_headers.contains_key("authorization"));
+        assert!(!entries.entries[0]
+            .request_headers
+            .contains_key("authorization"));
     }
 
     #[test]
@@ -736,16 +895,17 @@ mod tests {
     fn ingest_wired_into_completed_requests() {
         // Verify endpoint_mapper integration by confirming ingest is called
         // (unit test — just verify it compiles and doesn't panic on a sample entry)
-        use std::collections::HashMap;
+        use crate::db::Db;
         use crate::network_log::NetworkEntry;
         use crate::site_knowledge::SiteKnowledgeStore;
+        use std::collections::HashMap;
         use std::sync::Arc;
         use tempfile::tempdir;
-        use crate::db::Db;
 
         let dir = tempdir().unwrap();
         let key = Db::generate_key();
-        let db = Arc::new(Db::open_with_key(dir.path().join("t.db").to_str().unwrap(), key).unwrap());
+        let db =
+            Arc::new(Db::open_with_key(dir.path().join("t.db").to_str().unwrap(), key).unwrap());
         let store = SiteKnowledgeStore::new(db, key);
 
         let entry = NetworkEntry {
