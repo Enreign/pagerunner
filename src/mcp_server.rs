@@ -581,6 +581,33 @@ pub fn all_tools() -> Vec<Value> {
                 "required": ["origin", "name"]
             }
         }),
+        json!({
+            "name": "notify",
+            "description": "Send a macOS notification via the Pagerunner menu bar. Use this to alert the user when a task is done, an error occurred, or any event worth surfacing. The notification appears immediately and can deep-link back to the current session.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "title": {
+                        "type": "string",
+                        "description": "Notification title (required). E.g. 'Tests passed — 3 flows green'"
+                    },
+                    "body": {
+                        "type": "string",
+                        "description": "Optional detail text shown below the title."
+                    },
+                    "level": {
+                        "type": "string",
+                        "enum": ["info", "warning", "error"],
+                        "description": "Urgency level. Default: 'info'. 'error' plays a louder sound."
+                    },
+                    "session_id": {
+                        "type": "string",
+                        "description": "Optional. If provided, tapping 'View' in the notification opens the menu bar to this session's profile."
+                    }
+                },
+                "required": ["title"]
+            }
+        }),
     ]
 }
 
@@ -1702,11 +1729,10 @@ async fn dispatch_tool_inner(
             // where a debug_port was merged in (kind may be "personal", "agent", etc.).
             if let Some(port) = profile.debug_port {
                 let debug_url = format!("http://localhost:{}", port);
-                let profile_label = Some(profile.display_name.clone());
 
                 let mut mgr = sessions.lock().await;
                 let id = mgr
-                    .attach(&debug_url, profile_label, Arc::clone(&db), &config.network, Some(std::sync::Arc::clone(&site_store)))
+                    .attach(&debug_url, Some(profile.name.clone()), Some(profile.display_name.clone()), Arc::clone(&db), &config.network, Some(std::sync::Arc::clone(&site_store)))
                     .await?;
 
                 return Ok(serde_json::json!({"ok": true, "session_id": id, "attached_to": debug_url}).to_string());
@@ -1757,7 +1783,7 @@ async fn dispatch_tool_inner(
 
             let mut mgr = sessions.lock().await;
             let id = mgr
-                .attach(&debug_url, profile_label, Arc::clone(&db), &config.network, Some(Arc::clone(&site_store)))
+                .attach(&debug_url, profile_label.clone(), profile_label, Arc::clone(&db), &config.network, Some(Arc::clone(&site_store)))
                 .await?;
 
             Ok(serde_json::json!({"ok": true, "session_id": id, "attached_to": debug_url}).to_string())
@@ -3192,11 +3218,42 @@ async fn dispatch_tool_inner(
             }))?)
         }
 
+        "notify" => {
+            // Resolve profile_name from session_id if provided (best-effort)
+            let profile_name = if let Some(sid) = args.get("session_id").and_then(|v| v.as_str()) {
+                let mgr = sessions.lock().await;
+                mgr.get(sid).map(|s| s.profile_name.clone())
+            } else {
+                None
+            };
+            handle_notify(&db, args, profile_name)
+        }
+
         _ => Err(crate::error::PagerunnerError::Cdp(format!(
             "Unknown tool: {}",
             tool
         ))),
     }
+}
+
+fn handle_notify(
+    db: &crate::db::Db,
+    args: &serde_json::Value,
+    profile_name: Option<String>,
+) -> crate::error::Result<String> {
+    let title = args["title"]
+        .as_str()
+        .ok_or_else(|| crate::error::PagerunnerError::Config("Missing title".into()))?;
+    let body = args["body"].as_str();
+    let level = args["level"].as_str().unwrap_or("info");
+    if !["info", "warning", "error"].contains(&level) {
+        return Err(crate::error::PagerunnerError::Config(
+            "level must be 'info', 'warning', or 'error'".into(),
+        ));
+    }
+    let session_id = args["session_id"].as_str();
+    crate::notification::push_notification(db, title, body, level, session_id, profile_name.as_deref())?;
+    Ok(serde_json::json!({"ok": true}).to_string())
 }
 
 #[cfg(test)]
@@ -3243,6 +3300,48 @@ mod tests {
             std::sync::Arc::clone(&db),
         ));
         (sessions, db, config, audit, dir)
+    }
+
+    #[test]
+    fn test_notify_tool_writes_notification() {
+        let dir = tempfile::tempdir().unwrap();
+        let key = crate::db::Db::generate_key();
+        let db = crate::db::Db::open_with_key(
+            dir.path().join("test.db").to_str().unwrap(), key
+        ).unwrap();
+
+        let args = serde_json::json!({
+            "title": "Tests passed",
+            "body": "All 3 flows green",
+            "level": "info"
+        });
+        handle_notify(&db, &args, None).unwrap();
+
+        let drained = crate::notification::drain_notifications(&db).unwrap();
+        assert_eq!(drained.len(), 1);
+        assert_eq!(drained[0].title, "Tests passed");
+        assert_eq!(drained[0].body.as_deref(), Some("All 3 flows green"));
+        assert_eq!(drained[0].level, "info");
+        assert!(drained[0].profile_name.is_none());
+    }
+
+    #[test]
+    fn test_notify_tool_unknown_session_id_writes_nil_profile() {
+        let dir = tempfile::tempdir().unwrap();
+        let key = crate::db::Db::generate_key();
+        let db = crate::db::Db::open_with_key(
+            dir.path().join("test.db").to_str().unwrap(), key
+        ).unwrap();
+
+        let args = serde_json::json!({
+            "title": "Done",
+            "session_id": "nonexistent-session-id"
+        });
+        handle_notify(&db, &args, None).unwrap();
+
+        let drained = crate::notification::drain_notifications(&db).unwrap();
+        assert_eq!(drained.len(), 1);
+        assert!(drained[0].profile_name.is_none());
     }
 
     #[test]
