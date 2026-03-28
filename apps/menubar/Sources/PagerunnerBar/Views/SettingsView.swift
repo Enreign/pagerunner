@@ -87,6 +87,8 @@ struct SettingsView: View {
                 Divider()
             }
             behaviorSection
+            Divider()
+            notificationsSection
         }
         .padding(12)
     }
@@ -175,6 +177,96 @@ struct SettingsView: View {
             Text("0.3.0")
                 .font(.system(size: 11, design: .monospaced))
                 .foregroundColor(.secondary)
+        }
+    }
+
+    @ViewBuilder
+    private var notificationsSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("NOTIFICATIONS")
+                .font(.system(size: 9, weight: .semibold))
+                .foregroundStyle(.secondary)
+                .kerning(0.5)
+
+            // Global: daemon health
+            HStack {
+                Toggle(isOn: Binding(
+                    get: { NotificationSettings.notifyOnDaemonHealth() },
+                    set: { NotificationSettings.setNotifyOnDaemonHealth($0) }
+                )) {
+                    Text("Daemon health alerts")
+                        .font(.system(size: 12))
+                }
+                .toggleStyle(.switch)
+                .controlSize(.small)
+            }
+
+            // Global: explicit notify tool (always on — informational only)
+            HStack {
+                Image(systemName: "checkmark.circle.fill")
+                    .font(.system(size: 11))
+                    .foregroundColor(.secondary)
+                Text("Agent-sent notifications always deliver")
+                    .font(.system(size: 11))
+                    .foregroundColor(.secondary)
+            }
+
+            if !appState.profiles.isEmpty {
+                Divider()
+                Text("PER PROFILE")
+                    .font(.system(size: 9, weight: .semibold))
+                    .foregroundStyle(.secondary)
+                    .kerning(0.5)
+
+                ForEach(appState.profiles, id: \.id) { profile in
+                    NotificationProfileRow(profile: profile)
+                }
+            }
+        }
+    }
+}
+
+private struct NotificationProfileRow: View {
+    let profile: Profile
+    @State private var crash: Bool = true
+    @State private var idle: Bool = true
+    @State private var start: Bool = false
+    @State private var idleMinutes: Int = 30
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(profile.displayName)
+                .font(.system(size: 11, weight: .medium))
+            HStack(spacing: 12) {
+                Toggle("Crash", isOn: $crash)
+                    .onChange(of: crash) { NotificationSettings.setNotifyOnCrash(crash, profile: profile.name) }
+                Toggle("Idle", isOn: $idle)
+                    .onChange(of: idle) { NotificationSettings.setNotifyOnIdle(idle, profile: profile.name) }
+                if idle {
+                    Picker("", selection: $idleMinutes) {
+                        Text("15m").tag(15)
+                        Text("30m").tag(30)
+                        Text("60m").tag(60)
+                    }
+                    .pickerStyle(.segmented)
+                    .frame(width: 110)
+                    .onChange(of: idleMinutes) {
+                        NotificationSettings.setIdleThresholdMinutes(idleMinutes, profile: profile.name)
+                    }
+                }
+                Toggle("Start", isOn: $start)
+                    .onChange(of: start) { NotificationSettings.setNotifyOnStart(start, profile: profile.name) }
+            }
+            .font(.system(size: 11))
+            .toggleStyle(.checkbox)
+            .controlSize(.small)
+        }
+        .padding(.vertical, 2)
+        .onAppear {
+            crash = NotificationSettings.notifyOnCrash(profile: profile.name)
+            idle = NotificationSettings.notifyOnIdle(profile: profile.name)
+            start = NotificationSettings.notifyOnStart(profile: profile.name)
+            idleMinutes = NotificationSettings.idleThresholdMinutes(profile: profile.name)
         }
     }
 }
