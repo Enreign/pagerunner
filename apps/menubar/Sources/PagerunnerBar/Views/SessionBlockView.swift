@@ -10,6 +10,11 @@ struct SessionBlockView: View {
     let controller: StatusItemController
     @Environment(\.daemonClient) private var daemon
     @State private var isCollapsed = false
+    @State private var showCloseConfirm = false
+
+    private var checkpointsForSession: [Checkpoint] {
+        appState.checkpointsFor(profile: session.profile)
+    }
 
     private var isAlive: Bool { session.status == .alive }
 
@@ -104,6 +109,50 @@ struct SessionBlockView: View {
                 .padding(.vertical, 8)
                 .contentShape(Rectangle())
                 .onTapGesture { withAnimation(.easeInOut(duration: 0.15)) { isCollapsed.toggle() } }
+                .contextMenu {
+                    Button("Save checkpoint") {
+                        Task { @MainActor in
+                            _ = try? await daemon.call(
+                                tool: "save_session_checkpoint",
+                                args: ["session_id": session.id]
+                            )
+                        }
+                    }
+
+                    if !checkpointsForSession.isEmpty {
+                        Menu("Restore checkpoint…") {
+                            ForEach(checkpointsForSession, id: \.checkpointId) { cp in
+                                Button(cp.name) {
+                                    Task { @MainActor in
+                                        _ = try? await daemon.call(
+                                            tool: "restore_session_checkpoint",
+                                            args: [
+                                                "session_id": session.id,
+                                                "checkpoint_id": cp.checkpointId
+                                            ]
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    Divider()
+
+                    Button("View session log") {
+                        NSPasteboard.general.clearContents()
+                        NSPasteboard.general.setString(
+                            "pagerunner audit --session \(session.id)",
+                            forType: .string
+                        )
+                    }
+
+                    Divider()
+
+                    Button("Close session", role: .destructive) {
+                        showCloseConfirm = true
+                    }
+                }
 
                 if !isCollapsed {
                     ForEach(tabs) { tab in
@@ -142,6 +191,23 @@ struct SessionBlockView: View {
             Rectangle()
                 .fill(Color.primary.opacity(0.07))
                 .frame(height: 0.5)
+        }
+        .confirmationDialog(
+            "Close session?",
+            isPresented: $showCloseConfirm,
+            titleVisibility: .visible
+        ) {
+            Button("Close session", role: .destructive) {
+                Task { @MainActor in
+                    _ = try? await daemon.call(
+                        tool: "close_session",
+                        args: ["session_id": session.id]
+                    )
+                }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("This will close all tabs in Window \(index + 1).")
         }
     }
 }
