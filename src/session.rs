@@ -451,7 +451,27 @@ impl SessionManager {
         self.sessions.get_mut(id)
     }
 
-    pub fn list(&self) -> Vec<SessionInfo> {
+    pub fn list(&mut self) -> Vec<SessionInfo> {
+        // Proactively update alive flag via OS process check (no CDP — never hangs).
+        for session in self.sessions.values_mut() {
+            if session.alive && session.owns_process && !session.is_chrome_running() {
+                session.alive = false;
+            }
+        }
+        // Secondary sessions whose primary is dead also become dead.
+        let dead_primaries: std::collections::HashSet<String> = self.sessions.values()
+            .filter(|s| !s.alive && s.owns_process)
+            .map(|s| s.id.clone())
+            .collect();
+        for session in self.sessions.values_mut() {
+            if session.alive && !session.owns_process {
+                if let Some(ref pid) = session.primary_session_id {
+                    if dead_primaries.contains(pid) {
+                        session.alive = false;
+                    }
+                }
+            }
+        }
         self.sessions
             .values()
             .map(|s| SessionInfo {

@@ -717,7 +717,7 @@ async fn run_standalone() -> Result<()> {
 
     // Collect session IDs first (release lock before async calls)
     let session_ids: Vec<String> = {
-        let mgr = sessions.lock().await;
+        let mut mgr = sessions.lock().await;
         mgr.list().iter().map(|i| i.id.clone()).collect()
     };
     // Record SessionClosed for each session
@@ -1057,7 +1057,7 @@ pub async fn dispatch_tool(
 ) -> crate::error::Result<ToolResponse> {
     // Session-level tool permission check (moved from dispatch_tool_inner).
     let tool_permitted: Option<crate::error::Result<()>> = {
-        let mgr = sessions.lock().await;
+        let mut mgr = sessions.lock().await;
         args["session_id"]
             .as_str()
             .and_then(|sid| mgr.get(sid))
@@ -1815,7 +1815,7 @@ async fn dispatch_tool_inner(
         }
 
         "list_sessions" => {
-            let mgr = sessions.lock().await;
+            let mut mgr = sessions.lock().await;
             let list: Vec<Value> = mgr
                 .list()
                 .iter()
