@@ -7,6 +7,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.0] — 2026-03-28
+
+### Added
+
+**macOS Menu Bar App**
+- Native Swift companion app (`apps/menubar/`) — shows all Chrome profiles, active sessions, open tabs, and daemon status at a glance
+- One-click open/close sessions, save session checkpoints, control the daemon — no terminal required
+- Agent profiles section (distinct CPU icon, separate section) for profiles with `kind = "agent"` in config.toml
+- Add Profile flow: auto-discovers unconfigured Chrome profiles + creates new agent profiles (creates `~/.chrome-<name>` dir)
+- Active session indicators: green dot + "N windows" badge on profile rows; "Active" badge on live windows
+- macOS native notifications: daemon stopped, session crashed, checkpoint saved, agent idle
+- Global hotkey support via KeyboardShortcuts; auto-update via Sparkle 2.x
+- Navigation strip scrolls horizontally when profiles overflow panel width
+
+**Session Checkpoints**
+- `save_session_checkpoint` — saves full tab state (URLs + scroll positions) for all alive tabs in a session
+- `restore_session_checkpoint` — reopens all saved tabs and navigates to stored URLs
+- `list_session_checkpoints` — lists saved checkpoints for a profile
+- `delete_session_checkpoint` — removes a checkpoint by ID
+- `attach_session` — attach to an already-running Chrome instance via `--remote-debugging-port`
+- `close_tab` — close a specific tab within a session
+- `get_console_log` MCP tool + CLI: capture JS console output from a page
+- `ChromeProfile.kind` field in config.toml: `"personal"` (default) or `"agent"`
+
+**Runtime Console Error Surfacing**
+- `evaluate` responses now include runtime console errors and exceptions that occur during script execution
+- Unhandled promise rejections and thrown exceptions surfaced alongside the result
+
+### Changed
+- CLI subcommand count: 27 → 38 (all new MCP tools have matching CLI subcommands)
+
 ## [0.4.0] — Site Intelligence Tier
 
 ### Added
@@ -113,6 +144,8 @@ pagerunner evaluate $SESSION $TARGET "Array.from(...).map(el => ({value: ..., la
 - `pagerunner example-config`: prints an annotated config template
 - `pagerunner audit`: query the audit log by tail count, session ID, or timestamp
 
-[Unreleased]: https://github.com/Enreign/pagerunner/compare/v0.1.1...HEAD
+[Unreleased]: https://github.com/Enreign/pagerunner/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/Enreign/pagerunner/compare/v0.4.0...v0.5.0
+[0.4.0]: https://github.com/Enreign/pagerunner/compare/v0.1.1...v0.4.0
 [0.1.1]: https://github.com/Enreign/pagerunner/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/Enreign/pagerunner/releases/tag/v0.1.0
