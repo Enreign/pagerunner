@@ -14,6 +14,7 @@ mod init;
 mod ipc;
 mod mcp_server;
 mod network_guard;
+mod console_log;
 mod network_log;
 mod sanitizer;
 mod security;
@@ -267,6 +268,15 @@ enum Commands {
         full_response: bool,
         #[arg(long)]
         all_tabs: bool,
+    },
+    /// Query captured browser console messages and JS exceptions for a tab
+    #[command(name = "get-console-log")]
+    GetConsoleLog {
+        session_id: String,
+        #[arg(long)]
+        target_id: String,
+        #[arg(long, default_value = "10")]
+        limit: u64,
     },
     /// Download the NER model for PERSON/ORG name detection (requires --features ner build)
     DownloadModel,
@@ -1008,6 +1018,24 @@ async fn main() -> anyhow::Result<()> {
                     "include_request_body": include_request_body,
                     "full_response": full_response,
                     "all_tabs": all_tabs
+                }),
+                crate::cli_tools::ScreenshotMode::File,
+                &config,
+            )
+            .await?;
+        }
+        Commands::GetConsoleLog {
+            session_id,
+            target_id,
+            limit,
+        } => {
+            let config = config::PagerunnerConfig::load()?;
+            crate::cli_tools::run_tool(
+                "get_console_log",
+                serde_json::json!({
+                    "session_id": session_id,
+                    "target_id": target_id,
+                    "limit": limit,
                 }),
                 crate::cli_tools::ScreenshotMode::File,
                 &config,

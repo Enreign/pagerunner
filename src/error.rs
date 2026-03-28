@@ -20,6 +20,42 @@ pub enum PagerunnerError {
 
 pub type Result<T> = std::result::Result<T, PagerunnerError>;
 
+impl PagerunnerError {
+    /// Short machine-readable error category for structured responses.
+    pub fn error_type(&self) -> &'static str {
+        match self {
+            PagerunnerError::SessionNotFound(_) => "SESSION_NOT_FOUND",
+            PagerunnerError::Chrome(_) => "CHROME_ERROR",
+            PagerunnerError::Cdp(_) => "CDP_ERROR",
+            PagerunnerError::Config(_) => "CONFIG_ERROR",
+            PagerunnerError::ToolNotPermitted(_) => "TOOL_NOT_PERMITTED",
+            PagerunnerError::Io(_) => "IO_ERROR",
+            PagerunnerError::Json(_) => "JSON_ERROR",
+        }
+    }
+
+    /// Human-readable recovery hint for structured error responses.
+    pub fn recovery_hint(&self) -> &'static str {
+        match self {
+            PagerunnerError::SessionNotFound(_) => {
+                "Call open_session to create a new session, then retry."
+            }
+            PagerunnerError::Chrome(_) => {
+                "Chrome may have crashed or closed. Try closing and reopening the session."
+            }
+            PagerunnerError::Cdp(_) => {
+                "Check that the tab is still open and the expression is valid JavaScript."
+            }
+            PagerunnerError::Config(_) => "Check the required parameters and try again.",
+            PagerunnerError::ToolNotPermitted(_) => {
+                "This tool is blocked by the session security policy."
+            }
+            PagerunnerError::Io(_) => "An I/O error occurred. Check file permissions.",
+            PagerunnerError::Json(_) => "A JSON serialization error occurred.",
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
