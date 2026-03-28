@@ -181,6 +181,19 @@ final class AppState {
         }
     }
 
+    /// Remove debug_port from a profile config and restart daemon (permanent detach).
+    func detachProfile(_ profile: Profile) async throws {
+        // Close any active sessions first
+        let activeSessions = sessions.filter { $0.profile == profile.name }
+        for session in activeSessions {
+            _ = try? await daemonClient.call(tool: "close_session", args: ["session_id": session.id])
+        }
+        try ConfigEditor.removeDebugPortFromProfile(name: profile.name)
+        await restartDaemon()
+        await refreshProfiles()
+        navigation = .profile(profile.name)
+    }
+
     /// Merge a discovered port into an existing profile (adds debug_port to its config entry).
     func mergeDiscovered(_ instance: DiscoveredInstance, intoProfile profileName: String) {
         Task {

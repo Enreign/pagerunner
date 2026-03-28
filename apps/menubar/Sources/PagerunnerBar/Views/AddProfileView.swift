@@ -60,6 +60,10 @@ struct AddProfileView: View {
         .task {
             await loadDiscovered()
             appState.triggerDiscovery()
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(5))
+                appState.triggerDiscovery()
+            }
         }
         .sheet(item: $instanceToAttach) { instance in
             AttachSheet(
@@ -76,6 +80,7 @@ struct AddProfileView: View {
                     appState.mergeDiscovered(instance, intoProfile: profile.name)
                 }
             )
+            .preferredColorScheme(.light)
         }
     }
 

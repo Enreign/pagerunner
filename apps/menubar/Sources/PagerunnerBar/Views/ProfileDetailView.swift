@@ -27,9 +27,8 @@ struct ProfileDetailView: View {
     }
 
     @State private var stealth = false
-    @State private var showAttachUI = false
-    @State private var discoveredChromes: [DiscoveredChrome] = []
-    @State private var attachPort = "9222"
+    @State private var portUnreachable = false
+    @State private var isDetaching = false
 
     /// Build a port → user_data_dir map from running Chrome processes via ps.
     nonisolated private func chromePortDirs() -> [Int: String] {
@@ -56,69 +55,11 @@ struct ProfileDetailView: View {
         return result
     }
 
-    /// Probe ports 9222–9232 for a live Chrome debug endpoint that matches this profile.
-    private func discoverPorts() {
-        let profileDataDir = profile?.userDataDir
-        Task {
-            // Build port→dir map on background thread
-            let portDirs = await withCheckedContinuation { cont in
-                DispatchQueue.global(qos: .userInitiated).async {
-                    cont.resume(returning: chromePortDirs())
-                }
-            }
-            var found: [DiscoveredChrome] = []
-            for port in 9222...9232 {
-                // If we have ps data, only include ports whose user-data-dir matches this profile
-                if let knownDir = portDirs[port], let profileDir = profileDataDir {
-                    guard knownDir == profileDir else { continue }
-                }
-                guard let url = URL(string: "http://localhost:\(port)/json/list") else { continue }
-                var req = URLRequest(url: url, timeoutInterval: 0.3)
-                req.httpMethod = "GET"
-                guard let (data, resp) = try? await URLSession.shared.data(for: req),
-                      (resp as? HTTPURLResponse)?.statusCode == 200,
-                      let tabs = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]]
-                else { continue }
-                let pages = tabs.filter { $0["type"] as? String == "page" }
-                let title = pages.first?["title"] as? String
-                found.append(DiscoveredChrome(port: port, tabCount: pages.count, activeTitle: title))
-            }
-            discoveredChromes = found
-            if let first = found.first { attachPort = String(first.port) }
-        }
-    }
-
-    private func log(_ msg: String) {
-        let line = (msg + "\n").data(using: .utf8) ?? Data()
-        let url = URL(fileURLWithPath: "/tmp/pr_attach.log")
-        if let fh = try? FileHandle(forWritingTo: url) {
-            fh.seekToEndOfFile()
-            fh.write(line)
-            try? fh.close()
-        } else {
-            try? line.write(to: url)
-        }
-    }
-
-    private func attach(port: Int) {
-        log("attach called: port=\(port) profile=\(profileName)")
-        showAttachUI = false
-        Task { @MainActor in
-            do {
-                let result = try await daemon.call(tool: "attach_session", args: [
-                    "debug_port": port,
-                    "profile": profileName
-                ] as [String: Any])
-                log("attach success: \(result)")
-            } catch {
-                log("attach error: \(error)")
-            }
-        }
-    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             // Profile identity bar — non-interactive
+
             HStack(spacing: 6) {
                 Text(parsedName)
                     .font(.system(size: 12, weight: .medium))
@@ -153,79 +94,114 @@ struct ProfileDetailView: View {
                 )
             }
 
-            // Open new window row
-            HStack(spacing: 10) {
-                Button {
-                    let wasStealthy = stealth
-                    stealth = false
-                    Task { @MainActor in
-                        var args: [String: Any] = ["profile": profileName]
-                        if wasStealthy { args["stealth"] = true }
-                        _ = try? await daemon.call(tool: "open_session", args: args)
-                    }
-                } label: {
-                    HStack(spacing: 4) {
-                        Text("+")
-                            .font(.system(size: 13, weight: .medium))
-                        Text("Open new window")
-                            .font(.system(size: 12))
-                    }
-                    .foregroundColor(Color(red: 0, green: 0.478, blue: 1))
-                }
-                .buttonStyle(.plain)
-                .disabled(appState.daemonStatus == .stopped)
-
-                Spacer()
-
-                Toggle(isOn: $stealth) {
-                    Text("Stealth")
+            if let debugPort = profile?.debugPort {
+                // Profile is attached to a debug port
+                if portUnreachable {
+                    // Chrome is gone — offer to detach
+                    HStack(spacing: 8) {
+                        Image(systemName: "exclamationmark.triangle")
+                            .font(.system(size: 11))
+                            .foregroundColor(.orange)
+                        Text("Chrome on :\(debugPort) is not running")
+                            .font(.system(size: 11))
+                            .foregroundColor(.secondary)
+                        Spacer()
+                        Button(isDetaching ? "Detaching…" : "Detach") {
+                            guard !isDetaching, let p = profile else { return }
+                            isDetaching = true
+                            Task {
+                                try? await appState.detachProfile(p)
+                                isDetaching = false
+                            }
+                        }
                         .font(.system(size: 11))
-                        .foregroundColor(.secondary)
-                }
-                .toggleStyle(.checkbox)
-                .controlSize(.small)
-            }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 10)
-
-            // Attach to running Chrome — expanded panel
-            if showAttachUI {
-                AttachPanel(
-                    discoveredChromes: discoveredChromes,
-                    attachPort: $attachPort,
-                    onAttach: { port in attach(port: port) },
-                    onDismiss: {
-                        withAnimation(.easeInOut(duration: 0.12)) { showAttachUI = false }
+                        .foregroundColor(.orange)
+                        .buttonStyle(.plain)
+                        .disabled(isDetaching)
                     }
-                )
-                .transition(.opacity.combined(with: .move(edge: .top)))
-            }
-
-            // "Attach to running Chrome" toggle link
-            Button {
-                withAnimation(.easeInOut(duration: 0.15)) { showAttachUI.toggle() }
-                if showAttachUI { discoverPorts() }
-            } label: {
-                HStack(spacing: 5) {
-                    Image(systemName: showAttachUI ? "chevron.down" : "chevron.right")
-                        .font(.system(size: 8, weight: .medium))
-                    Image(systemName: "dot.radiowaves.left.and.right")
-                        .font(.system(size: 10))
-                    Text("Attach to running Chrome")
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 10)
+                } else {
+                    // Connected — show port + detach option
+                    HStack(spacing: 8) {
+                        Circle()
+                            .fill(Color(red: 0.133, green: 0.773, blue: 0.369))
+                            .frame(width: 6, height: 6)
+                        Text("Attached to port :\(debugPort)")
+                            .font(.system(size: 11))
+                            .foregroundColor(.secondary)
+                        Spacer()
+                        Button(isDetaching ? "Detaching…" : "Detach") {
+                            guard !isDetaching, let p = profile else { return }
+                            isDetaching = true
+                            Task {
+                                try? await appState.detachProfile(p)
+                                isDetaching = false
+                            }
+                        }
                         .font(.system(size: 11))
+                        .foregroundColor(Color(red: 0, green: 0.478, blue: 1))
+                        .buttonStyle(.plain)
+                        .disabled(isDetaching)
+                    }
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 10)
                 }
-                .foregroundColor(showAttachUI ? Color(red: 0, green: 0.478, blue: 1) : .secondary)
+            } else {
+                // Normal profile — Open new window + Attach to running Chrome
+                HStack(spacing: 10) {
+                    Button {
+                        let wasStealthy = stealth
+                        stealth = false
+                        Task { @MainActor in
+                            var args: [String: Any] = ["profile": profileName]
+                            if wasStealthy { args["stealth"] = true }
+                            _ = try? await daemon.call(tool: "open_session", args: args)
+                        }
+                    } label: {
+                        HStack(spacing: 4) {
+                            Text("+")
+                                .font(.system(size: 13, weight: .medium))
+                            Text("Open new window")
+                                .font(.system(size: 12))
+                        }
+                        .foregroundColor(Color(red: 0, green: 0.478, blue: 1))
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(appState.daemonStatus == .stopped)
+
+                    Spacer()
+
+                    Toggle(isOn: $stealth) {
+                        Text("Stealth")
+                            .font(.system(size: 11))
+                            .foregroundColor(.secondary)
+                    }
+                    .toggleStyle(.checkbox)
+                    .controlSize(.small)
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 10)
+
             }
-            .buttonStyle(.plain)
-            .padding(.horizontal, 12)
-            .padding(.top, 2)
-            .padding(.bottom, 8)
-            .disabled(appState.daemonStatus == .stopped)
 
             // Saved checkpoints (hidden if none)
             CheckpointListView(appState: appState, profileName: profileName)
         }
         }
+        .task(id: profile?.debugPort) {
+            guard let port = profile?.debugPort else { portUnreachable = false; return }
+            // Check if Chrome is reachable on the configured port
+            let reachable = await checkPortReachable(port)
+            portUnreachable = !reachable
+        }
+    }
+
+    private func checkPortReachable(_ port: Int) async -> Bool {
+        guard let url = URL(string: "http://localhost:\(port)/json/version") else { return false }
+        var req = URLRequest(url: url, timeoutInterval: 1.5)
+        req.httpMethod = "GET"
+        return (try? await URLSession.shared.data(for: req)) != nil
     }
 }
 

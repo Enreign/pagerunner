@@ -88,6 +88,23 @@ public struct ConfigEditor {
         try writeConfig(existing + newBlock, to: configURL)
     }
 
+    /// Removes the `debug_port` line from an existing profile block identified by `name`.
+    public static func removeDebugPortFromProfile(
+        name: String,
+        configURL: URL = .pagerunnerConfig
+    ) throws {
+        var blocks = try splitBlocks(readConfig(at: configURL))
+
+        guard let idx = blocks.firstIndex(where: { blockMatchesName($0, name: name) }) else {
+            throw ConfigEditorError.profileNotFound(name)
+        }
+
+        let lines = blocks[idx].components(separatedBy: "\n")
+            .filter { !$0.trimmingCharacters(in: .whitespaces).hasPrefix("debug_port =") }
+        blocks[idx] = lines.joined(separator: "\n")
+        try writeConfig(blocks.joined(), to: configURL)
+    }
+
     /// Adds `debug_port = <port>` to an existing profile block identified by `name`.
     /// Replaces an existing `debug_port` line if one is already present.
     public static func addDebugPortToProfile(

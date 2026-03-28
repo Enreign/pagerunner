@@ -16,8 +16,9 @@ struct PanelView: View {
                 .ignoresSafeArea()
 
             VStack(spacing: 0) {
-                // Banner + nav strip: hidden when stopped (and not transitioning)
-                if appState.daemonStatus != .stopped || appState.transition != .none {
+                // Banner + nav strip: hidden when stopped (and not transitioning) or while starting/restarting
+                let isTransitioning = appState.transition == .starting || appState.transition == .restarting
+                if (appState.daemonStatus != .stopped || appState.transition != .none) && !isTransitioning {
                     DaemonBanner(appState: appState, onStart: {
                         appState.transition = .starting
                         guard let binary = appState.binaryPath else { return }
