@@ -52,6 +52,8 @@ func makeMockSession(handler: @escaping @Sendable (URLRequest) throws -> (HTTPUR
 
 // MARK: - Tests
 
+// IMPORTANT: .serialized is required — DynamicMock.holder is a static property;
+// concurrent test execution would cause data races on it.
 @Suite("DiscoveryService", .serialized)
 struct DiscoveryServiceTests {
 
@@ -114,18 +116,18 @@ struct DiscoveryServiceTests {
 
     @Test("cache hit — second probe returns cached result without new HTTP calls")
     func cacheHit() async throws {
-        actor CallCounter {
-            var count = 0
-            func increment() { count += 1 }
+        // Counter is safe under .serialized — no concurrent access within this suite.
+        final class Counter: @unchecked Sendable {
+            var value: Int = 0
         }
-        let counter = CallCounter()
+        let counter = Counter()
 
         let versionJSON = #"{"Browser":"Chrome/120.0.0.0"}"#
         let tabsJSON = #"[{"type":"page","id":"1","url":"https://example.com","title":"Ex"}]"#
 
         let session = makeMockSession { request in
             let url = request.url!.absoluteString
-            Task { await counter.increment() }
+            counter.value += 1
             let response = HTTPURLResponse(
                 url: request.url!, statusCode: 200,
                 httpVersion: nil, headerFields: nil)!
@@ -138,13 +140,12 @@ struct DiscoveryServiceTests {
 
         let service = DiscoveryService(portRange: 9300...9302, urlSession: session)
 
-        // First probe — hits network
+        // First probe — hits network; probe() awaits all task group children before returning.
         let first = await service.probe()
         #expect(!first.isEmpty)
 
-        // Give counter tasks time to complete
-        try await Task.sleep(nanoseconds: 50_000_000)
-        let countAfterFirst = await counter.count
+        // No sleep needed — probe() has already returned, so all handler calls are done.
+        let countAfterFirst = counter.value
         #expect(countAfterFirst > 0)
 
         // Second probe — should use cache, no additional HTTP calls
@@ -152,8 +153,7 @@ struct DiscoveryServiceTests {
         #expect(second.count == first.count)
         #expect(second.first?.port == first.first?.port)
 
-        try await Task.sleep(nanoseconds: 50_000_000)
-        let countAfterSecond = await counter.count
+        let countAfterSecond = counter.value
 
         // No new HTTP calls on second probe
         #expect(countAfterSecond == countAfterFirst)
@@ -161,11 +161,11 @@ struct DiscoveryServiceTests {
 
     @Test("cache miss after invalidate — second probe fires new HTTP calls")
     func cacheMissAfterInvalidate() async throws {
-        actor CallCounter {
-            var probeCount = 0
-            func increment() { probeCount += 1 }
+        // Counter is safe under .serialized — no concurrent access within this suite.
+        final class Counter: @unchecked Sendable {
+            var value: Int = 0
         }
-        let counter = CallCounter()
+        let counter = Counter()
 
         let versionJSON = #"{"Browser":"Chrome/120.0.0.0"}"#
         let tabsJSON = #"[{"type":"page","id":"1","url":"https://example.com","title":"Ex"}]"#
@@ -173,7 +173,7 @@ struct DiscoveryServiceTests {
         let session = makeMockSession { request in
             let url = request.url!.absoluteString
             if url.contains("/json/version") {
-                Task { await counter.increment() }
+                counter.value += 1
                 let response = HTTPURLResponse(
                     url: request.url!, statusCode: 200,
                     httpVersion: nil, headerFields: nil)!
@@ -188,10 +188,9 @@ struct DiscoveryServiceTests {
 
         let service = DiscoveryService(portRange: 9300...9302, urlSession: session)
 
-        // First probe
+        // First probe — probe() awaits all task group children before returning.
         _ = await service.probe()
-        try await Task.sleep(nanoseconds: 50_000_000)
-        let countAfterFirst = await counter.probeCount
+        let countAfterFirst = counter.value
         #expect(countAfterFirst > 0)
 
         // Invalidate cache
@@ -199,8 +198,7 @@ struct DiscoveryServiceTests {
 
         // Second probe — cache is invalid, must fire new HTTP calls
         _ = await service.probe()
-        try await Task.sleep(nanoseconds: 50_000_000)
-        let countAfterSecond = await counter.probeCount
+        let countAfterSecond = counter.value
 
         #expect(countAfterSecond > countAfterFirst)
     }

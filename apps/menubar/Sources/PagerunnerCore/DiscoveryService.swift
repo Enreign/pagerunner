@@ -4,8 +4,7 @@ public actor DiscoveryService {
     private var cache: [DiscoveredInstance] = []
     private var lastProbeAt: Date?
     private let cacheTTL: TimeInterval = 30
-    private let probeTimeout: TimeInterval = 0.4
-    let portRange: ClosedRange<Int>
+    private let portRange: ClosedRange<Int>
     private let urlSession: URLSession
 
     public init(portRange: ClosedRange<Int> = 9222...9239, urlSession: URLSession? = nil) {
