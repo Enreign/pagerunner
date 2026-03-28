@@ -107,6 +107,8 @@ delivered:    bool      default false
 
 **File:** `Sources/PagerunnerBar/NotificationPoller.swift` (new, lives in `PagerunnerBar` target — depends on both `DaemonClient` from Core and `NotificationService` from Bar)
 
+`@MainActor final class NotificationPoller` — same pattern as `PollingService`. Required for safe calls to `NotificationService` which is also `@MainActor`.
+
 ### Lifecycle
 
 - Instantiated in `App.swift` alongside `NotificationService`
@@ -204,7 +206,7 @@ Wire `userNotificationCenter(_:didReceive:withCompletionHandler:)`:
 | Action identifier | Behavior |
 |---|---|
 | `VIEW` | `controller?.openPopover()` + `appState?.navigation = .profile(name)` if `notif.profileName` present, else `.overview` |
-| `RESTART_SESSION` | Call `open_session` with `["profile": profileName]` — stealth/anonymize not preserved |
+| `RESTART_SESSION` | Call `open_session` with `["profile": profileName]` — stealth/anonymize not preserved (intentional; add code comment at call site) |
 | `CLOSE_SESSION` | Call `close_session` with `["session_id": sessionId]`; ignore error if session already gone |
 | `RESTART_DAEMON` | Call `AppState.restartDaemon()` |
 
