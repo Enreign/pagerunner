@@ -23,6 +23,11 @@ final class AppState {
     /// Session IDs ever observed as alive — distinguishes dead-on-arrival from crashed-later.
     var everAliveSessions: Set<String> = []
 
+    // MARK: - Discovery
+    var discoveredInstances: [DiscoveredInstance] = []
+    /// Profile labels attached from discovered (gvproxy-forwarded) instances.
+    var remoteSessions: Set<String> = []
+
     // MARK: - Daemon status
     var daemonStatus: DaemonStatus = .stopped
     var consecutiveFailures = 0
@@ -54,6 +59,10 @@ final class AppState {
         }
     }
 
+    // MARK: - Private services
+    private let daemonClient = DaemonClient()
+    private let discoveryService = DiscoveryService()
+
     // MARK: - Computed
     var sessionCount: Int { sessions.filter { $0.status == .alive }.count }
     var tabCount: Int { tabs.values.reduce(0) { $0 + $1.count } }
@@ -73,17 +82,118 @@ final class AppState {
         checkpoints[profile] ?? []
     }
 
-    // MARK: - Profile management (stubs — wired up in Task 7)
+    // MARK: - Daemon restart
 
-    /// Rename a profile's display name. Implementation in Task 7.
+    func restartDaemon() async {
+        guard let binary = binaryPath else { return }
+        let kill = Process()
+        kill.launchPath = "/usr/bin/pkill"
+        kill.arguments = ["-f", "pagerunner daemon"]
+        try? kill.run()
+        kill.waitUntilExit()
+        try? await Task.sleep(for: .milliseconds(300))
+        let proc = Process()
+        proc.launchPath = binary
+        proc.arguments = ["daemon"]
+        try? proc.run()
+        transition = .starting
+    }
+
+    // MARK: - Profile refresh
+
+    func refreshProfiles() async {
+        guard let profilesRaw = try? await daemonClient.call(tool: "list_profiles") else { return }
+        guard let data = profilesRaw["data"]?.arrayValue else { return }
+        profiles = data.compactMap { item -> Profile? in
+            guard let obj = item.objectValue else { return nil }
+            var dict: [String: Any] = [
+                "name": obj["name"]?.stringValue as Any,
+                "display_name": obj["display_name"]?.stringValue as Any,
+                "kind": obj["kind"]?.stringValue ?? "personal"
+            ]
+            if let udd = obj["user_data_dir"]?.stringValue {
+                dict["user_data_dir"] = udd
+            }
+            guard let jsonData = try? JSONSerialization.data(withJSONObject: dict),
+                  let profile = try? JSONDecoder().decode(Profile.self, from: jsonData) else { return nil }
+            return profile
+        }
+    }
+
+    // MARK: - Profile management
+
     func renameProfile(_ profile: Profile, newDisplayName: String) {
-        // TODO: Task 7 — call ConfigEditor + restart daemon
+        Task {
+            do {
+                try ConfigEditor.renameProfile(name: profile.name, newDisplayName: newDisplayName)
+                await restartDaemon()
+                await refreshProfiles()
+            } catch {
+                print("renameProfile error: \(error)")
+            }
+        }
     }
 
-    /// Remove a profile from config. Implementation in Task 7.
     func removeProfile(_ profile: Profile) {
-        // TODO: Task 7 — call ConfigEditor + restart daemon
+        Task {
+            // 1. Close any active sessions for this profile
+            let sessionsToClose = sessions.filter { $0.profile == profile.name }
+            for session in sessionsToClose {
+                do {
+                    _ = try await daemonClient.call(tool: "close_session",
+                                                    args: ["session_id": session.id])
+                } catch {
+                    print("closeSession error (continuing): \(error)")
+                    // non-fatal: continue even if close fails
+                }
+            }
+
+            // 2. Remove from config
+            do {
+                try ConfigEditor.removeProfile(name: profile.name)
+            } catch {
+                print("removeProfile error: \(error)")
+                return
+            }
+
+            // 3. Restart daemon
+            await restartDaemon()
+
+            // 4. Refresh profiles
+            await refreshProfiles()
+        }
     }
+
+    // MARK: - Discovery
+
+    func triggerDiscovery() {
+        Task {
+            let found = await discoveryService.probe()
+            discoveredInstances = found
+        }
+    }
+
+    func attachDiscovered(_ instance: DiscoveredInstance) {
+        Task {
+            guard let idx = discoveredInstances.firstIndex(where: { $0.id == instance.id }) else { return }
+            discoveredInstances[idx].attachState = .attaching
+
+            let label = "chrome-\(instance.port)"
+            do {
+                _ = try await daemonClient.call(tool: "attach_session",
+                                                args: ["debug_port": instance.port,
+                                                       "profile": label])
+                discoveredInstances[idx].attachState = .attached
+                if instance.isVM {
+                    remoteSessions.insert(label)
+                }
+            } catch {
+                discoveredInstances[idx].attachState = .failed(error.localizedDescription)
+            }
+        }
+    }
+
+    // MARK: - Daemon status tracking
 
     /// Record a poll failure and update daemonStatus.
     func recordFailure() {
@@ -112,4 +222,3 @@ final class AppState {
         // If .stopping, ignore successes (race with dying daemon)
     }
 }
-

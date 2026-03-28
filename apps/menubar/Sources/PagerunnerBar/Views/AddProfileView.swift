@@ -254,7 +254,7 @@ struct AddProfileView: View {
         do {
             try appendProfileToConfig(name: name, displayName: displayName,
                                       userDataDir: profile.fullPath, kind: "personal")
-            restartDaemon()
+            await appState.restartDaemon()
             appState.navigation = .overview
         } catch {
             errorMessage = "Failed to write config: \(error.localizedDescription)"
@@ -274,7 +274,7 @@ struct AddProfileView: View {
                 withIntermediateDirectories: true)
             try appendProfileToConfig(name: name, displayName: name,
                                       userDataDir: dataDir, kind: "agent")
-            restartDaemon()
+            await appState.restartDaemon()
             appState.navigation = .overview
         } catch {
             errorMessage = "Failed to create agent profile: \(error.localizedDescription)"
@@ -301,24 +301,6 @@ struct AddProfileView: View {
         try (existing + block).write(to: configURL, atomically: true, encoding: .utf8)
     }
 
-    // MARK: - Daemon restart
-
-    private func restartDaemon() {
-        guard let binary = appState.binaryPath else { return }
-        let kill = Process()
-        kill.launchPath = "/usr/bin/pkill"
-        kill.arguments = ["-f", "pagerunner daemon"]
-        try? kill.run()
-        kill.waitUntilExit()
-        Task {
-            try? await Task.sleep(for: .milliseconds(300))
-            let proc = Process()
-            proc.launchPath = binary
-            proc.arguments = ["daemon"]
-            try? proc.run()
-            appState.transition = .starting
-        }
-    }
 }
 
 // MARK: - Discovered profile row

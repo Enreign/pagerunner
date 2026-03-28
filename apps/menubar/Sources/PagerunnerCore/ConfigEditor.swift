@@ -3,17 +3,17 @@ import Foundation
 // MARK: - URL extension
 
 extension URL {
-    static let pagerunnerConfig = URL(fileURLWithPath: NSHomeDirectory())
+    public static let pagerunnerConfig = URL(fileURLWithPath: NSHomeDirectory())
         .appendingPathComponent(".pagerunner/config.toml")
 }
 
 // MARK: - ConfigEditor errors
 
-enum ConfigEditorError: Error, LocalizedError {
+public enum ConfigEditorError: Error, LocalizedError {
     case profileNotFound(String)
     case invalidProfileName(String)
 
-    var errorDescription: String? {
+    public var errorDescription: String? {
         switch self {
         case .profileNotFound(let name):
             return "Profile '\(name)' not found in config"
@@ -25,11 +25,11 @@ enum ConfigEditorError: Error, LocalizedError {
 
 // MARK: - ConfigEditor
 
-struct ConfigEditor {
+public struct ConfigEditor {
 
     // MARK: Public API
 
-    static func renameProfile(
+    public static func renameProfile(
         name: String,
         newDisplayName: String,
         configURL: URL = .pagerunnerConfig
@@ -45,7 +45,7 @@ struct ConfigEditor {
         try writeConfig(blocks.joined(), to: configURL)
     }
 
-    static func removeProfile(
+    public static func removeProfile(
         name: String,
         configURL: URL = .pagerunnerConfig
     ) throws {
@@ -59,7 +59,7 @@ struct ConfigEditor {
         try writeConfig(filtered.joined(), to: configURL)
     }
 
-    static func addAttachedProfile(
+    public static func addAttachedProfile(
         name: String,
         displayName: String,
         port: Int,
@@ -93,7 +93,7 @@ struct ConfigEditor {
     /// Splits the TOML content into blocks.
     /// The first block is the preamble (everything before the first [[profiles]]).
     /// Each [[profiles]] header starts a new block.
-    static func splitBlocks(_ content: String) -> [String] {
+    public static func splitBlocks(_ content: String) -> [String] {
         var blocks: [String] = []
         var current = ""
 
@@ -116,7 +116,7 @@ struct ConfigEditor {
 
     /// Returns true if the block contains a line `name = "<name>"` (after whitespace trim).
     /// A `display_name = ...` line that happens to contain `name = "..."` is NOT a match.
-    static func blockMatchesName(_ block: String, name: String) -> Bool {
+    public static func blockMatchesName(_ block: String, name: String) -> Bool {
         let target = "name = \"\(name)\""
         return block.components(separatedBy: "\n").contains { line in
             let trimmed = line.trimmingCharacters(in: .whitespaces)
