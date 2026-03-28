@@ -356,15 +356,14 @@ In the tool dispatch `match tool` block (around line 2690 area), add:
     // Resolve profile_name from session_id if provided
     let profile_name = if let Some(sid) = args.get("session_id").and_then(|v| v.as_str()) {
         let mgr = sessions.lock().await;
-        mgr.get(sid).and_then(|s| s.profile_name().map(|p| p.to_string()))
+        // Session has a public field `profile_name: String`, not a method
+        mgr.get(sid).map(|s| s.profile_name.clone())
     } else {
         None
     };
     handle_notify(&db, &args, profile_name)?
 }
 ```
-
-Note: `session.profile_name()` — check what the Session struct exposes. Look at `src/session.rs` for the field name. It may be `profile` or `profile_name`. Use whatever field stores the profile name string.
 
 Also add `"notify"` to the audit `build_args_summary` allowlist (check `src/audit.rs`) so it gets recorded.
 
@@ -894,10 +893,11 @@ NotificationSettings.registerDefaults(
 
 - [ ] **Step 2: Add unexpected daemon stop notification**
 
-In `poll(client:)`, in the `catch` block:
+In `poll(client:)`, in the `catch` block. **Order matters:** capture `wasRunningOrStale` BEFORE calling `recordFailure()` — that call mutates `daemonStatus`.
 
 ```swift
 } catch {
+    // Capture BEFORE recordFailure() mutates daemonStatus
     let wasRunningOrStale = appState.daemonStatus != .stopped
     appState.recordFailure()
     // Fire notification on unexpected stop (not intentional stop)
