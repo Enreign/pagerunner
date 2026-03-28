@@ -22,6 +22,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     // Idle detection: tracks last tab-count-change time per session
     private var sessionIdleTracker: [String: (tabCount: Int, stableFrom: Date)] = [:]
     private var idleNotifiedSessions: Set<String> = []
+    // Session lifecycle tracking for started/crashed notifications
+    private var previousSessionStates: [String: SessionStatus] = [:]
+    // Checkpoint tracking for checkpoint-saved notifications
+    private var knownCheckpointIds: Set<String> = []
+    private var profilesWithCheckpointsSeeded: Set<String> = []
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         // Keepalive window: 1×1 NSWindow, orderOut immediately.
@@ -114,6 +119,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             for s in sessions where s.status == .alive {
                 appState.everAliveSessions.insert(s.id)
             }
+
+            // Session started / crashed notifications
+            for session in sessions {
+                let prev = previousSessionStates[session.id]
+                if prev == nil && session.status == .alive
+                   && NotificationSettings.notifyOnStart(profile: session.profile) {
+                    notificationService.notifySessionStarted(profileName: session.profile)
+                } else if prev == .alive && session.status == .crashed
+                   && NotificationSettings.notifyOnCrash(profile: session.profile) {
+                    notificationService.notifySessionCrashed(profile: session.profile, sessionId: session.id)
+                }
+            }
+            previousSessionStates = Dictionary(uniqueKeysWithValues: sessions.map { ($0.id, $0.status) })
+
             appState.recordSuccess()
 
             // 2. list_tabs for each alive session (serial, best-effort)
@@ -205,6 +224,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                                   let checkpoint = try? JSONDecoder().decode(Checkpoint.self, from: jsonData) else { return nil }
                             return checkpoint
                         }
+                        let allIds = (appState.checkpoints[profile] ?? []).map { $0.checkpointId }
+                        if profilesWithCheckpointsSeeded.contains(profile) {
+                            for cp in appState.checkpoints[profile] ?? [] {
+                                if !knownCheckpointIds.contains(cp.checkpointId) {
+                                    notificationService.notifyCheckpointSaved(name: cp.name)
+                                }
+                            }
+                        } else {
+                            profilesWithCheckpointsSeeded.insert(profile)
+                        }
+                        knownCheckpointIds.formUnion(allIds)
                     }
                 }
             }
