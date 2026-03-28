@@ -2601,3 +2601,35 @@ fn test_registry_entry_visible_after_open_session() {
 
     run_live(&["close-session", &session_id]);
 }
+
+/// Close a session — an autosave checkpoint should be written automatically.
+#[cfg_attr(not(target_os = "macos"), ignore)]
+#[test]
+#[serial]
+fn test_close_session_writes_auto_checkpoint() {
+    let _daemon = start_test_daemon();
+
+    let profiles_out = run_live(&["list-profiles"]);
+    let profiles: serde_json::Value = serde_json::from_str(&stdout(&profiles_out)).unwrap();
+    let profile = profiles["data"][0]["name"].as_str().unwrap().to_string();
+
+    let open = run_live(&["open-session", &profile]);
+    assert!(open.status.success(), "open-session failed: {}", stderr(&open));
+    let v: serde_json::Value = serde_json::from_str(&stdout(&open)).unwrap();
+    let session_id = v["session_id"].as_str().unwrap().to_string();
+
+    // Close it — should trigger auto-checkpoint
+    let close = run_live(&["close-session", &session_id]);
+    assert!(close.status.success(), "close-session failed: {}", stderr(&close));
+
+    // An autosave checkpoint should now exist for this profile
+    let ckpts_out = run_live(&["list-session-checkpoints", "--profile", &profile]);
+    assert!(ckpts_out.status.success(), "list-session-checkpoints failed: {}", stderr(&ckpts_out));
+    let ckpts: serde_json::Value = serde_json::from_str(&stdout(&ckpts_out)).unwrap();
+    let data = ckpts["data"].as_array()
+        .or_else(|| ckpts["result"]["data"].as_array())
+        .expect("expected data array in list-session-checkpoints output");
+    assert!(!data.is_empty(), "auto-checkpoint should be written on close");
+    let name = data[0]["name"].as_str().unwrap_or("");
+    assert!(name.starts_with("Autosave"), "checkpoint should be named Autosave · …, got: {:?}", name);
+}

@@ -1827,8 +1827,27 @@ async fn dispatch_tool_inner(
                 .await;
             }
 
-            let mut mgr = sessions.lock().await;
-            mgr.close(id, &db).await?;
+            // Auto-checkpoint before close (best-effort: never fail the close if checkpoint fails).
+            // The lock guard `ckpt_guard` is dropped at the end of this block — this is intentional.
+            // The second lock acquisition below MUST come after this block ends.
+            {
+                let mut ckpt_guard = sessions.lock().await;
+                if let Ok(session) = ckpt_guard.get_live(id) {
+                    // Lock is held across this await — acceptable here because close_session
+                    // is a terminal operation; no concurrent tool calls on this session are expected.
+                    let _ = crate::checkpoint::save_session_checkpoint(
+                        session,
+                        Some("Autosave · close"),
+                        &db,
+                    ).await;
+                }
+            } // ← ckpt_guard dropped here — lock fully released before next acquisition
+
+            // Delete registry entry (best-effort)
+            let _ = crate::session_registry::delete_entry(&db, id);
+
+            let mut close_guard = sessions.lock().await;
+            close_guard.close(id, &db).await?;
             // Purge vault entries for this session (best-effort, non-fatal)
             let vault = crate::anonymizer::vault::Vault::new(Arc::clone(&db));
             if let Err(e) = vault.purge_session(id) {
