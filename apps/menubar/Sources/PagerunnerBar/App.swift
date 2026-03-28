@@ -18,6 +18,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var appState = AppState()
     private var pollingService: PollingService!
     private var notificationService: NotificationService!
+    private var notificationPoller: NotificationPoller!
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         // Keepalive window: 1×1 NSWindow, orderOut immediately.
@@ -33,6 +34,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         // Request notification permission and register categories
         notificationService = NotificationService()
+        notificationPoller = NotificationPoller(notificationService: notificationService)
+        notificationPoller.start()
         Task { @MainActor in
             await notificationService.requestPermission()
         }
@@ -49,6 +52,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         statusItemController = StatusItemController(appState: appState, pollingService: pollingService)
+        notificationService.configure(appState: appState, controller: statusItemController)
         pollingService.start()
     }
 
@@ -73,6 +77,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     }
                 }
             }
+            // Register notification defaults (idempotent — safe to call on every poll)
+            let agentNames = Set(appState.agentProfiles.map { $0.name })
+            NotificationSettings.registerDefaults(
+                profileNames: appState.profiles.map { $0.name },
+                agentProfiles: agentNames
+            )
 
             // 1. list_sessions
             let sessionsRaw = try await client.call(tool: "list_sessions")
@@ -160,7 +170,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 }
             }
         } catch {
+            // Capture BEFORE recordFailure() mutates daemonStatus
+            let wasRunningOrStale = appState.daemonStatus != .stopped
             appState.recordFailure()
+            // Fire notification on unexpected stop (not intentional stop)
+            if wasRunningOrStale && appState.daemonStatus == .stopped
+               && appState.transition == .none
+               && NotificationSettings.notifyOnDaemonHealth() {
+                notificationService.notifyDaemonStopped()
+            }
         }
     }
 }
