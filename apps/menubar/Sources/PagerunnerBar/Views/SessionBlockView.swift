@@ -69,6 +69,16 @@ struct SessionBlockView: View {
                             .cornerRadius(3)
                     }
 
+                    if appState.remoteSessions.contains(session.profile) {
+                        Text("VM")
+                            .font(.system(size: 9, weight: .semibold))
+                            .padding(.horizontal, 4)
+                            .padding(.vertical, 1)
+                            .background(Color.orange.opacity(0.15))
+                            .foregroundStyle(.orange)
+                            .clipShape(Capsule())
+                    }
+
                     Spacer()
 
                     Button {
@@ -166,7 +176,7 @@ struct SessionBlockView: View {
 
                 if !isCollapsed {
                     ForEach(tabs) { tab in
-                        TabRowView(tab: tab, sessionId: session.id, tabs: tabs, controller: controller)
+                        TabRowView(tab: tab, sessionId: session.id, tabs: tabs, controller: controller, isRemote: appState.remoteSessions.contains(session.profile))
                     }
                     .padding(.bottom, 4)
                 }
@@ -227,6 +237,7 @@ struct TabRowView: View {
     let sessionId: String
     let tabs: [PagerunnerCore.Tab]
     let controller: StatusItemController
+    let isRemote: Bool
     @Environment(\.daemonClient) private var daemon
     @State private var isHovered = false
 
@@ -253,7 +264,9 @@ struct TabRowView: View {
 
     var body: some View {
         Button {
-            controller.focusTab(sessionId: sessionId, targetId: tab.targetId)
+            if !isRemote {
+                controller.focusTab(sessionId: sessionId, targetId: tab.targetId)
+            }
             controller.closePopover()
         } label: {
             HStack(spacing: 6) {
@@ -311,12 +324,14 @@ struct TabRowView: View {
         .buttonStyle(.plain)
         .onHover { isHovered = $0 }
         .contextMenu {
-            Button("Focus tab") {
-                controller.focusTab(sessionId: sessionId, targetId: tab.targetId)
-                controller.closePopover()
-            }
+            if !isRemote {
+                Button("Focus tab") {
+                    controller.focusTab(sessionId: sessionId, targetId: tab.targetId)
+                    controller.closePopover()
+                }
 
-            Divider()
+                Divider()
+            }
 
             Button("Snapshot this tab") {
                 guard let origin = originFrom(url: tab.url) else { return }
