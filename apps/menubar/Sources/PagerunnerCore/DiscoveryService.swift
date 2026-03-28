@@ -90,12 +90,35 @@ public actor DiscoveryService {
             return nil
         }
 
+        // Step 3: detect gvproxy ownership (macOS only, background priority)
+        let isVM = await Task(priority: .background) {
+            Self.detectGvproxy(port: port)
+        }.value
+
         return DiscoveredInstance(
             id: "port-\(port)",
             port: port,
             tabCount: tabCount,
-            isVM: false,
+            isVM: isVM,
             attachState: .idle
         )
+    }
+
+    /// Returns true if the process listening on `port` is gvproxy (Podman/Lima VM forwarding).
+    private static func detectGvproxy(port: Int) -> Bool {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/sbin/lsof")
+        process.arguments = ["-i", "tcp:\(port)", "-n", "-P"]
+        let pipe = Pipe()
+        process.standardOutput = pipe
+        process.standardError = Pipe()
+        do {
+            try process.run()
+            process.waitUntilExit()
+        } catch {
+            return false
+        }
+        let output = String(data: pipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+        return output.lowercased().contains("gvproxy")
     }
 }

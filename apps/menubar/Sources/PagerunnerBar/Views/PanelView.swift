@@ -57,8 +57,8 @@ struct PanelView: View {
                         try? proc.run()
                         daemonProcess = proc
                     })
-                } else if appState.transition == .starting {
-                    StartingView()
+                } else if appState.transition == .starting || appState.transition == .restarting {
+                    StartingView(restarting: appState.transition == .restarting)
                 } else {
                     ScrollView {
                         switch appState.navigation {
@@ -138,9 +138,10 @@ struct DaemonBanner: View {
     }
     private var transitionText: String {
         switch appState.transition {
-        case .starting: return "Starting…"
-        case .stopping: return "Stopping…"
-        case .none:     return bannerText
+        case .starting:    return "Starting…"
+        case .restarting:  return "Restarting…"
+        case .stopping:    return "Stopping…"
+        case .none:        return bannerText
         }
     }
     private var bannerText: String {
@@ -327,6 +328,8 @@ struct StoppedView: View {
 // MARK: - Starting state (centered illustration)
 
 struct StartingView: View {
+    var restarting: Bool = false
+
     var body: some View {
         VStack(spacing: 16) {
             Spacer()
@@ -336,11 +339,11 @@ struct StartingView: View {
                 .frame(width: 48, height: 48)
 
             VStack(spacing: 6) {
-                Text("Pagerunner is starting")
+                Text(restarting ? "Pagerunner is restarting" : "Pagerunner is starting")
                     .font(.system(size: 14, weight: .medium))
                     .foregroundColor(Color(red: 0.133, green: 0.133, blue: 0.133))
 
-                Text("Connecting to Chrome…")
+                Text(restarting ? "Applying changes…" : "Connecting to Chrome…")
                     .font(.system(size: 11))
                     .foregroundColor(Color(red: 0.533, green: 0.533, blue: 0.533))
                     .multilineTextAlignment(.center)

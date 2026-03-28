@@ -56,7 +56,10 @@ struct AddProfileView: View {
                 newAgentTab
             }
         }
-        .task { await loadDiscovered() }
+        .task {
+            await loadDiscovered()
+            appState.triggerDiscovery()
+        }
     }
 
     // MARK: - Tab button
@@ -110,22 +113,47 @@ struct AddProfileView: View {
 
     private var discoveredTab: some View {
         VStack(spacing: 0) {
+            // Chrome profiles from file system
             if isLoading {
                 ProgressView()
                     .frame(maxWidth: .infinity)
                     .padding(.top, 32)
-            } else if discoveredProfiles.isEmpty {
-                Text("No new Chrome profiles found")
-                    .font(.system(size: 12))
-                    .foregroundStyle(.secondary)
-                    .frame(maxWidth: .infinity, alignment: .center)
-                    .padding(.top, 24)
-            } else {
+            } else if !discoveredProfiles.isEmpty {
                 ForEach(discoveredProfiles) { profile in
                     DiscoveredProfileRow(profile: profile, isAdding: isAdding) {
                         Task { await addDiscovered(profile) }
                     }
                 }
+            }
+
+            // Running Chrome instances (debug port discovery)
+            let vmInstances = appState.discoveredInstances.filter { $0.isVM }
+            let localInstances = appState.discoveredInstances.filter { !$0.isVM }
+
+            if !vmInstances.isEmpty {
+                sectionHeader("VM / Container Chrome")
+                ForEach(vmInstances) { instance in
+                    DebugPortInstanceRow(instance: instance) {
+                        appState.attachDiscovered(instance)
+                    }
+                }
+            }
+
+            if !localInstances.isEmpty {
+                sectionHeader("Running Chrome")
+                ForEach(localInstances) { instance in
+                    DebugPortInstanceRow(instance: instance) {
+                        appState.attachDiscovered(instance)
+                    }
+                }
+            }
+
+            if !isLoading && discoveredProfiles.isEmpty && appState.discoveredInstances.isEmpty {
+                Text("No new Chrome profiles found")
+                    .font(.system(size: 12))
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .center)
+                    .padding(.top, 24)
             }
 
             if let error = errorMessage {
@@ -136,6 +164,18 @@ struct AddProfileView: View {
                     .padding(.top, 4)
             }
         }
+    }
+
+    private func sectionHeader(_ title: String) -> some View {
+        Text(title)
+            .font(.system(size: 9, weight: .semibold))
+            .foregroundStyle(.secondary)
+            .textCase(.uppercase)
+            .tracking(0.5)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 12)
+            .padding(.top, 10)
+            .padding(.bottom, 2)
     }
 
     // MARK: - New Agent tab
@@ -365,6 +405,75 @@ private struct DiscoveredProfileRow: View {
                         .foregroundColor(.white)
                 }
             }
+        }
+    }
+}
+
+// MARK: - Debug port instance row
+
+private struct DebugPortInstanceRow: View {
+    let instance: DiscoveredInstance
+    let onAttach: () -> Void
+    @State private var isHovered = false
+
+    var body: some View {
+        HStack(spacing: 9) {
+            Text("⊙")
+                .font(.system(size: 18))
+                .foregroundStyle(.secondary)
+                .frame(width: 32, alignment: .center)
+
+            VStack(alignment: .leading, spacing: 1) {
+                HStack(spacing: 4) {
+                    Text(":\(instance.port)")
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundColor(Color(red: 0.133, green: 0.133, blue: 0.133))
+                    if instance.isVM {
+                        Text("VM")
+                            .font(.system(size: 9, weight: .semibold))
+                            .padding(.horizontal, 4)
+                            .padding(.vertical, 1)
+                            .background(Color.orange.opacity(0.15))
+                            .foregroundStyle(.orange)
+                            .clipShape(Capsule())
+                    }
+                }
+                Text("\(instance.tabCount) tab\(instance.tabCount == 1 ? "" : "s")")
+                    .font(.system(size: 11))
+                    .foregroundColor(Color(red: 0.533, green: 0.533, blue: 0.533))
+            }
+
+            Spacer()
+
+            switch instance.attachState {
+            case .idle:
+                Text("Attach")
+                    .font(.system(size: 11))
+                    .foregroundColor(Color(red: 0, green: 0.478, blue: 1))
+                    .padding(.horizontal, 7)
+                    .padding(.vertical, 2)
+                    .background(Color(red: 0, green: 0.478, blue: 1).opacity(isHovered ? 0.12 : 0.07))
+                    .cornerRadius(4)
+            case .attaching:
+                ProgressView().scaleEffect(0.6).frame(width: 16, height: 16)
+            case .attached:
+                Text("Attached")
+                    .font(.system(size: 11))
+                    .foregroundColor(Color(red: 0.533, green: 0.533, blue: 0.533))
+            case .failed(let msg):
+                Text(msg)
+                    .font(.system(size: 10))
+                    .foregroundColor(.red)
+                    .lineLimit(1)
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 6)
+        .background(isHovered ? Color.black.opacity(0.04) : Color.clear)
+        .contentShape(Rectangle())
+        .onHover { isHovered = $0 }
+        .onTapGesture {
+            if case .idle = instance.attachState { onAttach() }
         }
     }
 }

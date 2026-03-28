@@ -37,6 +37,7 @@ final class AppState {
     enum TransitionState: Equatable {
         case none
         case starting
+        case restarting
         case stopping
     }
     var transition: TransitionState = .none
@@ -96,7 +97,7 @@ final class AppState {
         proc.launchPath = binary
         proc.arguments = ["daemon"]
         try? proc.run()
-        transition = .starting
+        transition = .restarting
     }
 
     // MARK: - Profile refresh
@@ -181,14 +182,21 @@ final class AppState {
             discoveredInstances[idx].attachState = .attaching
 
             let label = "chrome-\(instance.port)"
+            let displayName = instance.isVM ? "Chrome :\(instance.port) (VM)" : "Chrome :\(instance.port)"
             do {
-                _ = try await daemonClient.call(tool: "attach_session",
-                                                args: ["debug_port": instance.port,
-                                                       "profile": label])
+                // Save profile to config so it appears permanently in Overview
+                try ConfigEditor.addAttachedProfile(name: label, displayName: displayName, port: instance.port)
+
+                // Restart daemon to pick up the new profile entry
+                await restartDaemon()
+                await refreshProfiles()
+
                 discoveredInstances[idx].attachState = .attached
                 if instance.isVM {
                     remoteSessions.insert(label)
                 }
+                // Navigate to the new profile so user sees the attached session
+                navigation = .profile(label)
             } catch {
                 discoveredInstances[idx].attachState = .failed(error.localizedDescription)
             }

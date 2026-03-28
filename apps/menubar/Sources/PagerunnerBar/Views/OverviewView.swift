@@ -105,20 +105,9 @@ struct OverviewView: View {
                     .padding(.top, 20)
             }
 
-            // MARK: - Discovered Chrome instances
-            if !appState.discoveredInstances.isEmpty {
-                Divider()
-                    .padding(.horizontal, 10)
-
-                ForEach(appState.discoveredInstances) { instance in
-                    DiscoveredInstanceRow(instance: instance) {
-                        appState.attachDiscovered(instance)
-                    }
-                }
-            }
         }
         .onAppear {
-            appState.triggerDiscovery()
+            appState.triggerDiscovery()  // pre-load for when user opens + menu
         }
         // MARK: - Rename sheet
         .sheet(isPresented: $showRenameSheet) {
@@ -158,69 +147,6 @@ struct OverviewView: View {
         } message: {
             Text("This will remove the profile from pagerunner. The Chrome profile data will not be deleted.")
         }
-    }
-}
-
-// MARK: - Discovered instance row
-
-private struct DiscoveredInstanceRow: View {
-    let instance: DiscoveredInstance
-    let onAttach: () -> Void
-
-    var body: some View {
-        HStack {
-            // Circle icon (⊙)
-            Text("⊙")
-                .font(.system(size: 18))
-                .foregroundStyle(.secondary)
-                .frame(width: 26)
-
-            VStack(alignment: .leading, spacing: 2) {
-                HStack(spacing: 4) {
-                    Text(":\(instance.port)")
-                        .font(.system(size: 11, weight: .medium))
-                    Text("Chrome (no profile)")
-                        .font(.system(size: 11))
-                        .foregroundStyle(.secondary)
-                    if instance.isVM {
-                        Text("VM")
-                            .font(.system(size: 9, weight: .semibold))
-                            .padding(.horizontal, 4)
-                            .padding(.vertical, 1)
-                            .background(Color.orange.opacity(0.15))
-                            .foregroundStyle(.orange)
-                            .clipShape(Capsule())
-                    }
-                }
-                Text("\(instance.tabCount) tab\(instance.tabCount == 1 ? "" : "s")")
-                    .font(.system(size: 10))
-                    .foregroundStyle(.secondary)
-            }
-
-            Spacer()
-
-            switch instance.attachState {
-            case .idle:
-                Button("Attach") { onAttach() }
-                    .buttonStyle(.borderedProminent)
-                    .controlSize(.small)
-            case .attaching:
-                ProgressView()
-                    .scaleEffect(0.6)
-            case .attached:
-                Text("Attached")
-                    .font(.system(size: 10))
-                    .foregroundStyle(.secondary)
-            case .failed(let msg):
-                Text(msg)
-                    .font(.system(size: 10))
-                    .foregroundStyle(.red)
-                    .lineLimit(1)
-            }
-        }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 6)
-        .opacity(0.7)
     }
 }
 
