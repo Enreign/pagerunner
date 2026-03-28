@@ -125,7 +125,7 @@ struct OverviewView: View {
             if let profile = profileToRename {
                 RenameSheet(
                     title: "Rename Profile",
-                    prompt: "Enter a new display name for \"\(profile.name)\".",
+                    prompt: "Enter a new display name for \"\(profile.displayName)\"",
                     isPresented: $showRenameSheet,
                     initialValue: profile.displayName
                 ) { newName in
@@ -137,7 +137,7 @@ struct OverviewView: View {
         }
         // MARK: - Remove confirmation
         .confirmationDialog(
-            "Remove \"\(profileToRemove?.name ?? "")\"?",
+            "Remove \"\(profileToRemove?.displayName ?? "")\"?",
             isPresented: Binding(
                 get: { profileToRemove != nil },
                 set: { if !$0 { profileToRemove = nil } }

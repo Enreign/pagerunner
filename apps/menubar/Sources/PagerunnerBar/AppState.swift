@@ -156,8 +156,14 @@ final class AppState {
     func triggerDiscovery() {
         Task {
             let found = await discoveryService.probe()
+            // Filter out ports already covered by an attached-kind profile
+            let managedPorts = Set(profiles.compactMap { p -> Int? in
+                guard p.kind == "attached", let port = p.debugPort else { return nil }
+                return port
+            })
+            let unmanaged = found.filter { !managedPorts.contains($0.port) }
             // Preserve non-idle attach states for existing instances
-            discoveredInstances = found.map { instance in
+            discoveredInstances = unmanaged.map { instance in
                 if let existing = discoveredInstances.first(where: { $0.id == instance.id }),
                    existing.attachState != .idle {
                     var updated = instance

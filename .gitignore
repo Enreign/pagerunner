@@ -56,3 +56,5 @@ mcpb/dist/
 
 # OS
 Thumbs.db
+apps/menubar/.build/
+# Swift menubar build artifacts
