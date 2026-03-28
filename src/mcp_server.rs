@@ -645,6 +645,23 @@ async fn run_standalone() -> Result<()> {
     let mut reader = BufReader::new(stdin);
     let mut writer = stdout;
 
+    // Reattach to any Chrome instances that survived a previous MCP restart
+    {
+        let site_store = std::sync::Arc::new(crate::site_knowledge::SiteKnowledgeStore::new(
+            Arc::clone(&db),
+            db.master_key(),
+        ));
+        let reattached = crate::session_registry::reconcile_sessions(
+            &db,
+            &sessions,
+            &config,
+            Some(site_store),
+        ).await;
+        if !reattached.is_empty() {
+            tracing::info!("Reattached {} surviving Chrome session(s)", reattached.len());
+        }
+    }
+
     tracing::info!("Pagerunner MCP server ready (standalone)");
 
     let mut line = String::new();

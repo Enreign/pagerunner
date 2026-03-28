@@ -2633,3 +2633,45 @@ fn test_close_session_writes_auto_checkpoint() {
     let name = data[0]["name"].as_str().unwrap_or("");
     assert!(name.starts_with("Autosave"), "checkpoint should be named Autosave · …, got: {:?}", name);
 }
+
+/// Open a session, stop the daemon, restart it — session should reappear as alive.
+#[cfg_attr(not(target_os = "macos"), ignore)]
+#[test]
+#[serial]
+fn test_session_reattach_after_daemon_restart() {
+    let _launchd = LaunchdGuard::pause_pagerunner_daemon();
+    let daemon = start_test_daemon();
+
+    let profiles_out = run_live(&["list-profiles"]);
+    let profiles: serde_json::Value = serde_json::from_str(&stdout(&profiles_out)).unwrap();
+    let profile = profiles["data"][0]["name"].as_str().unwrap().to_string();
+
+    let open = run_live(&["open-session", &profile]);
+    assert!(open.status.success(), "open-session failed: {}", stderr(&open));
+
+    // Stop daemon — Chrome stays running
+    drop(daemon);
+
+    // Restart daemon — reconciliation runs at startup
+    let daemon2 = start_test_daemon();
+
+    // Session should be back as alive (possibly new session_id, but profile present)
+    let list = run_live(&["list-sessions"]);
+    assert!(list.status.success(), "list-sessions failed: {}", stderr(&list));
+    let lv: serde_json::Value = serde_json::from_str(&stdout(&list)).unwrap();
+    let data = lv["data"].as_array()
+        .or_else(|| lv["result"]["data"].as_array())
+        .expect("expected data array in list-sessions output");
+    assert!(
+        data.iter().any(|s| s["profile"].as_str() == Some(&profile) && s["status"].as_str() == Some("alive")),
+        "session should be reattached after daemon restart; sessions: {:?}",
+        data
+    );
+
+    // Cleanup: close the reattached session
+    if let Some(s) = data.iter().find(|s| s["profile"].as_str() == Some(&profile)) {
+        let sid = s["id"].as_str().unwrap();
+        run_live(&["close-session", sid]);
+    }
+    drop(daemon2);
+}

@@ -42,6 +42,18 @@ pub async fn run() -> Result<()> {
 
     tracing::info!("Pagerunner daemon listening on {:?}", socket_path);
 
+    // Reattach surviving Chrome sessions. Passing site_store: None here is intentional —
+    // the daemon constructs site knowledge per-request in dispatch_tool_inner, not at startup.
+    let reattached = crate::session_registry::reconcile_sessions(
+        &db,
+        &sessions,
+        &config,
+        None,  // site_store: not needed for basic reattach
+    ).await;
+    if !reattached.is_empty() {
+        tracing::info!("Daemon: reattached {} surviving Chrome session(s)", reattached.len());
+    }
+
     loop {
         let (stream, _) = listener
             .accept()
