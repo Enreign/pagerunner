@@ -39,7 +39,6 @@ struct OverviewView: View {
                     ProfileRowView(
                         profile: profile,
                         index: index,
-                        isActive: appState.daemonStatus == .running,
                         onRename: {
                             profileToRename = profile
                             showRenameSheet = true
@@ -86,7 +85,6 @@ struct OverviewView: View {
                     ProfileRowView(
                         profile: profile,
                         index: index,
-                        isActive: appState.daemonStatus == .running,
                         onRename: {
                             profileToRename = profile
                             showRenameSheet = true

@@ -6,7 +6,6 @@ import PagerunnerCore
 struct ProfileRowView: View {
     let profile: Profile
     let index: Int
-    let isActive: Bool          // whether daemon is connected
     let onRename: () -> Void
     let onRemove: () -> Void
 
