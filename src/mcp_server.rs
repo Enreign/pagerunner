@@ -1754,6 +1754,27 @@ async fn dispatch_tool_inner(
                 session_id
             };
 
+            let entry = crate::session_registry::SessionRegistryEntry {
+                session_id: id.clone(),
+                profile_name: profile.name.clone(),
+                display_name: profile.display_name.clone(),
+                stealth,
+                debug_port: {
+                    let mgr = sessions.lock().await;
+                    mgr.get(&id).map(|s| s.debug_port).unwrap_or(0)
+                },
+                opened_at: std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_secs(),
+                security_params: serde_json::json!({
+                    "allowed_domains": args["allowed_domains"],
+                    "max_navigations": args["max_navigations"],
+                    "stealth": stealth,
+                }),
+            };
+            let _ = crate::session_registry::save_entry(&db, &entry);
+
             if let Some(a) = audit {
                 a.record(crate::audit::AuditEvent::new(
                     crate::audit::AuditEventKind::SessionOpened {

@@ -2542,3 +2542,62 @@ fn test_multi_window_two_sessions_same_profile() {
     // Close primary session
     run_live(&["close-session", &sid1]);
 }
+
+// ─────────────────────────────────────────────────────────────
+// Session registry tests
+// ─────────────────────────────────────────────────────────────
+
+/// With an invalid profile, open_session returns error — registry should NOT be written.
+#[test]
+#[serial]
+fn test_registry_not_written_on_open_session_invalid_profile() {
+    let out = run(&["open-session", "nonexistent-profile"]);
+    assert!(!out.status.success());
+    // No sessions should exist
+    let list_out = run(&["list-sessions"]);
+    assert!(list_out.status.success(), "list-sessions failed: {}", stderr(&list_out));
+    let s = stdout(&list_out);
+    let v: serde_json::Value = serde_json::from_str(s.trim()).expect("must be JSON");
+    let arr = if v.is_array() {
+        v.as_array().unwrap().clone()
+    } else if v["result"].is_array() {
+        v["result"].as_array().unwrap().clone()
+    } else {
+        v["result"]["data"]
+            .as_array()
+            .expect("expected array at result.data")
+            .clone()
+    };
+    assert!(arr.is_empty(), "expected no sessions after failed open, got: {:?}", arr);
+}
+
+/// Open a real session — it should appear in list_sessions with alive status.
+#[cfg_attr(not(target_os = "macos"), ignore)]
+#[test]
+#[serial]
+fn test_registry_entry_visible_after_open_session() {
+    let _daemon = start_test_daemon();
+
+    let profiles_out = run_live(&["list-profiles"]);
+    let profiles: serde_json::Value = serde_json::from_str(&stdout(&profiles_out)).unwrap();
+    let profile = profiles["data"][0]["name"].as_str().unwrap().to_string();
+
+    let open = run_live(&["open-session", &profile]);
+    assert!(open.status.success(), "open-session failed: {}", stderr(&open));
+    let v: serde_json::Value = serde_json::from_str(&stdout(&open)).unwrap();
+    let session_id = v["session_id"].as_str().unwrap().to_string();
+
+    let list_out = run_live(&["list-sessions"]);
+    assert!(list_out.status.success(), "list-sessions failed: {}", stderr(&list_out));
+    let lv: serde_json::Value = serde_json::from_str(&stdout(&list_out)).unwrap();
+    let data = lv["data"].as_array()
+        .or_else(|| lv["result"]["data"].as_array())
+        .expect("expected data array in list-sessions output");
+    assert!(
+        data.iter().any(|s| s["id"].as_str() == Some(&session_id) && s["status"].as_str() == Some("alive")),
+        "opened session should appear as alive in list_sessions; got: {:?}",
+        data
+    );
+
+    run_live(&["close-session", &session_id]);
+}
