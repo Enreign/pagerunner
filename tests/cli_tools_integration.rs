@@ -245,13 +245,15 @@ fn test_list_sessions_has_status_field() {
     assert!(out.status.success(), "stderr: {}", stderr(&out));
     let s = stdout(&out);
     let v: serde_json::Value = serde_json::from_str(s.trim()).expect("must be JSON");
-    // Response is either a raw JSON array or wrapped in {"result": [...], "_metadata": {...}}
+    // Response is either a raw JSON array, {"result": [...]}, or {"result": {"data": [...]}}
     let arr = if v.is_array() {
         v.as_array().unwrap().clone()
+    } else if v["result"].is_array() {
+        v["result"].as_array().unwrap().clone()
     } else {
-        v["result"]
+        v["result"]["data"]
             .as_array()
-            .expect("expected array at 'result' key")
+            .expect("expected array at 'result' or 'result.data' key")
             .clone()
     };
     // If the array has entries, each must have a "status" field
@@ -1983,14 +1985,14 @@ fn test_call_site_api_stale_adapter_returns_error() {
 #[serial]
 fn test_register_and_call_adapter_roundtrip() {
     let _daemon = start_test_daemon();
+    let profile = first_profile();
 
-    let session_out = run_live(&["open-session", "personal"]);
+    let session_out = run_live(&["open-session", &profile]);
     assert!(session_out.status.success(), "open-session failed: {}", stderr(&session_out));
     let sid = parse_json_field(&stdout(&session_out), "session_id");
 
-    let tabs_out = run_live(&["list-tabs", &sid]);
-    let tabs: serde_json::Value = serde_json::from_str(&stdout(&tabs_out)).unwrap();
-    let tid = tabs[0]["target_id"].as_str().unwrap().to_string();
+    let tab_out = run_live(&["new-tab", &sid]);
+    let tid = parse_json_field(&stdout(&tab_out), "target_id");
 
     run_live(&["navigate", &sid, &tid, "https://example.com"]);
 
@@ -2040,14 +2042,14 @@ fn test_register_and_call_adapter_roundtrip() {
 #[serial]
 fn test_call_site_api_origin_mismatch_returns_error() {
     let _daemon = start_test_daemon();
+    let profile = first_profile();
 
-    let session_out = run_live(&["open-session", "personal"]);
+    let session_out = run_live(&["open-session", &profile]);
     assert!(session_out.status.success(), "open-session failed: {}", stderr(&session_out));
     let sid = parse_json_field(&stdout(&session_out), "session_id");
 
-    let tabs_out = run_live(&["list-tabs", &sid]);
-    let tabs: serde_json::Value = serde_json::from_str(&stdout(&tabs_out)).unwrap();
-    let tid = tabs[0]["target_id"].as_str().unwrap().to_string();
+    let tab_out = run_live(&["new-tab", &sid]);
+    let tid = parse_json_field(&stdout(&tab_out), "target_id");
 
     // Navigate to example.com but try to call a linear.app adapter
     run_live(&["navigate", &sid, &tid, "https://example.com"]);
@@ -2085,14 +2087,14 @@ fn test_call_site_api_origin_mismatch_returns_error() {
 #[serial]
 fn test_selector_fragility_warning_appears() {
     let _daemon = start_test_daemon();
+    let profile = first_profile();
 
-    let session_out = run_live(&["open-session", "personal"]);
+    let session_out = run_live(&["open-session", &profile]);
     assert!(session_out.status.success(), "open-session failed: {}", stderr(&session_out));
     let sid = parse_json_field(&stdout(&session_out), "session_id");
 
-    let tabs_out = run_live(&["list-tabs", &sid]);
-    let tabs: serde_json::Value = serde_json::from_str(&stdout(&tabs_out)).unwrap();
-    let tid = tabs[0]["target_id"].as_str().unwrap().to_string();
+    let tab_out = run_live(&["new-tab", &sid]);
+    let tid = parse_json_field(&stdout(&tab_out), "target_id");
 
     run_live(&["navigate", &sid, &tid, "https://example.com"]);
 
