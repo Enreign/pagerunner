@@ -12,29 +12,40 @@ struct OverviewView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            if !appState.personalProfiles.isEmpty {
-                // Section label (spec: ov-section-label)
-                HStack {
-                    Text("Your profiles")
-                        .font(.system(size: 10, weight: .semibold))
-                        .foregroundColor(Color(red: 0.533, green: 0.533, blue: 0.533)) // #888
-                        .textCase(.uppercase)
-                        .tracking(0.5)
-                    Spacer()
-                    Button { appState.navigation = .addProfile } label: {
-                        Image(systemName: "plus")
-                            .font(.system(size: 11, weight: .medium))
-                            .foregroundColor(Color(red: 0, green: 0.478, blue: 1))
-                            .frame(width: 18, height: 18)
-                            .contentShape(Rectangle())
-                    }
-                    .buttonStyle(.plain)
-                    .help("Add profile")
+            // Your profiles section — always visible
+            HStack {
+                Text("Your profiles")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundColor(Color(red: 0.533, green: 0.533, blue: 0.533))
+                    .textCase(.uppercase)
+                    .tracking(0.5)
+                Spacer()
+                Button { appState.navigation = .addProfile } label: {
+                    Image(systemName: "plus")
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundColor(Color(red: 0, green: 0.478, blue: 1))
+                        .frame(width: 18, height: 18)
+                        .contentShape(Rectangle())
                 }
-                .padding(.horizontal, 12)
-                .padding(.top, 8)
-                .padding(.bottom, 4)
+                .buttonStyle(.plain)
+                .help("Add profile")
+            }
+            .padding(.horizontal, 12)
+            .padding(.top, 8)
+            .padding(.bottom, 4)
 
+            if appState.personalProfiles.isEmpty {
+                VStack(spacing: 4) {
+                    Text("No profiles yet")
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(.secondary)
+                    Text("Tap + to add a Chrome profile")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.tertiary)
+                }
+                .frame(maxWidth: .infinity, alignment: .center)
+                .padding(.vertical, 12)
+            } else {
                 ForEach(Array(appState.personalProfiles.enumerated()), id: \.element.id) { index, profile in
                     ProfileRowView(
                         profile: profile,
@@ -51,36 +62,46 @@ struct OverviewView: View {
                 }
             }
 
-            if !appState.personalProfiles.isEmpty && !appState.agentProfiles.isEmpty {
-                // Divider between sections (spec: ov-divider)
-                Rectangle()
-                    .fill(Color.primary.opacity(0.08))
-                    .frame(height: 0.5)
-                    .padding(.vertical, 4)
-            }
+            // Divider between sections
+            Rectangle()
+                .fill(Color.primary.opacity(0.08))
+                .frame(height: 0.5)
+                .padding(.vertical, 4)
 
-            if !appState.agentProfiles.isEmpty {
-                HStack {
-                    Text("Agent profiles")
-                        .font(.system(size: 10, weight: .semibold))
-                        .foregroundColor(Color(red: 0.533, green: 0.533, blue: 0.533)) // #888
-                        .textCase(.uppercase)
-                        .tracking(0.5)
-                    Spacer()
-                    Button { appState.navigation = .addProfile } label: {
-                        Image(systemName: "plus")
-                            .font(.system(size: 11, weight: .medium))
-                            .foregroundColor(Color(red: 0, green: 0.478, blue: 1))
-                            .frame(width: 18, height: 18)
-                            .contentShape(Rectangle())
-                    }
-                    .buttonStyle(.plain)
-                    .help("Add agent profile")
+            // Agent profiles section — always visible
+            HStack {
+                Text("Agent profiles")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundColor(Color(red: 0.533, green: 0.533, blue: 0.533))
+                    .textCase(.uppercase)
+                    .tracking(0.5)
+                Spacer()
+                Button { appState.navigation = .addProfile } label: {
+                    Image(systemName: "plus")
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundColor(Color(red: 0, green: 0.478, blue: 1))
+                        .frame(width: 18, height: 18)
+                        .contentShape(Rectangle())
                 }
-                .padding(.horizontal, 12)
-                .padding(.top, 8)
-                .padding(.bottom, 4)
+                .buttonStyle(.plain)
+                .help("Add agent profile")
+            }
+            .padding(.horizontal, 12)
+            .padding(.top, 8)
+            .padding(.bottom, 4)
 
+            if appState.agentProfiles.isEmpty {
+                VStack(spacing: 4) {
+                    Text("No agent profiles yet")
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(.secondary)
+                    Text("Tap + to create a dedicated Chrome profile")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.tertiary)
+                }
+                .frame(maxWidth: .infinity, alignment: .center)
+                .padding(.vertical, 12)
+            } else {
                 ForEach(Array(appState.agentProfiles.enumerated()), id: \.element.id) { index, profile in
                     ProfileRowView(
                         profile: profile,
