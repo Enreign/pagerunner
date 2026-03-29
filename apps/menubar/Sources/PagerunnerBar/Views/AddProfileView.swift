@@ -109,14 +109,11 @@ struct AddProfileView: View {
     private var headerBar: some View {
         HStack(spacing: 6) {
             Button { appState.navigation = .overview } label: {
-                Image(systemName: "chevron.left")
-                    .font(.system(size: 11, weight: .medium))
+                Text("Add Profile")
+                    .font(.system(size: 12, weight: .regular))
                     .foregroundColor(Color(red: 0, green: 0.478, blue: 1))
             }
             .buttonStyle(.plain)
-            Text("Add Profile")
-                .font(.system(size: 12, weight: .semibold))
-                .foregroundColor(Color(red: 0.133, green: 0.133, blue: 0.133))
             Spacer()
         }
         .frame(maxWidth: .infinity, alignment: .leading)
