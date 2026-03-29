@@ -61,17 +61,65 @@ fn run_live_json(args: &[&str]) -> serde_json::Value {
 /// Starts a test daemon using the isolated test DB. Returns a guard that kills the
 /// daemon when dropped. The daemon removes any stale socket on startup and starts
 /// listening, so run_live() calls will route through it automatically.
-struct TestDaemon(std::process::Child);
+struct TestDaemon {
+    child: std::process::Child,
+    /// Snapshot of Chrome PIDs with --remote-debugging-port BEFORE this daemon started.
+    /// On drop, any new Chrome debug processes are killed to prevent orphans.
+    chrome_pids_before: std::collections::HashSet<u32>,
+}
+
+impl TestDaemon {
+    fn snapshot_chrome_pids() -> std::collections::HashSet<u32> {
+        let mut pids = std::collections::HashSet::new();
+        if let Ok(out) = Command::new("pgrep").args(&["-f", "remote-debugging-port"]).output() {
+            let s = String::from_utf8_lossy(&out.stdout);
+            for line in s.lines() {
+                if let Ok(pid) = line.trim().parse::<u32>() {
+                    pids.insert(pid);
+                }
+            }
+        }
+        pids
+    }
+}
+
+impl TestDaemon {
+    /// Drop the daemon WITHOUT killing spawned Chrome processes.
+    /// Used by the reattach test where Chrome must survive a daemon restart.
+    fn drop_keep_chrome(mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+        // Skip the Chrome cleanup in Drop
+        self.chrome_pids_before = std::collections::HashSet::new();
+        // Set a flag so Drop doesn't kill Chrome
+        // Actually, just clear the snapshot so the diff is empty
+        let current = TestDaemon::snapshot_chrome_pids();
+        self.chrome_pids_before = current;
+    }
+}
 
 impl Drop for TestDaemon {
     fn drop(&mut self) {
-        let _ = self.0.kill();
-        let _ = self.0.wait(); // Block until daemon has fully exited and released file locks
+        // Kill daemon
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+
+        // Kill any Chrome processes spawned during this test (not pre-existing ones).
+        // With TCP-only transport, Chrome survives daemon exit, so we must clean up.
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        let pids_after = TestDaemon::snapshot_chrome_pids();
+        for pid in pids_after.difference(&self.chrome_pids_before) {
+            let _ = Command::new("kill").args(&["-9", &pid.to_string()]).output();
+        }
     }
 }
 
 fn start_daemon_with(binary: &std::path::Path) -> TestDaemon {
-    // Kill any leftover daemon, then wait for Chrome to fully release its profile lock.
+    // Snapshot Chrome PIDs BEFORE killing leftover daemons, so we can
+    // distinguish pre-existing Chrome from Chrome spawned by this test.
+    let chrome_pids_before = TestDaemon::snapshot_chrome_pids();
+
+    // Kill any leftover daemon, then wait for it to fully exit.
     std::process::Command::new("pkill")
         .args(&["-f", "pagerunner.*daemon"])
         .output()
@@ -93,7 +141,7 @@ fn start_daemon_with(binary: &std::path::Path) -> TestDaemon {
             break;
         }
     }
-    TestDaemon(child)
+    TestDaemon { child, chrome_pids_before }
 }
 
 fn start_test_daemon() -> TestDaemon {
@@ -2653,7 +2701,7 @@ fn test_session_reattach_after_daemon_restart() {
     assert!(open.status.success(), "open-session failed: {}", stderr(&open));
 
     // Stop daemon — Chrome stays running (TCP-only, no pipe coupling)
-    drop(daemon);
+    daemon.drop_keep_chrome();
 
     // Brief pause for daemon to fully shut down
     std::thread::sleep(std::time::Duration::from_millis(500));
