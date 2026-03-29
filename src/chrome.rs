@@ -1,6 +1,4 @@
 use crate::error::{PagerunnerError, Result};
-use nix::unistd::{close, dup2, pipe};
-use std::os::unix::io::{FromRawFd, IntoRawFd, RawFd};
 use std::process::Stdio;
 use tokio::process::{Child, Command};
 
@@ -20,11 +18,6 @@ pub struct ChromeProcess {
 
 pub struct SpawnResult {
     pub process: ChromeProcess,
-    /// Write end — we send CDP commands; Chrome reads via fd3
-    pub cmd_write: tokio::fs::File,
-    /// Read end — we receive CDP responses; Chrome writes via fd4
-    pub evt_read: tokio::fs::File,
-    /// TCP port Chrome is listening on for remote debugging (--remote-debugging-port)
     pub debug_port: u16,
 }
 
@@ -44,23 +37,11 @@ fn alloc_free_port() -> crate::error::Result<u16> {
 
 impl ChromeProcess {
     pub async fn spawn(user_data_dir: &str, _stealth: bool) -> Result<SpawnResult> {
-        // pipe1: parent writes (cmd_w), Chrome reads (cmd_r → fd3)
-        let (cmd_r_owned, cmd_w_owned) =
-            pipe().map_err(|e| PagerunnerError::Chrome(e.to_string()))?;
-        // pipe2: Chrome writes (evt_w → fd4), parent reads (evt_r)
-        let (evt_r_owned, evt_w_owned) =
-            pipe().map_err(|e| PagerunnerError::Chrome(e.to_string()))?;
-
-        // Convert to RawFd (Copy) before the move closure
-        let (cmd_r, cmd_w): (RawFd, RawFd) = (cmd_r_owned.into_raw_fd(), cmd_w_owned.into_raw_fd());
-        let (evt_r, evt_w): (RawFd, RawFd) = (evt_r_owned.into_raw_fd(), evt_w_owned.into_raw_fd());
-
         let debug_port = alloc_free_port()?;
         let user_data_dir = user_data_dir.to_string();
         let mut cmd = Command::new(chrome_binary_path());
 
         let mut args: Vec<String> = vec![
-            "--remote-debugging-pipe".into(),
             "--no-first-run".into(),
             "--no-default-browser-check".into(),
             format!("--user-data-dir={}", user_data_dir),
@@ -74,22 +55,6 @@ impl ChromeProcess {
             .stdout(Stdio::null())
             .stderr(Stdio::null());
 
-        // pre_exec runs in the child after fork, before exec.
-        // Wires fd3 and fd4 then closes the originals.
-        unsafe {
-            cmd.pre_exec(move || {
-                dup2(cmd_r, 3)
-                    .map_err(|e: nix::errno::Errno| std::io::Error::other(e.to_string()))?;
-                dup2(evt_w, 4)
-                    .map_err(|e: nix::errno::Errno| std::io::Error::other(e.to_string()))?;
-                let _ = close(cmd_r);
-                let _ = close(cmd_w);
-                let _ = close(evt_r);
-                let _ = close(evt_w);
-                Ok(())
-            });
-        }
-
         // Remove stale Chrome singleton files left behind by a previous unclean exit
         // (kill -9, crash). Chrome refuses to start if these exist.
         for name in &["SingletonLock", "SingletonCookie", "SingletonSocket"] {
@@ -101,21 +66,11 @@ impl ChromeProcess {
             .spawn()
             .map_err(|e| PagerunnerError::Chrome(format!("Failed to spawn Chrome: {}", e)))?;
 
-        // Parent: close the ends the child now owns
-        let _ = close(cmd_r);
-        let _ = close(evt_w);
-
-        // Wrap the parent's ends as async files
-        let cmd_write = unsafe { tokio::fs::File::from_raw_fd(cmd_w) };
-        let evt_read = unsafe { tokio::fs::File::from_raw_fd(evt_r) };
-
-        // Give Chrome time to initialize
-        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+        // Give Chrome time to initialize before TCP polling begins in session.rs
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
 
         Ok(SpawnResult {
             process: ChromeProcess { child },
-            cmd_write,
-            evt_read,
             debug_port,
         })
     }
@@ -162,5 +117,13 @@ mod tests {
         let p1 = alloc_free_port().unwrap();
         let p2 = alloc_free_port().unwrap();
         assert_ne!(p1, p2, "consecutive alloc_free_port calls should return distinct ports");
+    }
+
+    #[test]
+    fn test_spawn_result_has_no_pipe_fields() {
+        fn _assert_fields(r: SpawnResult) {
+            let _: ChromeProcess = r.process;
+            let _: u16 = r.debug_port;
+        }
     }
 }
