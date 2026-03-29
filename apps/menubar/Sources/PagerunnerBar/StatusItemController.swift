@@ -107,14 +107,13 @@ extension StatusItemController {
     func focusTab(sessionId: String, targetId: String) {
         let daemon = DaemonClient()
         Task {
+            // Target.activateTarget focuses both the tab and the Chrome window on macOS.
+            // AppleScript "activate" is intentionally omitted — it brings whichever Chrome
+            // is registered first to front, which is wrong when multiple instances are running.
             _ = try? await daemon.call(tool: "activate_tab", args: [
                 "session_id": sessionId,
                 "target_id": targetId
             ])
-            // Bring Chrome to front after activating the tab
-            let script = "tell application \"Google Chrome\" to activate"
-            var error: NSDictionary?
-            NSAppleScript(source: script)?.executeAndReturnError(&error)
         }
     }
 }
