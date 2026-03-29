@@ -499,6 +499,18 @@ impl SessionManager {
         Ok(())
     }
 
+    /// Kill all owned Chrome processes. Called on daemon/MCP shutdown to prevent orphans.
+    /// With TCP-only transport, Chrome survives process exit — this ensures cleanup.
+    pub async fn kill_all_chrome(&mut self) {
+        for session in self.sessions.values_mut() {
+            if session.owns_process {
+                if let Some(ref mut chrome) = session.chrome {
+                    let _ = chrome.kill().await;
+                }
+            }
+        }
+    }
+
     pub fn get(&self, id: &str) -> Option<&Session> {
         self.sessions.get(id)
     }

@@ -54,18 +54,42 @@ pub async fn run() -> Result<()> {
         tracing::info!("Daemon: reattached {} surviving Chrome session(s)", reattached.len());
     }
 
+    // Accept loop with graceful shutdown on SIGTERM/SIGINT.
+    // With TCP-only Chrome, we MUST kill owned Chrome processes on exit
+    // to prevent orphans that hold profile directory locks.
+    let mut sigterm = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+        .map_err(|e| crate::error::PagerunnerError::Config(format!("signal handler: {}", e)))?;
+    let mut sigint = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt())
+        .map_err(|e| crate::error::PagerunnerError::Config(format!("signal handler: {}", e)))?;
+
     loop {
-        let (stream, _) = listener
-            .accept()
-            .await
-            .map_err(|e| crate::error::PagerunnerError::Config(e.to_string()))?;
-        let sessions = Arc::clone(&sessions);
-        let db = Arc::clone(&db);
-        let config = config.clone();
-        tokio::spawn(async move {
-            let _ = handle_connection(stream, sessions, db, config).await;
-        });
+        tokio::select! {
+            accept_result = listener.accept() => {
+                let (stream, _) = accept_result
+                    .map_err(|e| crate::error::PagerunnerError::Config(e.to_string()))?;
+                let sessions = Arc::clone(&sessions);
+                let db = Arc::clone(&db);
+                let config = config.clone();
+                tokio::spawn(async move {
+                    let _ = handle_connection(stream, sessions, db, config).await;
+                });
+            }
+            _ = sigterm.recv() => {
+                tracing::info!("Daemon received SIGTERM, killing Chrome processes");
+                sessions.lock().await.kill_all_chrome().await;
+                break;
+            }
+            _ = sigint.recv() => {
+                tracing::info!("Daemon received SIGINT, killing Chrome processes");
+                sessions.lock().await.kill_all_chrome().await;
+                break;
+            }
+        }
     }
+
+    // Clean up socket
+    let _ = std::fs::remove_file(&socket_path);
+    Ok(())
 }
 
 async fn handle_connection(
