@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.0] — Session Persistence & TCP-Only Chrome
+
+### Added
+
+**Session Persistence**
+- Chrome now uses TCP-only CDP transport (`--remote-debugging-port` on `127.0.0.1`) — Chrome runs independently of the daemon and survives restarts
+- Session registry (`src/session_registry.rs`) — persists session metadata to DB for auto-reattach
+- Startup reconciliation — on daemon/MCP startup, automatically reattaches to surviving Chrome instances
+- Auto-checkpoint on every `close_session` (named "Autosave · close")
+- Periodic auto-checkpoint background task (default every 5 minutes)
+
+**Configurable Retention**
+- `[checkpoints]` config section: `enabled` (default true), `interval_seconds` (default 300)
+- `[retention]` config section: `max_snapshot_versions` (default 10, was hardcoded 3), `site_knowledge_ttl_days` (default 0 = indefinite, was hardcoded 90)
+
+### Changed
+- Chrome spawn no longer uses `--remote-debugging-pipe` — fully TCP-based
+- Daemon graceful shutdown (SIGTERM/SIGINT) leaves Chrome alive for reattach on restart
+- Test harness tracks Chrome PIDs and kills orphans on `TestDaemon` drop
+
+### Removed
+- Pipe-based CDP transport (fd3/fd4) from Chrome spawn — replaced by TCP WebSocket
+
 ## [0.4.0] — Site Intelligence Tier
 
 ### Added
