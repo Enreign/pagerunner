@@ -2634,15 +2634,8 @@ fn test_close_session_writes_auto_checkpoint() {
     assert!(name.starts_with("Autosave"), "checkpoint should be named Autosave · …, got: {:?}", name);
 }
 
-/// Open a session, stop the daemon, restart it — startup reconciliation should run without
-/// crashing and stale registry entries (Chrome died with daemon) should be cleaned up.
-///
-/// NOTE: Chrome is spawned with --remote-debugging-pipe, which ties Chrome's lifecycle to
-/// the daemon process via fd3. When the daemon is killed, the pipe EOF causes Chrome to exit.
-/// Therefore this test verifies the stale-entry cleanup path of reconciliation (Chrome not
-/// reachable → registry entry removed), not the reattach-success path.
-/// The reattach-success path would require Chrome to survive the daemon restart, which requires
-/// launching Chrome without pipe coupling (e.g., attach_session to an externally-started Chrome).
+/// With TCP-only transport, Chrome survives daemon restart.
+/// Reconciliation reattaches the surviving Chrome instance.
 #[cfg_attr(not(target_os = "macos"), ignore)]
 #[test]
 #[serial]
@@ -2650,32 +2643,43 @@ fn test_session_reattach_after_daemon_restart() {
     let _launchd = LaunchdGuard::pause_pagerunner_daemon();
     let daemon = start_test_daemon();
 
+    // Get the first available profile
     let profiles_out = run_live(&["list-profiles"]);
     let profiles: serde_json::Value = serde_json::from_str(&stdout(&profiles_out)).unwrap();
     let profile = profiles["data"][0]["name"].as_str().unwrap().to_string();
 
+    // Open a session
     let open = run_live(&["open-session", &profile]);
     assert!(open.status.success(), "open-session failed: {}", stderr(&open));
 
-    // Stop daemon — Chrome also exits because --remote-debugging-pipe fd3 gets closed
+    // Stop daemon — Chrome stays running (TCP-only, no pipe coupling)
     drop(daemon);
 
-    // Restart daemon — reconciliation runs at startup.
-    // Since Chrome died with the daemon, reconciliation will find port unreachable
-    // and clean up the stale registry entry.
+    // Brief pause for daemon to fully shut down
+    std::thread::sleep(std::time::Duration::from_millis(500));
+
+    // Restart daemon — reconciliation runs at startup, reattaches to surviving Chrome
     let _daemon2 = start_test_daemon();
 
-    // Sessions list should be empty: reconciliation cleaned up the stale entry
-    // rather than leaving zombie entries in the registry.
+    // Session should be back as alive (possibly new session_id, but profile present)
     let list = run_live(&["list-sessions"]);
-    assert!(list.status.success(), "list-sessions failed after daemon restart: {}", stderr(&list));
+    assert!(list.status.success(), "list-sessions failed: {}", stderr(&list));
     let lv: serde_json::Value = serde_json::from_str(&stdout(&list)).unwrap();
     let data = lv["data"].as_array()
         .or_else(|| lv["result"]["data"].as_array())
         .expect("expected data array in list-sessions output");
     assert!(
-        data.is_empty(),
-        "stale session registry entries should be cleaned up on reconciliation; sessions: {:?}",
+        data.iter().any(|s| {
+            s["profile"].as_str() == Some(&profile)
+                && s["status"].as_str() == Some("alive")
+        }),
+        "session should be reattached after daemon restart, got: {:?}",
         data
     );
+
+    // Cleanup: close the reattached session
+    if let Some(s) = data.iter().find(|s| s["profile"].as_str() == Some(&profile)) {
+        let sid = s["id"].as_str().unwrap();
+        run_live(&["close-session", sid]);
+    }
 }
