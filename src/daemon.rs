@@ -55,8 +55,9 @@ pub async fn run() -> Result<()> {
     }
 
     // Accept loop with graceful shutdown on SIGTERM/SIGINT.
-    // With TCP-only Chrome, we MUST kill owned Chrome processes on exit
-    // to prevent orphans that hold profile directory locks.
+    // On shutdown, Chrome processes are intentionally LEFT ALIVE — that's the whole
+    // point of TCP-only transport. The daemon will reattach to them on next startup
+    // via reconcile_sessions(). We just save checkpoints and clean up the socket.
     let mut sigterm = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
         .map_err(|e| crate::error::PagerunnerError::Config(format!("signal handler: {}", e)))?;
     let mut sigint = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt())
@@ -75,13 +76,11 @@ pub async fn run() -> Result<()> {
                 });
             }
             _ = sigterm.recv() => {
-                tracing::info!("Daemon received SIGTERM, killing Chrome processes");
-                sessions.lock().await.kill_all_chrome().await;
+                tracing::info!("Daemon shutting down (SIGTERM) — Chrome processes left alive for reattach");
                 break;
             }
             _ = sigint.recv() => {
-                tracing::info!("Daemon received SIGINT, killing Chrome processes");
-                sessions.lock().await.kill_all_chrome().await;
+                tracing::info!("Daemon shutting down (SIGINT) — Chrome processes left alive for reattach");
                 break;
             }
         }
