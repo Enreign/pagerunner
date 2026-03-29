@@ -71,6 +71,39 @@ pub struct SessionInfo {
     pub alive: bool,
 }
 
+/// Poll Chrome's TCP debug endpoint until it's ready, then return the WebSocket URL.
+/// Retries up to 50 times with 100ms intervals (5 seconds total).
+async fn wait_for_chrome_ws_url(debug_port: u16) -> crate::error::Result<String> {
+    let version_url = format!("http://127.0.0.1:{}/json/version", debug_port);
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_millis(500))
+        .build()
+        .map_err(|e| crate::error::PagerunnerError::Config(e.to_string()))?;
+
+    for attempt in 0..50 {
+        match client.get(&version_url).send().await {
+            Ok(resp) => {
+                if let Ok(json) = resp.json::<serde_json::Value>().await {
+                    if let Some(ws_url) = json["webSocketDebuggerUrl"].as_str() {
+                        tracing::debug!(
+                            port = debug_port,
+                            attempts = attempt + 1,
+                            "Chrome TCP endpoint ready"
+                        );
+                        return Ok(ws_url.to_string());
+                    }
+                }
+            }
+            Err(_) => {}
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+
+    Err(crate::error::PagerunnerError::Config(format!(
+        "Chrome did not respond on port {} after 5 seconds", debug_port
+    )))
+}
+
 pub struct SessionManager {
     sessions: HashMap<SessionId, Session>,
     /// Maps profile_name → session_id of the primary (process-owning) session for that profile.
@@ -186,7 +219,9 @@ impl SessionManager {
         let user_data_dir = profile.user_data_dir.as_deref()
             .ok_or_else(|| crate::error::PagerunnerError::Config("Profile has no user_data_dir".into()))?;
         let result = crate::chrome::ChromeProcess::spawn(user_data_dir, stealth).await?;
-        let (cdp, reader_task) = CdpConn::new(result.cmd_write, result.evt_read);
+        // Connect to Chrome via TCP WebSocket (same path as attach_session)
+        let ws_url = wait_for_chrome_ws_url(result.debug_port).await?;
+        let (cdp, reader_task) = crate::cdp::CdpConn::connect_ws(&ws_url).await?;
         let id = Uuid::new_v4().to_string();
         let cdp_sessions_rev = std::sync::Arc::new(std::sync::RwLock::new(HashMap::new()));
 
