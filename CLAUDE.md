@@ -84,6 +84,14 @@ This exposes a WebSocket CDP endpoint at `http://localhost:9222`. The `attach_se
 
 **User responsibility:** Chrome must be launched with the flag before calling `attach_session`. There is no way to retroactively enable remote debugging on an already-running Chrome without `--remote-debugging-port`.
 
+## Session Persistence (Auto-Reattach)
+
+Chrome browser windows opened by pagerunner use TCP-only CDP transport (`--remote-debugging-port` on `127.0.0.1`). This means Chrome runs independently of the daemon process — if the daemon restarts, Chrome stays alive and sessions are automatically reattached on startup.
+
+Auto-checkpoints provide a safety net:
+- When a session is closed (`close_session`)
+- Periodically (every 5 minutes by default, configurable via `[checkpoints]` in `config.toml`)
+
 ## Audit CLI
 ```bash
 pagerunner audit --tail 50
@@ -188,9 +196,6 @@ All commands output JSON to stdout. Errors go to stderr with exit 1.
 CLI calls try the daemon socket first (`~/.pagerunner/daemon.sock`), then fall back to opening the DB directly. If a live MCP server is running standalone, start the daemon mode first to avoid DB lock conflicts.
 
 ## Known Issues
-None currently. On CI (Linux): 262 tests pass (239 unit + 23 non-Chrome CLI), 23 skipped. On macOS locally: 283 pass (239 unit + 44 Chrome CLI), 1 NER test skipped (requires `--features ner` build + model). NER live tests pass with model at `~/.pagerunner/models/ner.onnx`.
-None currently. On CI (Linux): 255 tests pass (232 unit + 23 non-Chrome CLI), 23 skipped. On macOS locally: 276 pass (232 unit + 44 Chrome CLI), 1 NER test skipped (requires `--features ner` build + model). NER live tests pass with model at `~/.pagerunner/models/ner.onnx`.
-None currently. On CI (Linux): 255 tests pass (232 unit + 23 non-Chrome CLI), 25 skipped. On macOS locally: 278 pass (232 unit + 46 Chrome CLI), 1 NER test skipped (requires `--features ner` build + model). NER live tests pass with model at `~/.pagerunner/models/ner.onnx`.
 None currently. On CI (Linux): 280 tests pass (256 unit + 24 non-Chrome CLI), 26 skipped. On macOS locally: 306 pass (256 unit + 50 CLI integration), 1 NER test skipped (requires `--features ner` build + model). NER live tests pass with model at `~/.pagerunner/models/ner.onnx`.
 
 ## Testing
