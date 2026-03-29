@@ -1,13 +1,13 @@
 {
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
   "name": "io.github.Enreign/pagerunner",
-  "title": "Pagerunner — Authenticated Chrome for AI Agents",
-  "description": "Real Chrome profiles for AI agents — already logged in, PII anonymization, encrypted, multi-session",
+  "title": "Pagerunner — The Browser Layer That Learns",
+  "description": "Real Chrome profiles with site intelligence — already logged in, PII anonymization, sessions persist",
   "repository": {
     "url": "https://github.com/Enreign/pagerunner.git",
     "source": "github"
   },
-  "version": "0.2.1",
+  "version": "0.6.0",
   "websiteUrl": "https://github.com/Enreign/pagerunner",
   "icons": [
     {
@@ -23,7 +23,7 @@
     {
       "registryType": "npm",
       "identifier": "pagerunner",
-      "version": "0.2.0",
+      "version": "0.6.0",
       "transport": {
         "type": "stdio",
         "args": ["mcp"]
