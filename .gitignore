@@ -56,3 +56,7 @@ mcpb/dist/
 
 # OS
 Thumbs.db
+apps/menubar/.build/
+# Swift menubar build artifacts
+apps/menubar/scripts/Pagerunner.app/
+apps/menubar/scripts/Pagerunner.zip

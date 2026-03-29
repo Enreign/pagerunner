@@ -42,18 +42,53 @@ pub async fn run() -> Result<()> {
 
     tracing::info!("Pagerunner daemon listening on {:?}", socket_path);
 
-    loop {
-        let (stream, _) = listener
-            .accept()
-            .await
-            .map_err(|e| crate::error::PagerunnerError::Config(e.to_string()))?;
-        let sessions = Arc::clone(&sessions);
-        let db = Arc::clone(&db);
-        let config = config.clone();
-        tokio::spawn(async move {
-            let _ = handle_connection(stream, sessions, db, config).await;
-        });
+    // Reattach surviving Chrome sessions. Passing site_store: None here is intentional —
+    // the daemon constructs site knowledge per-request in dispatch_tool_inner, not at startup.
+    let reattached = crate::session_registry::reconcile_sessions(
+        &db,
+        &sessions,
+        &config,
+        None,  // site_store: not needed for basic reattach
+    ).await;
+    if !reattached.is_empty() {
+        tracing::info!("Daemon: reattached {} surviving Chrome session(s)", reattached.len());
     }
+
+    // Accept loop with graceful shutdown on SIGTERM/SIGINT.
+    // On shutdown, Chrome processes are intentionally LEFT ALIVE — that's the whole
+    // point of TCP-only transport. The daemon will reattach to them on next startup
+    // via reconcile_sessions(). We just save checkpoints and clean up the socket.
+    let mut sigterm = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+        .map_err(|e| crate::error::PagerunnerError::Config(format!("signal handler: {}", e)))?;
+    let mut sigint = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt())
+        .map_err(|e| crate::error::PagerunnerError::Config(format!("signal handler: {}", e)))?;
+
+    loop {
+        tokio::select! {
+            accept_result = listener.accept() => {
+                let (stream, _) = accept_result
+                    .map_err(|e| crate::error::PagerunnerError::Config(e.to_string()))?;
+                let sessions = Arc::clone(&sessions);
+                let db = Arc::clone(&db);
+                let config = config.clone();
+                tokio::spawn(async move {
+                    let _ = handle_connection(stream, sessions, db, config).await;
+                });
+            }
+            _ = sigterm.recv() => {
+                tracing::info!("Daemon shutting down (SIGTERM) — Chrome processes left alive for reattach");
+                break;
+            }
+            _ = sigint.recv() => {
+                tracing::info!("Daemon shutting down (SIGINT) — Chrome processes left alive for reattach");
+                break;
+            }
+        }
+    }
+
+    // Clean up socket
+    let _ = std::fs::remove_file(&socket_path);
+    Ok(())
 }
 
 async fn handle_connection(

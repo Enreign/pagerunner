@@ -8,61 +8,71 @@ Rust MCP server that drives Chrome via CDP for AI agents. Serves Claude Code via
 cargo build --release          # build release binary
 cargo build                    # debug build (use this to verify compilation)
 cargo test <module_name>        # run tests for a specific module (e.g. cargo test site_knowledge)
-cargo test                     # run ALL tests — opens Chrome windows on macOS, use sparingly
 cargo test --test cli_tools_integration   # run CLI integration tests only (also opens Chrome on macOS)
 ```
 
-### ⚠️ When to run `cargo test` (bare, no filter)
-**Do NOT run bare `cargo test` as a routine build/verify step on macOS.**
-On macOS, `#[cfg_attr(not(target_os = "macos"), ignore)]` tests are NOT skipped — they run and open real Chrome browser windows.
+**Do NOT run bare `cargo test` on macOS** — it opens real Chrome browser windows. Use module-level filters instead.
 
-Use these instead:
-- **Compilation check:** `cargo build`
-- **Unit tests for a module:** `cargo test <module_name>` (e.g. `cargo test audit`, `cargo test site_knowledge`)
-- **All unit tests without Chrome:** `cargo test --bin pagerunner` won't work (binary target); use module-level filters
-- **Full test suite including Chrome:** only run bare `cargo test` when explicitly testing Chrome integration, and warn the user first
-
-Last known test counts: 382 unit + 76 CLI integration (macOS: 75 pass + 1 ignored; Linux CI: 40 pass + 35 cfg_attr-ignored + 1 ignored)
+Last known test counts: 407 unit + 82 CLI integration (macOS: 81 pass + 1 ignored).
 
 ## Key Files
 - `src/mcp_server.rs` — main dispatch, session lifecycle, audit recording, `call_tool`
+- `src/session.rs` — SessionManager, Chrome spawn (TCP-only), attach, close
+- `src/session_registry.rs` — DB persistence for session reattach across daemon restarts
+- `src/chrome.rs` — Chrome process spawn, port allocation
+- `src/checkpoint.rs` — session checkpoint save/restore
 - `src/cli_tools.rs` — CLI tool runner, screenshot output handling
-- `src/audit.rs` — AuditLog, AuditEvent types, build_args_summary
-- `src/security.rs` — SecurityPolicy, PolicySummary
+- `src/config.rs` — PagerunnerConfig, CheckpointConfig, RetentionConfig
 - `src/main.rs` — CLI entry (38 subcommands + mcp, daemon, audit)
-- `~/.pagerunner/config.toml` — profile config (Chrome user data dirs)
+- `~/.pagerunner/config.toml` — profile config, checkpoints, retention
 - `~/.pagerunner/state.db` — encrypted ReDB (sessions, KV, snapshots, audit)
-- `~/.pagerunner/audit.log` — append-only JSON-lines audit log (0600)
 
-## MCP Server
-The binary requires the `mcp` subcommand to run as MCP server:
-```
-/path/to/pagerunner mcp
-```
-The `claude mcp add` command must include this subcommand — just the binary path is not enough.
+## Running Locally
 
-## Running MCP Locally
-After `cargo build --release`, kill any stale pagerunner process before reconnecting:
+### 1. Start the daemon
 ```bash
-pkill -f "pagerunner mcp"
+pagerunner daemon &
 ```
-Then use `/mcp` in Claude Code to reconnect.
+The daemon holds the DB lock, owns Chrome processes, and listens on `~/.pagerunner/daemon.sock`. Multiple Claude Code windows can share it.
 
-## Multi-Session (5 Claude Code windows)
-By default each `pagerunner mcp` process opens the DB directly — only one can run at a time.
-To share pagerunner across multiple Claude Code sessions, start the daemon first:
+### 2. Connect Claude Code
 ```bash
-pagerunner daemon &     # holds the single DB lock, listens on ~/.pagerunner/daemon.sock
+claude mcp add pagerunner /path/to/pagerunner mcp
 ```
-Each `pagerunner mcp` instance will then detect the daemon, connect to it, and proxy all tool calls through it. All sessions share the same state (open browsers, KV store, snapshots).
+Each `pagerunner mcp` instance detects the daemon and proxies tool calls through it.
 
-To stop the daemon:
+### 3. After rebuilding
 ```bash
-pkill -f "pagerunner daemon"
+pkill -f "pagerunner mcp"    # kill MCP processes (Claude Code will reconnect)
+# Use /mcp in Claude Code to reconnect
+```
+
+To restart the daemon itself:
+```bash
+pkill -f "pagerunner daemon"  # Chrome stays alive (TCP-only transport)
+pagerunner daemon &            # reconciliation auto-reattaches surviving Chrome
+```
+
+## Session Persistence
+
+Chrome uses TCP-only CDP transport (`--remote-debugging-port` on `127.0.0.1`). Chrome runs independently of the daemon — if the daemon restarts, Chrome stays alive and sessions auto-reattach on startup.
+
+Auto-checkpoints provide a safety net:
+- On every `close_session` (named "Autosave · close")
+- Periodically (default every 5 min, configurable via `[checkpoints]` in `config.toml`)
+
+### Config
+```toml
+[checkpoints]
+enabled = true
+interval_seconds = 300   # auto-checkpoint every 5 minutes
+
+[retention]
+max_snapshot_versions = 10  # per-origin snapshot history; 0 = unlimited
+site_knowledge_ttl_days = 0  # 0 = never expire
 ```
 
 ## Profile Config
-Real Chrome profiles are configured in `~/.pagerunner/config.toml`. Example:
 ```toml
 [[profiles]]
 name = "personal"
@@ -71,190 +81,97 @@ user_data_dir = "/Users/user/Library/Application Support/Google/Chrome/Default"
 ```
 **Note:** Chrome locks profile directories — close any Chrome window using the profile before opening a pagerunner session on it.
 
-## Audit CLI
-```bash
-pagerunner audit --tail 50
-pagerunner audit --session <id>
-pagerunner audit --since 2026-03-20T14:00:00Z
-```
-The audit DB is locked while the MCP server is running — use `audit.log` for live inspection:
-```bash
-tail -f ~/.pagerunner/audit.log | jq .
-```
-
 ## Anonymization
 
-Pass `anonymize: true` to `open_session` to enable PII anonymization. All `get_content` and `evaluate` results will have PII stripped before reaching Claude. Screenshots are blocked in anonymization mode.
-
-### open_session params
-
-```json
-{ "profile": "personal", "anonymize": true }
-```
+Pass `anonymize: true` to `open_session` to enable PII anonymization. Screenshots are blocked in anonymization mode.
 
 Three forms:
-- **Default** (`anonymize: true` only): tokenize mode, detects EMAIL, PHONE, CREDIT_CARD, IBAN, SSN, IP
+- **Default** (`anonymize: true`): tokenize mode — EMAIL, PHONE, CREDIT_CARD, IBAN, SSN, IP
 - **Named profile** (`anonymization_profile: "jira-work"`): uses profile from `config.toml`
-- **Inline** (`anonymization_entities: ["EMAIL","PHONE"]`, `anonymization_mode: "tokenize"|"redact"`): overrides for this session
+- **Inline** (`anonymization_entities: ["EMAIL","PHONE"]`, `anonymization_mode: "tokenize"|"redact"`)
 
-Named profile and inline params are mutually exclusive.
-
-### Modes
-
-- **tokenize**: Replaces PII with tokens like `[EMAIL:a3f9b2]`. Tokens are stored in an encrypted session vault. Pass tokens back to `fill`/`type_text` — pagerunner de-tokenizes before writing to DOM.
-- **redact**: Replaces PII with `[EMAIL]` (no vault, one-way). `fill`/`type_text` with token-shaped values will error.
-
-### Domain profiles (config.toml)
-
-```toml
-[[anonymization.profiles]]
-name = "jira-work"
-domains = ["jira.acme.com", "*.atlassian.net"]
-mode = "tokenize"
-entities = ["EMAIL", "PHONE", "CREDIT_CARD"]
-custom_patterns = [
-  { name = "JIRA_CODE", pattern = "(?:PROJ|INFRA)-\\d+" },
-]
-```
-
-### NER (PERSON/ORG detection)
-
-Requires `--features ner` build + model download:
-
-```bash
-cargo build --release --features ner
-pagerunner download-model
-```
-
-When compiled with `--features ner`, `anonymize: true` defaults also include `PERSON` and `ORG`.
-Disable globally with `[ner] enabled = false` in `config.toml`.
-
-### Audit log
-
-`ContentAnonymized` events record entity type counts only — no values, no tokens.
+NER (PERSON/ORG) requires `cargo build --release --features ner` + `pagerunner download-model`.
 
 ## CLI Subcommands
 
-All 38 MCP tools are exposed as direct CLI subcommands — no MCP registration required:
+All 38 MCP tools are exposed as CLI subcommands. All output JSON to stdout, errors to stderr with exit 1.
 
 ```bash
 pagerunner list-profiles
 pagerunner open-session <profile> [--stealth] [--anonymize] [--allowed-domains d1,d2]
 pagerunner attach-session --debug-port 9222 [--profile <label>]
-pagerunner attach-session --debug-url http://localhost:9222 [--profile <label>]
 pagerunner close-session <session-id>
 pagerunner list-sessions
 pagerunner list-tabs <session-id>
 pagerunner new-tab <session-id> [--url <url>]
 pagerunner close-tab <session-id> <target-id>
 pagerunner navigate <session-id> <target-id> <url>
-pagerunner wait-for <session-id> <target-id> [--selector <sel>] [--url <pat>] [--ms <n>]
 pagerunner get-content <session-id> <target-id>
 pagerunner screenshot <session-id> <target-id> [--base64]
 pagerunner evaluate <session-id> <target-id> <expression>
 pagerunner click <session-id> <target-id> <selector>
-pagerunner type-text <session-id> <target-id> <text> [--selector <sel>]
 pagerunner fill <session-id> <target-id> <selector> <value>
-pagerunner select <session-id> <target-id> <selector> <value>
-pagerunner scroll <session-id> <target-id> [--selector <sel>] [--x <n>] [--y <n>]
 pagerunner save-snapshot <session-id> <target-id> [--origin <url>]
-pagerunner restore-snapshot <session-id> <target-id> <origin> [--from-profile <name>]
-pagerunner list-snapshots [--profile <name>] [--all]
-pagerunner delete-snapshot <profile> <origin> [--saved-at <unix-us>]
-pagerunner save-tab-state <session-id>
-pagerunner restore-tab-state <session-id>
+pagerunner restore-snapshot <session-id> <target-id> <origin>
 pagerunner kv-set <namespace> <key> <value>
 pagerunner kv-get <namespace> <key>
-pagerunner kv-delete <namespace> <key>
 pagerunner kv-list <namespace> [--prefix <pfx>] [--keys-only]
-pagerunner kv-clear <namespace>
 pagerunner get-network-log <session-id> [--target-id <tid>] [--limit <n>]
-pagerunner get-console-log <session-id> [--target-id <tid>] [--limit <n>]
 pagerunner get-site-knowledge <origin>
-pagerunner register-adapter <origin> <name> <description> <js-code>
-pagerunner call-site-api <session-id> <target-id> <origin> <name> [--params <json>]
-pagerunner generate-adapter <origin> <name> [--description <desc>]
 pagerunner save-session-checkpoint <session-id> [--name <name>]
 pagerunner restore-session-checkpoint <session-id> <checkpoint-id>
 pagerunner list-session-checkpoints --profile <name>
-pagerunner delete-session-checkpoint --profile <name> --checkpoint-id <id>
 ```
 
-All commands output JSON to stdout. Errors go to stderr with exit 1.
-`screenshot` saves a PNG to a temp file by default; `--base64` returns inline JSON.
+## macOS Menu Bar App
 
-CLI calls try the daemon socket first (`~/.pagerunner/daemon.sock`), then fall back to opening the DB directly. If a live MCP server is running standalone, start the daemon mode first to avoid DB lock conflicts.
+Native Swift companion app at `apps/menubar/`. Communicates with the Rust daemon over Unix socket — no code changes needed for backend updates.
 
-## Known Issues
-None currently. On CI (Linux): 420 tests pass (382 unit + 38 non-Chrome CLI), 36 skipped. On macOS locally: 455 pass (382 unit + 73 CLI integration), 1 NER test skipped (requires `--features ner` build + model). NER live tests pass with model at `~/.pagerunner/models/ner.onnx`.
+### Build & Run
+
+```bash
+# 1. Start the daemon
+pagerunner daemon &
+
+# 2. Package the app (required — bare binary crashes without .app bundle)
+cd apps/menubar/scripts
+./package.sh                   # builds, ad-hoc signs → Pagerunner.app
+
+# 3. Launch
+open Pagerunner.app            # appears in menu bar
+```
+
+**Important:** Do NOT run `.build/release/PagerunnerBar` directly — it will crash. macOS requires the `.app` bundle for menu bar apps (notifications, proper lifecycle).
+
+### Development cycle
+```bash
+cd apps/menubar
+swift build -c release         # rebuild
+cd scripts && ./package.sh     # re-package
+open Pagerunner.app            # relaunch
+swift test                     # run PagerunnerCoreTests (no Chrome needed)
+```
+
+### Architecture
+- `Sources/PagerunnerCore/` — zero-UI, fully testable: Models, DaemonClient, PollingService
+- `Sources/PagerunnerBar/` — app target: App, AppState, StatusItemController, Views
+- `Tests/PagerunnerCoreTests/` — unit tests for Core
+
+### Distribution
+```bash
+cd apps/menubar/scripts
+./package.sh           # .app bundle + .zip
+./notarize.sh          # Apple notarization (requires CODE_SIGN_IDENTITY, APPLE_TEAM_ID, APPLE_ID, NOTARIZE_PASSWORD)
+```
 
 ## Testing
 
 ### Rules
-- **Never add `#[ignore]`** to unit tests. Two exceptions for CLI integration tests:
-  - **Chrome live tests** use `#[cfg_attr(not(target_os = "macos"), ignore)]` — they run automatically on macOS (local) but are skipped on Linux (CI), because CI has no Chrome profile.
-  - **NER test** (`test_cli_ner_anonymize_person_masked`) is `#[ignore]` unconditionally — it requires `cargo build --release --features ner` + the 431 MB model. Run with `cargo test --test cli_tools_integration test_cli_ner_anonymize_person_masked -- --ignored`.
-- **Tests first**: write or update tests before writing implementation code.
-- **Never skip live tests**: when a feature has a live (Chrome/network) path, that path must have a test in `tests/cli_tools_integration.rs`.
+- **Never add `#[ignore]`** to unit tests. Exceptions for CLI integration tests:
+  - Chrome live tests: `#[cfg_attr(not(target_os = "macos"), ignore)]`
+  - NER test: `#[ignore]` (requires `--features ner` + 431 MB model)
+- **Tests first**: write or update tests before implementation code.
+- **Never skip live tests**: live features must have tests in `tests/cli_tools_integration.rs`.
 
-### Test Plan
-The master test plan lives at [`docs/test-plans/master-test-plan.md`](docs/test-plans/master-test-plan.md). It covers all major surfaces: session management, navigation, content, interactions, KV, snapshots, security, prompt injection, anonymization Phase 1 (regex), and anonymization Phase 2 (NER).
-
-**Maintenance rule:** After any medium or large change — new feature, refactor touching >1 module, or security-relevant fix — verify the test plan is still accurate and that automated coverage (`✅`) reflects reality. Record a dated execution in `docs/test-runs/` if manual (`🖐`) tests were run.
-
-**Tests-first rule:** Before implementing any new feature or fixing a bug, write the tests first. All planned test cases (including `#[ignore]`-tagged live tests) must exist before writing implementation code. Never mark a test as skipped/deferred as a substitute for actually running it — if a test requires external resources (model file, live browser), tag it `#[ignore]` and document the requirement.
-
-**Never skip live tests:** All `🖐` (manual) tests in the test plan must be run after implementation and results recorded in a test run doc. Do not leave live test cases as `🖐` after implementation is complete — run them, mark them `✅`, and update the test run.
-
-Test runs are saved in `docs/test-runs/`. Run naming: `YYYY-MM-DD-run-N.md`.
-
-### CLI Integration Tests (`tests/cli_tools_integration.rs`)
-
-40 non-Chrome tests cover subcommands without a live browser:
-- `list-profiles`, `list-sessions`, `list-snapshots` — happy-path output shape
-- KV store — full lifecycle (set, get, list, prefix filter, keys-only, delete, clear)
-- `init --json` — flag acceptance, CLAUDE.md snippet return, AGENTS.md snippet return
-- Error cases — all session-requiring subcommands return non-zero for invalid sessions
-- Help text — `screenshot --base64`, `open-session --anonymize`, `wait-for` modes
-- Network log — `get_network_log` error case (invalid session)
-
-Tests use `PAGERUNNER_DB_PATH=/tmp/pagerunner_integration_test.db` automatically, so they never conflict with a running `pagerunner mcp` process. Session-based Chrome tests spin up a per-test daemon (also using the test DB) so session state persists across separate CLI invocations.
-
-### Last CLI Test Run: 2026-03-27 (`cargo test --test cli_tools_integration`)
-| Category | Pass | Notes |
-|----------|------|-------|
-| Non-Chrome (profiles, sessions, KV, errors, help, init) | 27/27 | |
-| Non-Chrome: network log + site knowledge errors | 9/9 | includes generate_adapter missing API key, stale adapter error |
-| Non-Chrome: session checkpoint errors | 2/2 | |
-| Non-Chrome: attach_session errors | 2/2 | |
-| Chrome: sessions + tabs (incl. close-tab) | 6/6 | macOS only |
-| Chrome: screenshot, evaluate | 3/3 | macOS only |
-| Chrome: interactions (click, fill, type, select, scroll) | 8/8 | macOS only |
-| Chrome: wait-for | 4/4 | macOS only |
-| Chrome: anonymization | 2/2 | macOS only |
-| Chrome: security (allowed-domains) | 1/1 | macOS only |
-| Chrome: kv-roundtrip, snapshots, tab-state | 3/3 | macOS only |
-| Chrome: network log + console log | 4/4 | macOS only |
-| Chrome: site intelligence (adapter roundtrip, origin mismatch, selector fragility) | 3/3 | macOS only |
-| Chrome: session checkpoints (save, restore, list, delete) | 1/1 | macOS only |
-| Chrome: NER CLI | 1/1 | `#[ignore]` — requires `--features ner` + model |
-| **Total** | **76/76** | macOS: 75 pass + 1 ignored; Linux CI: 40 pass + 35 cfg_attr-ignored + 1 ignored |
-
-### Last Full Live Test Run: [2026-03-21-run-6](docs/test-runs/2026-03-21-run-6.md)
-| Category | Pass | Notes |
-|----------|------|-------|
-| Sessions | 5/5 | |
-| Tab Management | 3/3 | |
-| Navigation | 6/6 | |
-| Content | 5/5 | |
-| Interactions | 7/7 | `fill` on textarea bug fixed this run |
-| KV Store | 7/7 | |
-| Snapshots | 4/4 | |
-| Tab State | 2/2 | |
-| Security | 6/6 | |
-| Prompt Injection | 4/4 | |
-| Anonymization (live) | 5/5 | |
-| NER (unit, no model) | 16/16 | |
-| NER (unit+live, with model) | 13/13 | requires `--features ner` + model |
-| NER live CLI (NP8, NP9) | 2/2 | get_content + fill with PERSON token |
-| **Total** | **65/65** | |
+### Test harness
+Tests use `PAGERUNNER_DB_PATH=/tmp/pagerunner_integration_test.db` to avoid conflicts. Chrome tests spin up a per-test daemon. `TestDaemon::drop()` kills orphaned Chrome processes via PID tracking.

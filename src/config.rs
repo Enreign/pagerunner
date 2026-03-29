@@ -5,7 +5,12 @@ use serde::{Deserialize, Serialize};
 pub struct ChromeProfile {
     pub name: String,
     pub display_name: String,
-    pub user_data_dir: String,
+    #[serde(default)]
+    pub user_data_dir: Option<String>,
+    #[serde(default)]
+    pub debug_port: Option<u16>,
+    #[serde(default)]
+    pub kind: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -94,8 +99,54 @@ pub struct AnonymizationConfig {
     pub profiles: Vec<DomainAnonProfile>,
 }
 
+fn default_max_snapshot_versions() -> usize {
+    10
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct RetentionConfig {
+    /// Max snapshot versions to keep per (profile, origin). 0 = unlimited.
+    /// Old default was 3; new default is 10.
+    #[serde(default = "default_max_snapshot_versions")]
+    pub max_snapshot_versions: usize,
+    /// Days after which site knowledge entries expire. 0 = never.
+    /// Old default was 90; new default is 0 (indefinite).
+    #[serde(default)]
+    pub site_knowledge_ttl_days: u64,
+}
+
+impl Default for RetentionConfig {
+    fn default() -> Self {
+        Self {
+            max_snapshot_versions: default_max_snapshot_versions(),
+            site_knowledge_ttl_days: 0,
+        }
+    }
+}
+
 fn default_buffer_capacity() -> usize {
     500
+}
+
+fn default_checkpoint_interval() -> u64 {
+    300
+} // 5 minutes
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct CheckpointConfig {
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    #[serde(default = "default_checkpoint_interval")]
+    pub interval_seconds: u64,
+}
+
+impl Default for CheckpointConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            interval_seconds: default_checkpoint_interval(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -132,6 +183,10 @@ pub struct PagerunnerConfig {
     pub ner: NerConfig, // NEW
     #[serde(default)]
     pub network: NetworkConfig,
+    #[serde(default)]
+    pub checkpoints: CheckpointConfig,
+    #[serde(default)]
+    pub retention: RetentionConfig,
 }
 
 impl PagerunnerConfig {
@@ -291,7 +346,7 @@ user_data_dir = "/tmp/chrome-test"
         let config: PagerunnerConfig = toml::from_str(toml).unwrap();
         assert_eq!(config.profiles.len(), 1);
         assert_eq!(config.profiles[0].name, "test");
-        assert_eq!(config.profiles[0].user_data_dir, "/tmp/chrome-test");
+        assert_eq!(config.profiles[0].user_data_dir.as_deref(), Some("/tmp/chrome-test"));
     }
 
     #[test]
@@ -300,7 +355,9 @@ user_data_dir = "/tmp/chrome-test"
             profiles: vec![ChromeProfile {
                 name: "a".into(),
                 display_name: "A".into(),
-                user_data_dir: "/tmp/a".into(),
+                user_data_dir: Some("/tmp/a".into()),
+                debug_port: None,
+                kind: None,
             }],
             ..Default::default()
         };
@@ -437,5 +494,97 @@ enabled = false
 "#;
         let cfg: PagerunnerConfig = toml::from_str(toml).unwrap();
         assert_eq!(cfg.ner.enabled, Some(false));
+    }
+
+    #[test]
+    fn test_checkpoint_config_defaults() {
+        let config = PagerunnerConfig::default();
+        assert_eq!(config.checkpoints.interval_seconds, 300); // 5 min default
+        assert!(config.checkpoints.enabled);
+    }
+
+    #[test]
+    fn test_checkpoint_config_from_toml() {
+        let toml = r#"
+[checkpoints]
+enabled = false
+interval_seconds = 60
+"#;
+        let config: PagerunnerConfig = toml::from_str(toml).unwrap();
+        assert!(!config.checkpoints.enabled);
+        assert_eq!(config.checkpoints.interval_seconds, 60);
+    }
+
+    #[test]
+    fn test_chrome_profile_kind_defaults_to_none() {
+        let toml = r#"
+[[profiles]]
+name = "personal"
+display_name = "Personal"
+user_data_dir = "/tmp/chrome"
+"#;
+        let cfg: PagerunnerConfig = toml::from_str(toml).unwrap();
+        assert!(cfg.profiles[0].kind.is_none());
+    }
+
+    #[test]
+    fn test_chrome_profile_kind_agent() {
+        let toml = r#"
+[[profiles]]
+name = "agent-1"
+display_name = "Agent 1"
+user_data_dir = "/tmp/chrome-agent"
+kind = "agent"
+"#;
+        let cfg: PagerunnerConfig = toml::from_str(toml).unwrap();
+        assert_eq!(cfg.profiles[0].kind.as_deref(), Some("agent"));
+    }
+
+    #[test]
+    fn test_retention_config_defaults() {
+        let config = PagerunnerConfig::default();
+        assert_eq!(config.retention.max_snapshot_versions, 10);
+        assert_eq!(config.retention.site_knowledge_ttl_days, 0); // 0 = indefinite
+    }
+
+    #[test]
+    fn test_retention_config_from_toml() {
+        let toml_str = r#"
+[retention]
+max_snapshot_versions = 5
+site_knowledge_ttl_days = 30
+"#;
+        let config: PagerunnerConfig = toml::from_str(toml_str).unwrap();
+        assert_eq!(config.retention.max_snapshot_versions, 5);
+        assert_eq!(config.retention.site_knowledge_ttl_days, 30);
+    }
+
+    #[test]
+    fn test_attached_profile_parses_without_user_data_dir() {
+        let toml = r#"
+[[profiles]]
+name = "chrome-9225"
+display_name = "Chrome :9225"
+kind = "attached"
+debug_port = 9225
+"#;
+        let cfg: PagerunnerConfig = toml::from_str(toml).unwrap();
+        assert_eq!(cfg.profiles[0].name, "chrome-9225");
+        assert_eq!(cfg.profiles[0].kind.as_deref(), Some("attached"));
+        assert_eq!(cfg.profiles[0].debug_port, Some(9225u16));
+        assert!(cfg.profiles[0].user_data_dir.is_none());
+    }
+
+    #[test]
+    fn test_existing_profile_still_parses_with_user_data_dir() {
+        let toml = r#"
+[[profiles]]
+name = "personal"
+display_name = "Personal"
+user_data_dir = "/tmp/chrome"
+"#;
+        let cfg: PagerunnerConfig = toml::from_str(toml).unwrap();
+        assert_eq!(cfg.profiles[0].user_data_dir.as_deref(), Some("/tmp/chrome"));
+        assert!(cfg.profiles[0].debug_port.is_none());
     }
 }

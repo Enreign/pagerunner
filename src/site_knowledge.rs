@@ -165,9 +165,12 @@ impl SiteKnowledgeStore {
         failure_rate > 0.30
     }
 
-    pub fn is_expired(entry: &SiteKnowledgeEntry, now_micros: u64) -> bool {
-        const NINETY_DAYS_MICROS: u64 = 90 * 24 * 60 * 60 * 1_000_000;
-        now_micros.saturating_sub(entry.last_updated) > NINETY_DAYS_MICROS
+    pub fn is_expired(entry: &SiteKnowledgeEntry, now_micros: u64, ttl_days: u64) -> bool {
+        if ttl_days == 0 {
+            return false; // 0 = indefinite — never expires
+        }
+        let ttl_micros = ttl_days * 24 * 60 * 60 * 1_000_000;
+        now_micros.saturating_sub(entry.last_updated) > ttl_micros
     }
 
     /// Returns true if more than 50% of adapters for a site are stale.
@@ -338,20 +341,22 @@ mod tests {
             ..Default::default()
         };
         let ninety_one_days_micros: u64 = 91 * 24 * 60 * 60 * 1_000_000;
-        assert!(SiteKnowledgeStore::is_expired(
-            &entry,
-            ninety_one_days_micros
-        ));
+        assert!(SiteKnowledgeStore::is_expired(&entry, ninety_one_days_micros, 90));
     }
 
     #[test]
     fn is_expired_false_within_90_days() {
         let now = now_micros();
-        let entry = SiteKnowledgeEntry {
-            last_updated: now,
-            ..Default::default()
-        };
-        assert!(!SiteKnowledgeStore::is_expired(&entry, now));
+        let entry = SiteKnowledgeEntry { last_updated: now, ..Default::default() };
+        assert!(!SiteKnowledgeStore::is_expired(&entry, now, 90));
+    }
+
+    #[test]
+    fn is_expired_false_when_ttl_days_zero() {
+        // ttl_days == 0 means indefinite — never expires even if very old
+        let entry = SiteKnowledgeEntry { last_updated: 0, ..Default::default() };
+        let very_old: u64 = 1000 * 24 * 60 * 60 * 1_000_000;
+        assert!(!SiteKnowledgeStore::is_expired(&entry, very_old, 0));
     }
 
     #[test]

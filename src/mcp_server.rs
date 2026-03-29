@@ -89,6 +89,27 @@ pub fn all_tools() -> Vec<Value> {
             }
         }),
         json!({
+            "name": "attach_session",
+            "description": "Attach to an already-running Chrome instance started with --remote-debugging-port. Returns a session_id that can be used with all other tools. Use close_session to detach without killing Chrome.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "debug_port": {
+                        "type": "integer",
+                        "description": "The --remote-debugging-port Chrome was launched with (e.g. 9222)"
+                    },
+                    "debug_url": {
+                        "type": "string",
+                        "description": "Full base URL if Chrome is on a non-localhost host (e.g. http://localhost:9222)"
+                    },
+                    "profile": {
+                        "type": "string",
+                        "description": "Optional label for this session (used in list_sessions display_name)"
+                    }
+                }
+            }
+        }),
+        json!({
             "name": "list_sessions",
             "description": "List active Chrome sessions",
             "inputSchema": { "type": "object", "properties": {} }
@@ -114,6 +135,18 @@ pub fn all_tools() -> Vec<Value> {
                     "url": { "type": "string", "description": "URL to open (default: about:blank)" }
                 },
                 "required": ["session_id"]
+            }
+        }),
+        json!({
+            "name": "close_tab",
+            "description": "Close a specific browser tab. Returns an error if this is the last tab in the session (use close_session instead).",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "session_id": { "type": "string" },
+                    "target_id": { "type": "string" }
+                },
+                "required": ["session_id", "target_id"]
             }
         }),
         json!({
@@ -332,6 +365,53 @@ pub fn all_tools() -> Vec<Value> {
             }
         }),
         json!({
+            "name": "save_session_checkpoint",
+            "description": "Save the current session state (tabs + auth) as a named checkpoint for later restore.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "session_id": { "type": "string" },
+                    "name": { "type": "string", "description": "Optional name. Auto-named if omitted." }
+                },
+                "required": ["session_id"]
+            }
+        }),
+        json!({
+            "name": "restore_session_checkpoint",
+            "description": "Restore a session to a saved checkpoint: closes current tabs, reopens saved tabs, and restores auth state.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "session_id": { "type": "string" },
+                    "checkpoint_id": { "type": "string" }
+                },
+                "required": ["session_id", "checkpoint_id"]
+            }
+        }),
+        json!({
+            "name": "list_session_checkpoints",
+            "description": "List saved session checkpoints for a profile, sorted newest first.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "profile": { "type": "string" }
+                },
+                "required": ["profile"]
+            }
+        }),
+        json!({
+            "name": "delete_session_checkpoint",
+            "description": "Delete a saved session checkpoint (does not delete constituent snapshots).",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "profile": { "type": "string" },
+                    "checkpoint_id": { "type": "string" }
+                },
+                "required": ["profile", "checkpoint_id"]
+            }
+        }),
+        json!({
             "name": "kv_set",
             "description": "Store a string value under a namespaced key in the encrypted local DB. Use for persisting agent state across MCP restarts.",
             "inputSchema": {
@@ -501,6 +581,33 @@ pub fn all_tools() -> Vec<Value> {
                 "required": ["origin", "name"]
             }
         }),
+        json!({
+            "name": "notify",
+            "description": "Send a macOS notification via the Pagerunner menu bar. Use this to alert the user when a task is done, an error occurred, or any event worth surfacing. The notification appears immediately and can deep-link back to the current session.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "title": {
+                        "type": "string",
+                        "description": "Notification title (required). E.g. 'Tests passed — 3 flows green'"
+                    },
+                    "body": {
+                        "type": "string",
+                        "description": "Optional detail text shown below the title."
+                    },
+                    "level": {
+                        "type": "string",
+                        "enum": ["info", "warning", "error"],
+                        "description": "Urgency level. Default: 'info'. 'error' plays a louder sound."
+                    },
+                    "session_id": {
+                        "type": "string",
+                        "description": "Optional. If provided, tapping 'View' in the notification opens the menu bar to this session's profile."
+                    }
+                },
+                "required": ["title"]
+            }
+        }),
     ]
 }
 
@@ -538,7 +645,62 @@ async fn run_standalone() -> Result<()> {
     let mut reader = BufReader::new(stdin);
     let mut writer = stdout;
 
+    // Reattach to any Chrome instances that survived a previous MCP restart
+    {
+        let site_store = std::sync::Arc::new(crate::site_knowledge::SiteKnowledgeStore::new(
+            Arc::clone(&db),
+            db.master_key(),
+        ));
+        let reattached = crate::session_registry::reconcile_sessions(
+            &db,
+            &sessions,
+            &config,
+            Some(site_store),
+        ).await;
+        if !reattached.is_empty() {
+            tracing::info!("Reattached {} surviving Chrome session(s)", reattached.len());
+        }
+    }
+
     tracing::info!("Pagerunner MCP server ready (standalone)");
+
+    // Periodic auto-checkpoint background task
+    if config.checkpoints.enabled {
+        let sm_periodic = Arc::clone(&sessions);
+        let db_periodic = Arc::clone(&db);
+        let interval = config.checkpoints.interval_seconds;
+        let max_snapshot_versions_periodic = config.retention.max_snapshot_versions;
+        tokio::spawn(async move {
+            loop {
+                tokio::time::sleep(std::time::Duration::from_secs(interval)).await;
+
+                // Step 1: collect alive session IDs without holding the lock for checkpointing
+                let session_ids: Vec<String> = {
+                    let mut sm = sm_periodic.lock().await;
+                    sm.list()
+                        .into_iter()
+                        .filter(|s| s.alive)
+                        .map(|s| s.id.clone())
+                        .collect()
+                }; // ← lock released here
+
+                // Step 2: checkpoint each session individually
+                // Each iteration: acquire lock briefly, do async checkpoint, release
+                for session_id in session_ids {
+                    let mut sm = sm_periodic.lock().await;
+                    if let Ok(session) = sm.get_live(&session_id) {
+                        let _ = crate::checkpoint::save_session_checkpoint(
+                            session,
+                            Some("Autosave · periodic"),
+                            &db_periodic,
+                            max_snapshot_versions_periodic,
+                        ).await;
+                    }
+                    // Lock released at end of iteration — other tool calls can proceed between sessions
+                }
+            }
+        });
+    }
 
     let mut line = String::new();
     loop {
@@ -610,7 +772,7 @@ async fn run_standalone() -> Result<()> {
 
     // Collect session IDs first (release lock before async calls)
     let session_ids: Vec<String> = {
-        let mgr = sessions.lock().await;
+        let mut mgr = sessions.lock().await;
         mgr.list().iter().map(|i| i.id.clone()).collect()
     };
     // Record SessionClosed for each session
@@ -948,7 +1110,7 @@ pub async fn dispatch_tool(
 ) -> crate::error::Result<ToolResponse> {
     // Session-level tool permission check (moved from dispatch_tool_inner).
     let tool_permitted: Option<crate::error::Result<()>> = {
-        let mgr = sessions.lock().await;
+        let mut mgr = sessions.lock().await;
         args["session_id"]
             .as_str()
             .and_then(|sid| mgr.get(sid))
@@ -1064,6 +1226,8 @@ pub(crate) fn list_profiles_response(config: &PagerunnerConfig) -> String {
             json!({
                 "name": p.name,
                 "display_name": p.display_name,
+                "kind": p.kind.as_deref().unwrap_or("personal"),
+                "user_data_dir": p.user_data_dir,
             })
         })
         .collect();
@@ -1651,6 +1815,22 @@ async fn dispatch_tool_inner(
                 }
             }
 
+            // Route profiles with a debug_port through attach_session logic.
+            // This covers both kind="attached" (new profile) and any existing profile
+            // where a debug_port was merged in (kind may be "personal", "agent", etc.).
+            if let Some(port) = profile.debug_port {
+                let debug_url = format!("http://localhost:{}", port);
+
+                let mut mgr = sessions.lock().await;
+                let id = mgr
+                    .attach(&debug_url, Some(profile.name.clone()), Some(profile.display_name.clone()), Arc::clone(&db), &config.network, Some(std::sync::Arc::clone(&site_store)))
+                    .await?;
+
+                // Attached-profile sessions are managed by the user's Chrome process — don't write
+                // to the session registry (reattach would be invalid after restart).
+                return Ok(serde_json::json!({"ok": true, "session_id": id, "attached_to": debug_url}).to_string());
+            }
+
             // Capture summary BEFORE policy is moved into mgr.open()
             let policy_summary = policy.to_policy_summary();
             let stealth_val = stealth;
@@ -1676,6 +1856,27 @@ async fn dispatch_tool_inner(
                 session_id
             };
 
+            let entry = crate::session_registry::SessionRegistryEntry {
+                session_id: id.clone(),
+                profile_name: profile.name.clone(),
+                display_name: profile.display_name.clone(),
+                stealth,
+                debug_port: {
+                    let mgr = sessions.lock().await;
+                    mgr.get(&id).map(|s| s.debug_port).unwrap_or(0)
+                },
+                opened_at: std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_secs(),
+                security_params: serde_json::json!({
+                    "allowed_domains": args["allowed_domains"],
+                    "max_navigations": args["max_navigations"],
+                    "stealth": stealth,
+                }),
+            };
+            let _ = crate::session_registry::save_entry(&db, &entry);
+
             if let Some(a) = audit {
                 a.record(crate::audit::AuditEvent::new(
                     crate::audit::AuditEventKind::SessionOpened {
@@ -1694,6 +1895,26 @@ async fn dispatch_tool_inner(
             )
         }
 
+        "attach_session" => {
+            let debug_url = if let Some(port) = args["debug_port"].as_u64() {
+                format!("http://localhost:{}", port)
+            } else if let Some(url) = args["debug_url"].as_str() {
+                url.to_string()
+            } else {
+                return Err(crate::error::PagerunnerError::Config(
+                    "attach_session requires either debug_port (integer) or debug_url (string)".into()
+                ));
+            };
+            let profile_label = args["profile"].as_str().map(|s| s.to_string());
+
+            let mut mgr = sessions.lock().await;
+            let id = mgr
+                .attach(&debug_url, profile_label.clone(), profile_label, Arc::clone(&db), &config.network, Some(Arc::clone(&site_store)))
+                .await?;
+
+            Ok(serde_json::json!({"ok": true, "session_id": id, "attached_to": debug_url}).to_string())
+        }
+
         "close_session" => {
             let id = args["session_id"].as_str().ok_or_else(|| {
                 crate::error::PagerunnerError::Config("Missing session_id".into())
@@ -1709,8 +1930,28 @@ async fn dispatch_tool_inner(
                 .await;
             }
 
-            let mut mgr = sessions.lock().await;
-            mgr.close(id, &db).await?;
+            // Auto-checkpoint before close (best-effort: never fail the close if checkpoint fails).
+            // The lock guard `ckpt_guard` is dropped at the end of this block — this is intentional.
+            // The second lock acquisition below MUST come after this block ends.
+            {
+                let mut ckpt_guard = sessions.lock().await;
+                if let Ok(session) = ckpt_guard.get_live(id) {
+                    // Lock is held across this await — acceptable here because close_session
+                    // is a terminal operation; no concurrent tool calls on this session are expected.
+                    let _ = crate::checkpoint::save_session_checkpoint(
+                        session,
+                        Some("Autosave · close"),
+                        &db,
+                        config.retention.max_snapshot_versions,
+                    ).await;
+                }
+            } // ← ckpt_guard dropped here — lock fully released before next acquisition
+
+            // Delete registry entry (best-effort)
+            let _ = crate::session_registry::delete_entry(&db, id);
+
+            let mut close_guard = sessions.lock().await;
+            close_guard.close(id, &db).await?;
             // Purge vault entries for this session (best-effort, non-fatal)
             let vault = crate::anonymizer::vault::Vault::new(Arc::clone(&db));
             if let Err(e) = vault.purge_session(id) {
@@ -1720,7 +1961,7 @@ async fn dispatch_tool_inner(
         }
 
         "list_sessions" => {
-            let mgr = sessions.lock().await;
+            let mut mgr = sessions.lock().await;
             let list: Vec<Value> = mgr
                 .list()
                 .iter()
@@ -1743,7 +1984,18 @@ async fn dispatch_tool_inner(
             })?;
             let mut mgr = sessions.lock().await;
             let session = mgr.get_live(id)?;
-            let tabs = browser::list_tabs(&session.cdp).await?;
+            let all_tabs = browser::list_tabs(&mut session.cdp).await?;
+            let owned = session.owned_targets.clone();
+            // Primary sessions own the Chrome process — show all tabs.
+            // Secondary sessions share a Chrome process, so filter to tabs opened by this session.
+            // Also fall back to all tabs if owned_targets is stale (e.g. Chrome restored a
+            // previous session and replaced the initial blank tab with new target IDs).
+            let tabs: Vec<_> = if session.owns_process || owned.is_empty() {
+                all_tabs
+            } else {
+                let filtered: Vec<_> = all_tabs.iter().filter(|t| owned.contains(&t.target_id)).cloned().collect();
+                if filtered.is_empty() { all_tabs } else { filtered }
+            };
             let has_policy = session
                 .security_policy
                 .as_ref()
@@ -1819,7 +2071,9 @@ async fn dispatch_tool_inner(
                 }
             }
 
-            let tab = browser::new_tab(&session.cdp, url).await?;
+            let cdp = session.cdp.clone();
+            let tab = browser::new_tab(&cdp, url).await?;
+            session.owned_targets.insert(tab.target_id.clone());
             Ok(serde_json::json!({
                 "ok": true,
                 "target_id": tab.target_id,
@@ -1827,6 +2081,37 @@ async fn dispatch_tool_inner(
                 "title": tab.title,
             })
             .to_string())
+        }
+
+        "close_tab" => {
+            let sid = args["session_id"]
+                .as_str()
+                .ok_or_else(|| PagerunnerError::Config("Missing session_id".into()))?;
+            let target_id = args["target_id"]
+                .as_str()
+                .ok_or_else(|| PagerunnerError::Config("Missing target_id".into()))?;
+            let mut mgr = sessions.lock().await;
+            let session = mgr.get_live(sid)?;
+            let cdp = session.cdp.clone();
+            let target_id_owned = target_id.to_string();
+            browser::close_tab(&cdp, target_id).await?;
+            session.owned_targets.remove(&target_id_owned);
+            Ok(serde_json::json!({"ok": true, "target_id": target_id}).to_string())
+        }
+
+        "activate_tab" => {
+            let sid = args["session_id"]
+                .as_str()
+                .ok_or_else(|| PagerunnerError::Config("Missing session_id".into()))?;
+            let target_id = args["target_id"]
+                .as_str()
+                .ok_or_else(|| PagerunnerError::Config("Missing target_id".into()))?;
+            let mut mgr = sessions.lock().await;
+            let session = mgr.get_live(sid)?;
+            let cdp = session.cdp.clone();
+            drop(mgr);
+            cdp.send("Target.activateTarget", serde_json::json!({ "targetId": target_id })).await?;
+            Ok(serde_json::json!({"ok": true, "target_id": target_id}).to_string())
         }
 
         "navigate" => {
@@ -2480,10 +2765,10 @@ async fn dispatch_tool_inner(
             let mut mgr = sessions.lock().await;
             let session = mgr.get_live(sid)?;
             if let Some(origin) = args["origin"].as_str() {
-                crate::snapshot::save_snapshot(session, tid, origin, &db).await?;
+                crate::snapshot::save_snapshot(session, tid, origin, &db, config.retention.max_snapshot_versions).await?;
                 Ok(serde_json::json!({"ok": true}).to_string())
             } else {
-                let origins = crate::snapshot::save_all_snapshots(session, tid, &db).await?;
+                let origins = crate::snapshot::save_all_snapshots(session, tid, &db, config.retention.max_snapshot_versions).await?;
                 Ok(serde_json::json!({"ok": true, "origins": origins}).to_string())
             }
         }
@@ -2545,6 +2830,71 @@ async fn dispatch_tool_inner(
                 serde_json::json!({"ok": true, "tabs_restored": urls.len(), "urls": urls})
                     .to_string(),
             )
+        }
+
+        "save_session_checkpoint" => {
+            let sid = args["session_id"]
+                .as_str()
+                .ok_or_else(|| PagerunnerError::Config("Missing session_id".into()))?;
+            let name = args["name"].as_str();
+            let mut mgr = sessions.lock().await;
+            let session = mgr.get_live(sid)?;
+            let ckpt = crate::checkpoint::save_session_checkpoint(session, name, &db, config.retention.max_snapshot_versions).await?;
+            Ok(serde_json::json!({
+                "ok": true,
+                "checkpoint_id": ckpt.checkpoint_id,
+                "name": ckpt.name,
+            }).to_string())
+        }
+
+        "restore_session_checkpoint" => {
+            let sid = args["session_id"]
+                .as_str()
+                .ok_or_else(|| PagerunnerError::Config("Missing session_id".into()))?;
+            let ckpt_id = args["checkpoint_id"]
+                .as_str()
+                .ok_or_else(|| PagerunnerError::Config("Missing checkpoint_id".into()))?;
+            let mut mgr = sessions.lock().await;
+            let session = mgr.get_live(sid)?;
+            let result = crate::checkpoint::restore_session_checkpoint(session, ckpt_id, &db).await?;
+            Ok(result.to_string())
+        }
+
+        "list_session_checkpoints" => {
+            let profile = args["profile"]
+                .as_str()
+                .ok_or_else(|| PagerunnerError::Config("Missing profile".into()))?;
+            let checkpoints = crate::checkpoint::list_checkpoints(&db, profile)?;
+            let data: Vec<serde_json::Value> = checkpoints
+                .iter()
+                .map(|c| {
+                    let mut seen = std::collections::HashSet::new();
+                    let origins: Vec<&str> = c.tabs.iter()
+                        .filter(|t| seen.insert(t.origin.as_str()))
+                        .map(|t| t.origin.as_str())
+                        .collect();
+                    serde_json::json!({
+                        "checkpoint_id": c.checkpoint_id,
+                        "name": c.name,
+                        "saved_at": c.saved_at,
+                        "profile": c.profile,
+                        "tab_count": c.tabs.len(),
+                        "origins": origins,
+                    })
+                })
+                .collect();
+            Ok(serde_json::json!({"ok": true, "data": data}).to_string())
+        }
+
+        "delete_session_checkpoint" => {
+            let profile = args["profile"]
+                .as_str()
+                .ok_or_else(|| PagerunnerError::Config("Missing profile".into()))?;
+            let ckpt_id = args["checkpoint_id"]
+                .as_str()
+                .ok_or_else(|| PagerunnerError::Config("Missing checkpoint_id".into()))?;
+            crate::checkpoint::delete_checkpoint(&db, profile, ckpt_id)?;
+            Ok(serde_json::json!({"ok": true}).to_string())
         }
 
         "kv_set" => {
@@ -2764,7 +3114,7 @@ async fn dispatch_tool_inner(
                 None => Ok(serde_json::to_string(&serde_json::Value::Null)?),
                 Some(mut entry) => {
                     // Lazy TTL: if entry is expired, delete and return null
-                    if crate::site_knowledge::SiteKnowledgeStore::is_expired(&entry, now) {
+                    if crate::site_knowledge::SiteKnowledgeStore::is_expired(&entry, now, config.retention.site_knowledge_ttl_days) {
                         let _ = site_store.delete(origin);
                         return Ok(serde_json::to_string(&serde_json::Value::Null)?);
                     }
@@ -3098,11 +3448,63 @@ async fn dispatch_tool_inner(
             }))?)
         }
 
+        "notify" => {
+            // Resolve profile_name from session_id if provided (best-effort)
+            let profile_name = if let Some(sid) = args.get("session_id").and_then(|v| v.as_str()) {
+                let mgr = sessions.lock().await;
+                mgr.get(sid).map(|s| s.profile_name.clone())
+            } else {
+                None
+            };
+            handle_notify(&db, args, profile_name)
+        }
+
+        "list_notifications" => {
+            handle_list_notifications(&db)
+        }
+
         _ => Err(crate::error::PagerunnerError::Cdp(format!(
             "Unknown tool: {}",
             tool
         ))),
     }
+}
+
+fn handle_notify(
+    db: &crate::db::Db,
+    args: &serde_json::Value,
+    profile_name: Option<String>,
+) -> crate::error::Result<String> {
+    let title = args["title"]
+        .as_str()
+        .ok_or_else(|| crate::error::PagerunnerError::Config("Missing title".into()))?;
+    let body = args["body"].as_str();
+    let level = args["level"].as_str().unwrap_or("info");
+    if !["info", "warning", "error"].contains(&level) {
+        return Err(crate::error::PagerunnerError::Config(
+            "level must be 'info', 'warning', or 'error'".into(),
+        ));
+    }
+    let session_id = args["session_id"].as_str();
+    crate::notification::push_notification(db, title, body, level, session_id, profile_name.as_deref())?;
+    Ok(serde_json::json!({"ok": true}).to_string())
+}
+
+fn handle_list_notifications(db: &crate::db::Db) -> crate::error::Result<String> {
+    let notifs = crate::notification::drain_notifications(db)?;
+    let json_notifs: Vec<serde_json::Value> = notifs
+        .iter()
+        .map(|n| serde_json::json!({
+            "id": n.id,
+            "title": n.title,
+            "body": n.body,
+            "level": n.level,
+            "session_id": n.session_id,
+            "profile_name": n.profile_name,
+            "created_at": n.created_at,
+        }))
+        .collect();
+    Ok(serde_json::json!({"notifications": json_notifs}).to_string())
 }
 
 #[cfg(test)]
@@ -3152,15 +3554,86 @@ mod tests {
     }
 
     #[test]
+    fn test_list_notifications_drains_and_returns_json() {
+        let dir = tempfile::tempdir().unwrap();
+        let key = crate::db::Db::generate_key();
+        let db = crate::db::Db::open_with_key(
+            dir.path().join("test.db").to_str().unwrap(), key
+        ).unwrap();
+
+        crate::notification::push_notification(&db, "N1", None, "info", None, None).unwrap();
+        crate::notification::push_notification(&db, "N2", None, "warning", None, Some("myprofile")).unwrap();
+
+        let result = handle_list_notifications(&db).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&result).unwrap();
+        let notifs = parsed["notifications"].as_array().unwrap();
+        assert_eq!(notifs.len(), 2);
+        assert!(notifs.iter().any(|n| n["title"] == "N1"));
+        assert!(notifs.iter().any(|n| n["profile_name"] == "myprofile"));
+
+        // Second call returns empty
+        let result2 = handle_list_notifications(&db).unwrap();
+        let parsed2: serde_json::Value = serde_json::from_str(&result2).unwrap();
+        assert!(parsed2["notifications"].as_array().unwrap().is_empty());
+    }
+
+    #[test]
+    fn test_notify_tool_writes_notification() {
+        let dir = tempfile::tempdir().unwrap();
+        let key = crate::db::Db::generate_key();
+        let db = crate::db::Db::open_with_key(
+            dir.path().join("test.db").to_str().unwrap(), key
+        ).unwrap();
+
+        let args = serde_json::json!({
+            "title": "Tests passed",
+            "body": "All 3 flows green",
+            "level": "info"
+        });
+        handle_notify(&db, &args, None).unwrap();
+
+        let drained = crate::notification::drain_notifications(&db).unwrap();
+        assert_eq!(drained.len(), 1);
+        assert_eq!(drained[0].title, "Tests passed");
+        assert_eq!(drained[0].body.as_deref(), Some("All 3 flows green"));
+        assert_eq!(drained[0].level, "info");
+        assert!(drained[0].profile_name.is_none());
+    }
+
+    #[test]
+    fn test_notify_tool_unknown_session_id_writes_nil_profile() {
+        let dir = tempfile::tempdir().unwrap();
+        let key = crate::db::Db::generate_key();
+        let db = crate::db::Db::open_with_key(
+            dir.path().join("test.db").to_str().unwrap(), key
+        ).unwrap();
+
+        let args = serde_json::json!({
+            "title": "Done",
+            "session_id": "nonexistent-session-id"
+        });
+        handle_notify(&db, &args, None).unwrap();
+
+        let drained = crate::notification::drain_notifications(&db).unwrap();
+        assert_eq!(drained.len(), 1);
+        assert!(drained[0].profile_name.is_none());
+    }
+
+    #[test]
     fn test_tools_list_response() {
         let tools = all_tools();
         assert!(tools.iter().any(|t| t["name"] == "list_profiles"));
         assert!(tools.iter().any(|t| t["name"] == "open_session"));
         assert!(tools.iter().any(|t| t["name"] == "screenshot"));
         assert!(tools.iter().any(|t| t["name"] == "new_tab"));
+        assert!(tools.iter().any(|t| t["name"] == "close_tab"));
         assert!(tools.iter().any(|t| t["name"] == "evaluate"));
         assert!(tools.iter().any(|t| t["name"] == "click"));
         assert!(tools.iter().any(|t| t["name"] == "type_text"));
+        assert!(tools.iter().any(|t| t["name"] == "save_session_checkpoint"));
+        assert!(tools.iter().any(|t| t["name"] == "restore_session_checkpoint"));
+        assert!(tools.iter().any(|t| t["name"] == "list_session_checkpoints"));
+        assert!(tools.iter().any(|t| t["name"] == "delete_session_checkpoint"));
     }
 
     #[test]
@@ -3799,7 +4272,9 @@ Normal visible content here."#;
             profiles: vec![crate::config::ChromeProfile {
                 name: "personal".into(),
                 display_name: "Personal".into(),
-                user_data_dir: "/tmp/p".into(),
+                user_data_dir: Some("/tmp/p".into()),
+                debug_port: None,
+                kind: None,
             }],
             ..Default::default()
         };
@@ -3813,6 +4288,34 @@ Normal visible content here."#;
             !result.contains("pagerunner init"),
             "should not show hint when profiles exist"
         );
+    }
+
+    #[test]
+    fn list_profiles_response_includes_kind_field() {
+        let config = crate::config::PagerunnerConfig {
+            profiles: vec![
+                crate::config::ChromeProfile {
+                    name: "personal".into(),
+                    display_name: "Personal".into(),
+                    user_data_dir: Some("/tmp/p".into()),
+                    debug_port: None,
+                    kind: None,
+                },
+                crate::config::ChromeProfile {
+                    name: "agent-1".into(),
+                    display_name: "Agent 1".into(),
+                    user_data_dir: Some("/tmp/a".into()),
+                    debug_port: None,
+                    kind: Some("agent".into()),
+                },
+            ],
+            ..Default::default()
+        };
+        let result = list_profiles_response(&config);
+        let v: serde_json::Value = serde_json::from_str(&result).unwrap();
+        let data = v["data"].as_array().unwrap();
+        assert_eq!(data[0]["kind"], "personal"); // None → "personal"
+        assert_eq!(data[1]["kind"], "agent");
     }
 
     #[tokio::test]

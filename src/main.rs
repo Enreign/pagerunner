@@ -5,6 +5,7 @@ mod audit;
 mod auth_token_detector;
 mod browser;
 mod cdp;
+mod checkpoint;
 mod chrome;
 mod chrome_detect;
 mod cli_tools;
@@ -19,11 +20,13 @@ mod init;
 mod ipc;
 mod mcp_server;
 mod network_guard;
+pub mod notification;
 mod network_log;
 mod sanitizer;
 mod schema_inference;
 mod security;
 mod session;
+pub mod session_registry;
 mod site_knowledge;
 mod snapshot;
 mod stealth;
@@ -104,6 +107,19 @@ enum Commands {
         #[arg(long)]
         anonymization_mode: Option<String>,
     },
+    /// Attach to an already-running Chrome (must be launched with --remote-debugging-port)
+    #[command(name = "attach-session")]
+    AttachSession {
+        /// Port Chrome was launched with (e.g. 9222)
+        #[arg(long)]
+        debug_port: Option<u16>,
+        /// Full base URL if Chrome is non-local (e.g. http://localhost:9222)
+        #[arg(long)]
+        debug_url: Option<String>,
+        /// Optional display label for this session
+        #[arg(long)]
+        profile: Option<String>,
+    },
     /// Close a Chrome session
     CloseSession { session_id: String },
     /// List open sessions
@@ -115,6 +131,12 @@ enum Commands {
         session_id: String,
         #[arg(long)]
         url: Option<String>,
+    },
+    /// Close a specific tab (fails if it's the last tab in the session)
+    #[command(name = "close-tab")]
+    CloseTab {
+        session_id: String,
+        target_id: String,
     },
     /// Navigate to a URL
     Navigate {
@@ -226,6 +248,34 @@ enum Commands {
         /// Unix microsecond timestamp of specific version to delete (omit for all)
         #[arg(long)]
         saved_at: Option<i64>,
+    },
+    /// Save a session checkpoint (tabs + auth state)
+    #[command(name = "save-session-checkpoint")]
+    SaveSessionCheckpoint {
+        session_id: String,
+        /// Optional name (auto-named if omitted)
+        #[arg(long)]
+        name: Option<String>,
+    },
+    /// Restore a session from a saved checkpoint
+    #[command(name = "restore-session-checkpoint")]
+    RestoreSessionCheckpoint {
+        session_id: String,
+        checkpoint_id: String,
+    },
+    /// List saved session checkpoints for a profile
+    #[command(name = "list-session-checkpoints")]
+    ListSessionCheckpoints {
+        #[arg(long)]
+        profile: String,
+    },
+    /// Delete a saved session checkpoint
+    #[command(name = "delete-session-checkpoint")]
+    DeleteSessionCheckpoint {
+        #[arg(long)]
+        profile: String,
+        #[arg(long)]
+        checkpoint_id: String,
     },
     /// Save tab URLs and titles for later restoration
     SaveTabState { session_id: String },
@@ -568,7 +618,7 @@ async fn run() -> anyhow::Result<()> {
         Commands::Profiles => {
             let config = config::PagerunnerConfig::load()?;
             for p in &config.profiles {
-                println!("{}: {}", p.name, p.user_data_dir);
+                println!("{}: {}", p.name, p.user_data_dir.as_deref().unwrap_or("(attached)"));
             }
         }
         Commands::ExampleConfig => {
@@ -731,6 +781,28 @@ async fn run() -> anyhow::Result<()> {
             )
             .await?;
         }
+        Commands::AttachSession { debug_port, debug_url, profile } => {
+            let config = config::PagerunnerConfig::load()?;
+            let mut args = serde_json::json!({});
+            if let Some(port) = debug_port {
+                args["debug_port"] = serde_json::json!(port);
+            } else if let Some(url) = debug_url {
+                args["debug_url"] = serde_json::json!(url);
+            } else {
+                eprintln!("error: attach-session requires --debug-port <PORT> or --debug-url <URL>");
+                std::process::exit(1);
+            }
+            if let Some(p) = profile {
+                args["profile"] = serde_json::json!(p);
+            }
+            crate::cli_tools::run_tool(
+                "attach_session",
+                args,
+                crate::cli_tools::ScreenshotMode::File,
+                &config,
+            )
+            .await?;
+        }
         Commands::CloseSession { session_id } => {
             let config = config::PagerunnerConfig::load()?;
             crate::cli_tools::run_tool(
@@ -770,6 +842,16 @@ async fn run() -> anyhow::Result<()> {
             crate::cli_tools::run_tool(
                 "new_tab",
                 args,
+                crate::cli_tools::ScreenshotMode::File,
+                &config,
+            )
+            .await?;
+        }
+        Commands::CloseTab { session_id, target_id } => {
+            let config = config::PagerunnerConfig::load()?;
+            crate::cli_tools::run_tool(
+                "close_tab",
+                serde_json::json!({"session_id": session_id, "target_id": target_id}),
                 crate::cli_tools::ScreenshotMode::File,
                 &config,
             )
@@ -1006,6 +1088,50 @@ async fn run() -> anyhow::Result<()> {
             crate::cli_tools::run_tool(
                 "delete_snapshot",
                 args,
+                crate::cli_tools::ScreenshotMode::File,
+                &config,
+            )
+            .await?;
+        }
+        Commands::SaveSessionCheckpoint { session_id, name } => {
+            let config = config::PagerunnerConfig::load()?;
+            let mut args = serde_json::json!({"session_id": session_id});
+            if let Some(n) = name {
+                args["name"] = serde_json::json!(n);
+            }
+            crate::cli_tools::run_tool(
+                "save_session_checkpoint",
+                args,
+                crate::cli_tools::ScreenshotMode::File,
+                &config,
+            )
+            .await?;
+        }
+        Commands::RestoreSessionCheckpoint { session_id, checkpoint_id } => {
+            let config = config::PagerunnerConfig::load()?;
+            crate::cli_tools::run_tool(
+                "restore_session_checkpoint",
+                serde_json::json!({"session_id": session_id, "checkpoint_id": checkpoint_id}),
+                crate::cli_tools::ScreenshotMode::File,
+                &config,
+            )
+            .await?;
+        }
+        Commands::ListSessionCheckpoints { profile } => {
+            let config = config::PagerunnerConfig::load()?;
+            crate::cli_tools::run_tool(
+                "list_session_checkpoints",
+                serde_json::json!({"profile": profile}),
+                crate::cli_tools::ScreenshotMode::File,
+                &config,
+            )
+            .await?;
+        }
+        Commands::DeleteSessionCheckpoint { profile, checkpoint_id } => {
+            let config = config::PagerunnerConfig::load()?;
+            crate::cli_tools::run_tool(
+                "delete_session_checkpoint",
+                serde_json::json!({"profile": profile, "checkpoint_id": checkpoint_id}),
                 crate::cli_tools::ScreenshotMode::File,
                 &config,
             )
