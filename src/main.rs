@@ -10,24 +10,24 @@ mod chrome;
 mod chrome_detect;
 mod cli_tools;
 mod config;
+mod console_log;
 mod daemon;
 mod daemon_client;
 mod db;
+mod endpoint_mapper;
 mod error;
 mod init;
 mod ipc;
 mod mcp_server;
 mod network_guard;
 pub mod notification;
-mod console_log;
 mod network_log;
 mod sanitizer;
-mod security;
-mod endpoint_mapper;
 mod schema_inference;
-mod site_knowledge;
+mod security;
 mod session;
 pub mod session_registry;
+mod site_knowledge;
 mod snapshot;
 mod stealth;
 
@@ -564,11 +564,21 @@ fn format_audit_event(event: &crate::audit::AuditEvent) -> String {
                 counts.join(",")
             )
         }
-        crate::audit::AuditEventKind::AdapterRegistered { origin, name, trusted } => {
-            format!("[{}] ADAPTER_REGISTERED origin={} name={} trusted={}", ts, origin, name, trusted)
+        crate::audit::AuditEventKind::AdapterRegistered {
+            origin,
+            name,
+            trusted,
+        } => {
+            format!(
+                "[{}] ADAPTER_REGISTERED origin={} name={} trusted={}",
+                ts, origin, name, trusted
+            )
         }
         crate::audit::AuditEventKind::AuthTokenDetected { origin, kind } => {
-            format!("[{}] AUTH_TOKEN_DETECTED origin={} kind={}", ts, origin, kind)
+            format!(
+                "[{}] AUTH_TOKEN_DETECTED origin={} kind={}",
+                ts, origin, kind
+            )
         }
         crate::audit::AuditEventKind::SiteApiCalled {
             origin,
@@ -618,7 +628,10 @@ async fn run() -> anyhow::Result<()> {
         Commands::Init { force, json } => {
             if let Err(e) = crate::init::run(force, json) {
                 if json {
-                    println!("{}", serde_json::json!({ "ok": false, "error": e.to_string() }));
+                    println!(
+                        "{}",
+                        serde_json::json!({ "ok": false, "error": e.to_string() })
+                    );
                 } else {
                     eprintln!("Error: {}", e);
                 }
@@ -1210,9 +1223,17 @@ async fn run() -> anyhow::Result<()> {
             .await?;
         }
         Commands::GetNetworkLog {
-            session_id, target_id, url_pattern, method, status_min,
-            status_max, lookback_ms, limit, include_request_body,
-            full_response, all_tabs,
+            session_id,
+            target_id,
+            url_pattern,
+            method,
+            status_min,
+            status_max,
+            lookback_ms,
+            limit,
+            include_request_body,
+            full_response,
+            all_tabs,
         } => {
             let config = config::PagerunnerConfig::load()?;
             crate::cli_tools::run_tool(
@@ -1263,7 +1284,12 @@ async fn run() -> anyhow::Result<()> {
             )
             .await?;
         }
-        Commands::RegisterAdapter { origin, name, description, js_code } => {
+        Commands::RegisterAdapter {
+            origin,
+            name,
+            description,
+            js_code,
+        } => {
             let config = config::PagerunnerConfig::load()?;
             crate::cli_tools::run_tool(
                 "register_adapter",
@@ -1273,7 +1299,13 @@ async fn run() -> anyhow::Result<()> {
             )
             .await?;
         }
-        Commands::CallSiteApi { session_id, target_id, origin, name, params } => {
+        Commands::CallSiteApi {
+            session_id,
+            target_id,
+            origin,
+            name,
+            params,
+        } => {
             let config = config::PagerunnerConfig::load()?;
             crate::cli_tools::run_tool(
                 "call_site_api",
@@ -1283,7 +1315,11 @@ async fn run() -> anyhow::Result<()> {
             )
             .await?;
         }
-        Commands::GenerateAdapter { origin, name, description } => {
+        Commands::GenerateAdapter {
+            origin,
+            name,
+            description,
+        } => {
             let config = config::PagerunnerConfig::load()?;
             crate::cli_tools::run_generate_adapter(&origin, &name, description.as_deref(), &config)
                 .await?;

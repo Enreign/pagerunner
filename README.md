@@ -18,6 +18,9 @@ A Chrome browser automation MCP server. Connect Claude (or any MCP client) to a 
 - [Setup](#setup)
 - [Using with your project](#using-with-your-project)
 - [Tools](#tools)
+- [Site Intelligence](#site-intelligence)
+- [Session Checkpoints](#session-checkpoints)
+- [macOS Menu Bar App](#macos-menu-bar-app)
 - [Anonymization (PII protection)](#anonymization-pii-protection)
 - [Stealth mode](#stealth-mode)
 - [Daemon (multiple Claude Code sessions / persistent state)](#daemon-multiple-claude-code-sessions--persistent-state)
@@ -147,7 +150,7 @@ Or explore the skill repository directly: [pagerunner-skill](https://github.com/
 The skill includes:
 - **Quick starts for 4 ICPs:** Solo Developer, Power User, Security-Conscious, Server-Side
 - **11 workflow patterns:** form filling, authentication, scrolling, multi-step interactions
-- **Complete reference:** all 27 tools with parameters and examples
+- **Complete reference:** all 38 tools with parameters and examples
 - **Security guide:** PII anonymization, audit logging, encryption
 - **Real-world examples:** end-to-end workflows with error handling
 - **Troubleshooting:** common issues and solutions
@@ -162,10 +165,12 @@ Start with the skill's [SKILL.md](https://github.com/Enreign/pagerunner-skill/bl
 |---|---|
 | `list_profiles` | List configured Chrome profiles |
 | `open_session` | Launch Chrome for a profile, returns `session_id` |
+| `attach_session` | Attach to an existing Chrome instance via `--remote-debugging-port` |
 | `close_session` | Kill a Chrome session |
 | `list_sessions` | List active sessions |
 | `list_tabs` | List open tabs in a session |
 | `new_tab` | Open a new tab, returns `target_id` |
+| `close_tab` | Close a specific tab |
 
 ### Navigation & content
 
@@ -207,6 +212,86 @@ Start with the skill's [SKILL.md](https://github.com/Enreign/pagerunner-skill/bl
 | `kv_delete` | Delete a key |
 | `kv_list` | List keys in a namespace (with optional prefix filter) |
 | `kv_clear` | Delete all keys in a namespace |
+
+### Network & console
+
+| Tool | Description |
+|---|---|
+| `get_network_log` | Inspect HTTP requests captured in a session |
+| `get_console_log` | Capture JavaScript console output from a tab |
+
+### Site intelligence
+
+| Tool | Description |
+|---|---|
+| `get_site_knowledge` | Inspect what Pagerunner has learned about a site (adapters, auth tokens, selector health) |
+| `register_adapter` | Store a JS adapter for direct API calls against a site |
+| `call_site_api` | Execute a stored adapter in the browser tab |
+| `generate_adapter` | Auto-generate a JS adapter from network traffic using Claude (requires `ANTHROPIC_API_KEY`) |
+
+### Session checkpoints
+
+| Tool | Description |
+|---|---|
+| `save_session_checkpoint` | Save full tab state (URLs + scroll positions) for all tabs in a session |
+| `restore_session_checkpoint` | Reopen all saved tabs and navigate to stored URLs |
+| `list_session_checkpoints` | List saved checkpoints for a profile |
+| `delete_session_checkpoint` | Remove a checkpoint by ID |
+
+## Site Intelligence
+
+Pagerunner learns about sites as you use them and can call site APIs directly using your session credentials — no separate auth setup required.
+
+**Adapters** are short JS functions stored in the encrypted DB and executed in the browser tab. Use them to call APIs that a site exposes (typically the same API the web UI uses):
+
+```
+register_adapter(origin="https://github.com", name="list-issues",
+  description="List open issues for a repo",
+  js_code="async ({owner, repo}) => { const r = await fetch(...); return r.json() }")
+
+call_site_api(session_id, target_id, origin="https://github.com",
+  name="list-issues", params={"owner": "Enreign", "repo": "pagerunner"})
+```
+
+Seed adapters for GitHub, Linear, Jira, Notion, and Gmail are built in.
+
+**Auth token detection** — Bearer tokens, API keys, and session cookies discovered in network traffic are stored in the encrypted site vault. Adapters automatically have access to them via the `credentials` argument.
+
+**Selector stability** — `click`, `fill`, and `select` track success/failure rates per selector. A fragility warning appears in the tool response when a selector fails >30% of the time over ≥5 uses.
+
+## Session Checkpoints
+
+Save complete browser state (all open tabs with URLs and scroll positions) and restore it in any future session:
+
+```
+save_session_checkpoint(session_id, name="before-review")
+  → checkpoint_id: cp_abc123
+
+restore_session_checkpoint(session_id, checkpoint_id="cp_abc123")
+  → reopens all saved tabs at their stored URLs
+```
+
+Checkpoints are stored in the encrypted DB and scoped to a profile.
+
+## macOS Menu Bar App
+
+A native Swift companion app lives at `apps/menubar/`. It shows all Chrome profiles, active sessions, open tabs, and daemon status from the menu bar — no terminal required.
+
+**Features:**
+- One-click open/close sessions and save checkpoints
+- Agent profiles shown with a distinct CPU icon in a separate section
+- Add Profile flow: discovers unconfigured Chrome profiles or creates new agent profiles
+- macOS native notifications: daemon stopped, session crashed, checkpoint saved
+- Global hotkey and auto-update via Sparkle 2.x
+
+**Build and run:**
+
+```bash
+cd apps/menubar
+swift build -c release
+pagerunner daemon &
+open scripts/Pagerunner.app
+```
 
 ## Anonymization (PII protection)
 

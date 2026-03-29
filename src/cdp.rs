@@ -396,8 +396,7 @@ mod tests {
         };
         let framed = frame(&msg).unwrap();
         assert!(framed.ends_with(b"\0"));
-        let json: serde_json::Value =
-            serde_json::from_slice(&framed[..framed.len() - 1]).unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&framed[..framed.len() - 1]).unwrap();
         assert_eq!(json["id"], 1);
         assert_eq!(json["method"], "Target.getTargets");
     }

@@ -110,8 +110,9 @@ impl SiteKnowledgeStore {
         match self.db.get("site_knowledge", &key)? {
             None => Ok(None),
             Some(bytes) => {
-                let entry: SiteKnowledgeEntry = serde_json::from_slice(&bytes)
-                    .map_err(|e| PagerunnerError::Config(format!("site_knowledge parse error: {}", e)))?;
+                let entry: SiteKnowledgeEntry = serde_json::from_slice(&bytes).map_err(|e| {
+                    PagerunnerError::Config(format!("site_knowledge parse error: {}", e))
+                })?;
                 Ok(Some(entry))
             }
         }
@@ -119,8 +120,9 @@ impl SiteKnowledgeStore {
 
     pub fn put(&self, origin: &str, entry: &SiteKnowledgeEntry) -> Result<()> {
         let key = urlencoded_origin(origin);
-        let bytes = serde_json::to_vec(entry)
-            .map_err(|e| PagerunnerError::Config(format!("site_knowledge serialize error: {}", e)))?;
+        let bytes = serde_json::to_vec(entry).map_err(|e| {
+            PagerunnerError::Config(format!("site_knowledge serialize error: {}", e))
+        })?;
         self.db.put("site_knowledge", &key, &bytes)
     }
 
@@ -202,7 +204,7 @@ impl SiteKnowledgeStore {
 }
 
 fn urlencoded_origin(origin: &str) -> String {
-    origin.replace("://", "_").replace('/', "_").replace(':', "_")
+    origin.replace("://", "_").replace(['/', ':'], "_")
 }
 
 pub fn now_micros() -> u64 {
@@ -221,7 +223,8 @@ mod tests {
     fn make_store() -> (SiteKnowledgeStore, tempfile::TempDir) {
         let dir = tempdir().unwrap();
         let key = Db::generate_key();
-        let db = Arc::new(Db::open_with_key(dir.path().join("t.db").to_str().unwrap(), key).unwrap());
+        let db =
+            Arc::new(Db::open_with_key(dir.path().join("t.db").to_str().unwrap(), key).unwrap());
         (SiteKnowledgeStore::new(db, key), dir)
     }
 
@@ -282,38 +285,61 @@ mod tests {
 
     #[test]
     fn reliability_score_none_below_5_samples() {
-        let sel = SelectorEntry { successes: 2, failures: 1, last_seen: 0 };
+        let sel = SelectorEntry {
+            successes: 2,
+            failures: 1,
+            last_seen: 0,
+        };
         assert!(SiteKnowledgeStore::reliability_score(&sel).is_none());
     }
 
     #[test]
     fn reliability_score_computed_with_5_or_more() {
-        let sel = SelectorEntry { successes: 8, failures: 2, last_seen: 0 };
+        let sel = SelectorEntry {
+            successes: 8,
+            failures: 2,
+            last_seen: 0,
+        };
         let score = SiteKnowledgeStore::reliability_score(&sel).unwrap();
         assert!((score - 0.8).abs() < 0.001);
     }
 
     #[test]
     fn is_fragile_true_when_over_30_percent_failures_with_5_samples() {
-        let sel = SelectorEntry { successes: 3, failures: 7, last_seen: 0 };
+        let sel = SelectorEntry {
+            successes: 3,
+            failures: 7,
+            last_seen: 0,
+        };
         assert!(SiteKnowledgeStore::is_fragile(&sel));
     }
 
     #[test]
     fn is_fragile_false_when_under_30_percent() {
-        let sel = SelectorEntry { successes: 8, failures: 1, last_seen: 0 };
+        let sel = SelectorEntry {
+            successes: 8,
+            failures: 1,
+            last_seen: 0,
+        };
         assert!(!SiteKnowledgeStore::is_fragile(&sel));
     }
 
     #[test]
     fn is_fragile_false_below_5_samples_even_if_all_failures() {
-        let sel = SelectorEntry { successes: 0, failures: 4, last_seen: 0 };
+        let sel = SelectorEntry {
+            successes: 0,
+            failures: 4,
+            last_seen: 0,
+        };
         assert!(!SiteKnowledgeStore::is_fragile(&sel));
     }
 
     #[test]
     fn is_expired_true_after_90_days() {
-        let entry = SiteKnowledgeEntry { last_updated: 0, ..Default::default() };
+        let entry = SiteKnowledgeEntry {
+            last_updated: 0,
+            ..Default::default()
+        };
         let ninety_one_days_micros: u64 = 91 * 24 * 60 * 60 * 1_000_000;
         assert!(SiteKnowledgeStore::is_expired(&entry, ninety_one_days_micros, 90));
     }
@@ -337,18 +363,24 @@ mod tests {
     fn prune_stale_adapters_removes_never_used_after_30_days() {
         let mut entry = SiteKnowledgeEntry::default();
         let thirty_one_days_ago: u64 = now_micros().saturating_sub(31 * 24 * 60 * 60 * 1_000_000);
-        entry.adapters.insert("old".into(), AdapterEntry {
-            created_at: thirty_one_days_ago,
-            last_used: 0,
-            trusted: false,
-            ..Default::default()
-        });
-        entry.adapters.insert("recent".into(), AdapterEntry {
-            created_at: now_micros(),
-            last_used: 0,
-            trusted: false,
-            ..Default::default()
-        });
+        entry.adapters.insert(
+            "old".into(),
+            AdapterEntry {
+                created_at: thirty_one_days_ago,
+                last_used: 0,
+                trusted: false,
+                ..Default::default()
+            },
+        );
+        entry.adapters.insert(
+            "recent".into(),
+            AdapterEntry {
+                created_at: now_micros(),
+                last_used: 0,
+                trusted: false,
+                ..Default::default()
+            },
+        );
         let pruned = SiteKnowledgeStore::prune_stale_adapters(&mut entry, now_micros());
         assert!(pruned);
         assert!(!entry.adapters.contains_key("old"));
@@ -358,12 +390,15 @@ mod tests {
     #[test]
     fn prune_stale_adapters_keeps_trusted_even_if_old() {
         let mut entry = SiteKnowledgeEntry::default();
-        entry.adapters.insert("seed".into(), AdapterEntry {
-            created_at: 0,
-            last_used: 0,
-            trusted: true,
-            ..Default::default()
-        });
+        entry.adapters.insert(
+            "seed".into(),
+            AdapterEntry {
+                created_at: 0,
+                last_used: 0,
+                trusted: true,
+                ..Default::default()
+            },
+        );
         let pruned = SiteKnowledgeStore::prune_stale_adapters(&mut entry, now_micros());
         assert!(!pruned);
         assert!(entry.adapters.contains_key("seed"));
@@ -373,15 +408,18 @@ mod tests {
     fn endpoint_entry_roundtrip() {
         let (store, _dir) = make_store();
         let mut entry = SiteKnowledgeEntry::default();
-        entry.endpoints.insert("GET /api/users".into(), EndpointEntry {
-            method: "GET".into(),
-            path_pattern: "/api/users".into(),
-            api_kind: ApiKind::Rest,
-            crud_op: Some(CrudOp::GetList),
-            observation_count: 3,
-            last_seen: 12345,
-            schema: None,
-        });
+        entry.endpoints.insert(
+            "GET /api/users".into(),
+            EndpointEntry {
+                method: "GET".into(),
+                path_pattern: "/api/users".into(),
+                api_kind: ApiKind::Rest,
+                crud_op: Some(CrudOp::GetList),
+                observation_count: 3,
+                last_seen: 12345,
+                schema: None,
+            },
+        );
         store.put("https://example.com", &entry).unwrap();
         let got = store.get("https://example.com").unwrap().unwrap();
         let ep = got.endpoints.get("GET /api/users").unwrap();
@@ -409,15 +447,45 @@ mod tests {
     #[test]
     fn stale_site_threshold_50_percent() {
         let mut entry = SiteKnowledgeEntry::default();
-        entry.adapters.insert("a".into(), AdapterEntry { is_stale: true, ..Default::default() });
-        entry.adapters.insert("b".into(), AdapterEntry { is_stale: true, ..Default::default() });
-        entry.adapters.insert("c".into(), AdapterEntry { is_stale: false, ..Default::default() });
-        entry.adapters.insert("d".into(), AdapterEntry { is_stale: false, ..Default::default() });
+        entry.adapters.insert(
+            "a".into(),
+            AdapterEntry {
+                is_stale: true,
+                ..Default::default()
+            },
+        );
+        entry.adapters.insert(
+            "b".into(),
+            AdapterEntry {
+                is_stale: true,
+                ..Default::default()
+            },
+        );
+        entry.adapters.insert(
+            "c".into(),
+            AdapterEntry {
+                is_stale: false,
+                ..Default::default()
+            },
+        );
+        entry.adapters.insert(
+            "d".into(),
+            AdapterEntry {
+                is_stale: false,
+                ..Default::default()
+            },
+        );
         // 2/4 = 50% stale — exactly at threshold, should NOT warn
         assert!(!SiteKnowledgeStore::is_site_stale(&entry));
 
         // Add one more stale
-        entry.adapters.insert("e".into(), AdapterEntry { is_stale: true, ..Default::default() });
+        entry.adapters.insert(
+            "e".into(),
+            AdapterEntry {
+                is_stale: true,
+                ..Default::default()
+            },
+        );
         // 3/5 = 60% — over threshold, should warn
         assert!(SiteKnowledgeStore::is_site_stale(&entry));
     }

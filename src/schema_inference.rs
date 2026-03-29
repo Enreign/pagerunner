@@ -1,7 +1,7 @@
 // src/schema_inference.rs
 
-use serde_json::Value;
 use crate::site_knowledge::{EndpointEntry, EndpointSchema, SchemaConfidence};
+use serde_json::Value;
 
 /// Infer a JSON Schema from a runtime JSON value.
 pub fn infer(value: &Value) -> Value {
@@ -14,7 +14,8 @@ pub fn infer(value: &Value) -> Value {
             let item_schema = if items.is_empty() {
                 serde_json::json!({})
             } else {
-                items.iter()
+                items
+                    .iter()
                     .skip(1)
                     .fold(infer(&items[0]), |acc, v| merge(&acc, &infer(v)))
             };
@@ -48,11 +49,17 @@ pub fn merge(a: &Value, b: &Value) -> Value {
     let b_props = b["properties"].as_object().cloned().unwrap_or_default();
 
     let a_req: std::collections::HashSet<String> = a["required"]
-        .as_array().unwrap_or(&vec![])
-        .iter().filter_map(|v| v.as_str().map(String::from)).collect();
+        .as_array()
+        .unwrap_or(&vec![])
+        .iter()
+        .filter_map(|v| v.as_str().map(String::from))
+        .collect();
     let b_req: std::collections::HashSet<String> = b["required"]
-        .as_array().unwrap_or(&vec![])
-        .iter().filter_map(|v| v.as_str().map(String::from)).collect();
+        .as_array()
+        .unwrap_or(&vec![])
+        .iter()
+        .filter_map(|v| v.as_str().map(String::from))
+        .collect();
 
     let mut merged_props = serde_json::Map::new();
     let all_keys: std::collections::HashSet<String> =
@@ -60,15 +67,23 @@ pub fn merge(a: &Value, b: &Value) -> Value {
 
     for key in &all_keys {
         match (a_props.get(key), b_props.get(key)) {
-            (Some(av), Some(bv)) => { merged_props.insert(key.clone(), merge(av, bv)); }
-            (Some(av), None) => { merged_props.insert(key.clone(), av.clone()); }
-            (None, Some(bv)) => { merged_props.insert(key.clone(), bv.clone()); }
+            (Some(av), Some(bv)) => {
+                merged_props.insert(key.clone(), merge(av, bv));
+            }
+            (Some(av), None) => {
+                merged_props.insert(key.clone(), av.clone());
+            }
+            (None, Some(bv)) => {
+                merged_props.insert(key.clone(), bv.clone());
+            }
             (None, None) => {}
         }
     }
 
-    let required: Vec<Value> = a_req.intersection(&b_req)
-        .map(|s| Value::String(s.clone())).collect();
+    let required: Vec<Value> = a_req
+        .intersection(&b_req)
+        .map(|s| Value::String(s.clone()))
+        .collect();
 
     serde_json::json!({
         "type": "object",
@@ -88,11 +103,7 @@ pub fn confidence(count: u32) -> SchemaConfidence {
 
 /// Update or create the schema on an endpoint entry given new request/response observations.
 /// Called from endpoint_mapper::ingest after each completed request.
-pub fn update_endpoint_schema(
-    ep: &mut EndpointEntry,
-    req_body: Option<&str>,
-    resp_val: &Value,
-) {
+pub fn update_endpoint_schema(ep: &mut EndpointEntry, req_body: Option<&str>, resp_val: &Value) {
     let new_resp_schema = infer(resp_val);
     let new_req_schema = req_body
         .and_then(|b| serde_json::from_str::<Value>(b).ok())
@@ -176,10 +187,18 @@ mod tests {
         assert!(merged["properties"]["name"].is_object());
         assert!(merged["properties"]["email"].is_object());
         // required = intersection = ["id"] only
-        let req: Vec<&str> = merged["required"].as_array().unwrap()
-            .iter().filter_map(|v| v.as_str()).collect();
+        let req: Vec<&str> = merged["required"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|v| v.as_str())
+            .collect();
         assert!(req.contains(&"id"), "got: {:?}", req);
-        assert!(!req.contains(&"name"), "name should not be required after merge: {:?}", req);
+        assert!(
+            !req.contains(&"name"),
+            "name should not be required after merge: {:?}",
+            req
+        );
     }
 
     #[test]

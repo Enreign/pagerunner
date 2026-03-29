@@ -53,9 +53,20 @@ fn run_live(args: &[&str]) -> std::process::Output {
 #[allow(dead_code)]
 fn run_live_json(args: &[&str]) -> serde_json::Value {
     let out = run_live(args);
-    assert!(out.status.success(), "command {:?} failed: {:?}", args, String::from_utf8_lossy(&out.stderr));
-    serde_json::from_slice(&out.stdout)
-        .unwrap_or_else(|e| panic!("Failed to parse JSON from {:?}: {} — stdout: {}", args, e, String::from_utf8_lossy(&out.stdout)))
+    assert!(
+        out.status.success(),
+        "command {:?} failed: {:?}",
+        args,
+        String::from_utf8_lossy(&out.stderr)
+    );
+    serde_json::from_slice(&out.stdout).unwrap_or_else(|e| {
+        panic!(
+            "Failed to parse JSON from {:?}: {} — stdout: {}",
+            args,
+            e,
+            String::from_utf8_lossy(&out.stdout)
+        )
+    })
 }
 
 /// Starts a test daemon using the isolated test DB. Returns a guard that kills the
@@ -179,7 +190,11 @@ impl LaunchdGuard {
             // Use bootout (macOS 10.10+) which is non-blocking unlike 'unload'.
             let uid = get_uid();
             std::process::Command::new("launchctl")
-                .args(&["bootout", &format!("gui/{}", uid), plist_path.to_str().unwrap()])
+                .args(&[
+                    "bootout",
+                    &format!("gui/{}", uid),
+                    plist_path.to_str().unwrap(),
+                ])
                 .output()
                 .ok();
             // Force-kill any remaining daemon process so it doesn't hold the socket.
@@ -190,7 +205,10 @@ impl LaunchdGuard {
             std::thread::sleep(std::time::Duration::from_millis(300));
         }
 
-        Self { plist_path, was_loaded }
+        Self {
+            plist_path,
+            was_loaded,
+        }
     }
 }
 
@@ -210,7 +228,11 @@ impl Drop for LaunchdGuard {
             // Bootstrap the service back so launchd manages it again.
             let uid = get_uid();
             std::process::Command::new("launchctl")
-                .args(&["bootstrap", &format!("gui/{}", uid), self.plist_path.to_str().unwrap()])
+                .args(&[
+                    "bootstrap",
+                    &format!("gui/{}", uid),
+                    self.plist_path.to_str().unwrap(),
+                ])
                 .output()
                 .ok();
         }
@@ -261,16 +283,21 @@ fn test_list_profiles_exits_ok() {
     assert!(out.status.success(), "stderr: {}", stderr(&out));
     let s = stdout(&out);
     // Must be valid JSON. CLI may wrap with metadata: {"result":{...},"_metadata":{...}}
-    let v: serde_json::Value = serde_json::from_str(&s)
-        .unwrap_or_else(|_| panic!("expected JSON, got: {}", s));
+    let v: serde_json::Value =
+        serde_json::from_str(&s).unwrap_or_else(|_| panic!("expected JSON, got: {}", s));
     // Extract the result envelope (may be nested under "result" if metadata present)
-    let envelope = if v["result"].is_object() { &v["result"] } else { &v };
-    assert_eq!(envelope["ok"], serde_json::json!(true), "expected ok:true in: {}", s);
-    assert!(
-        envelope["data"].is_array(),
-        "expected data array in: {}",
+    let envelope = if v["result"].is_object() {
+        &v["result"]
+    } else {
+        &v
+    };
+    assert_eq!(
+        envelope["ok"],
+        serde_json::json!(true),
+        "expected ok:true in: {}",
         s
     );
+    assert!(envelope["data"].is_array(), "expected data array in: {}", s);
 }
 
 #[test]
@@ -339,9 +366,14 @@ fn test_list_snapshots_returns_json() {
     assert!(out.status.success(), "stderr: {}", stderr(&out));
     let s = stdout(&out);
     // Must be a JSON envelope with ok:true and data array
-    let v: serde_json::Value = serde_json::from_str(&s)
-        .unwrap_or_else(|_| panic!("expected JSON, got: {}", s));
-    assert_eq!(v["ok"], serde_json::json!(true), "expected ok:true in: {}", s);
+    let v: serde_json::Value =
+        serde_json::from_str(&s).unwrap_or_else(|_| panic!("expected JSON, got: {}", s));
+    assert_eq!(
+        v["ok"],
+        serde_json::json!(true),
+        "expected ok:true in: {}",
+        s
+    );
     assert!(v["data"].is_array(), "expected data array in: {}", s);
     // JSON array or object (may be empty)
     // JSON (may be empty array or wrapped envelope)
@@ -358,9 +390,14 @@ fn test_list_snapshots_all_flag() {
     let out = run(&["list-snapshots", "--all"]);
     assert!(out.status.success(), "stderr: {}", stderr(&out));
     let s = stdout(&out);
-    let v: serde_json::Value = serde_json::from_str(&s)
-        .unwrap_or_else(|_| panic!("expected JSON, got: {}", s));
-    assert_eq!(v["ok"], serde_json::json!(true), "expected ok:true in: {}", s);
+    let v: serde_json::Value =
+        serde_json::from_str(&s).unwrap_or_else(|_| panic!("expected JSON, got: {}", s));
+    assert_eq!(
+        v["ok"],
+        serde_json::json!(true),
+        "expected ok:true in: {}",
+        s
+    );
     assert!(v["data"].is_array(), "expected data array in: {}", s);
     assert!(
         serde_json::from_str::<serde_json::Value>(s.trim()).is_ok(),
@@ -491,11 +528,11 @@ fn test_kv_clear_removes_all_keys() {
     let list = run(&["kv-list", ns]);
     let s = stdout(&list);
     // Namespace should now be empty — response is {"ok":true,"data":[]}
-    let v: serde_json::Value = serde_json::from_str(&s)
-        .unwrap_or_else(|_| panic!("expected JSON, got: {}", s));
-    let arr = v["data"].as_array().unwrap_or_else(|| {
-        panic!("expected data array in kv-list response, got: {}", s)
-    });
+    let v: serde_json::Value =
+        serde_json::from_str(&s).unwrap_or_else(|_| panic!("expected JSON, got: {}", s));
+    let arr = v["data"]
+        .as_array()
+        .unwrap_or_else(|| panic!("expected data array in kv-list response, got: {}", s));
     assert!(
         arr.is_empty(),
         "expected empty namespace after kv-clear, got: {}",
@@ -912,7 +949,11 @@ fn test_snapshot_save_list_delete() {
     let s = stdout(&list);
     let v: serde_json::Value = serde_json::from_str(&s)
         .unwrap_or_else(|_| panic!("expected JSON from list-snapshots, got: {}", s));
-    assert!(v["data"].is_array(), "expected data array in list-snapshots: {}", s);
+    assert!(
+        v["data"].is_array(),
+        "expected data array in list-snapshots: {}",
+        s
+    );
     assert!(
         serde_json::from_str::<serde_json::Value>(s.trim()).is_ok(),
         "expected JSON: {}",
@@ -1352,8 +1393,8 @@ fn test_wait_for_selector_returns_stability_ms() {
         stderr(&wait)
     );
 
-    let v: serde_json::Value = serde_json::from_str(&stdout(&wait))
-        .expect("wait-for output is not valid JSON");
+    let v: serde_json::Value =
+        serde_json::from_str(&stdout(&wait)).expect("wait-for output is not valid JSON");
     assert_eq!(v["ok"], true, "expected ok=true: {}", stdout(&wait));
     assert!(
         v["stability_ms"].is_number(),
@@ -1396,8 +1437,8 @@ fn test_wait_for_url_returns_stability_ms() {
         stderr(&wait)
     );
 
-    let v: serde_json::Value = serde_json::from_str(&stdout(&wait))
-        .expect("wait-for output is not valid JSON");
+    let v: serde_json::Value =
+        serde_json::from_str(&stdout(&wait)).expect("wait-for output is not valid JSON");
     assert_eq!(v["ok"], true, "expected ok=true: {}", stdout(&wait));
     assert!(
         v["stability_ms"].is_number(),
@@ -1599,10 +1640,19 @@ fn test_cli_ner_anonymize_person_masked() {
 #[test]
 #[serial]
 fn test_get_network_log_invalid_session() {
-    let output = run(&["get-network-log", "invalid-session-id", "--target-id", "tab1"]);
+    let output = run(&[
+        "get-network-log",
+        "invalid-session-id",
+        "--target-id",
+        "tab1",
+    ]);
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("not found") || stderr.contains("SessionNotFound") || stderr.contains("session"));
+    assert!(
+        stderr.contains("not found")
+            || stderr.contains("SessionNotFound")
+            || stderr.contains("session")
+    );
 }
 
 #[cfg_attr(not(target_os = "macos"), ignore)]
@@ -1615,14 +1665,23 @@ fn test_get_network_log_captures_requests() {
     let profile = first_profile();
 
     let open = run_live(&["open-session", &profile]);
-    assert!(open.status.success(), "open-session failed: {}", stderr(&open));
+    assert!(
+        open.status.success(),
+        "open-session failed: {}",
+        stderr(&open)
+    );
     let session_id = parse_json_field(&stdout(&open), "session_id");
 
     let tab = run_live(&["new-tab", &session_id]);
     assert!(tab.status.success(), "new-tab failed: {}", stderr(&tab));
     let target_id = parse_json_field(&stdout(&tab), "target_id");
 
-    let nav = run_live(&["navigate", &session_id, &target_id, "https://httpbin.org/get"]);
+    let nav = run_live(&[
+        "navigate",
+        &session_id,
+        &target_id,
+        "https://httpbin.org/get",
+    ]);
     assert!(nav.status.success(), "navigate failed: {}", stderr(&nav));
 
     // get-content waits for DOM to be ready, ensuring the page loaded and network
@@ -1630,22 +1689,40 @@ fn test_get_network_log_captures_requests() {
     run_live(&["get-content", &session_id, &target_id]);
 
     let log_out = run_live(&[
-        "get-network-log", &session_id,
-        "--target-id", &target_id,
-        "--limit", "100",
+        "get-network-log",
+        &session_id,
+        "--target-id",
+        &target_id,
+        "--limit",
+        "100",
     ]);
-    assert!(log_out.status.success(), "get-network-log failed: {}", stderr(&log_out));
-    let output: serde_json::Value = serde_json::from_str(&stdout(&log_out))
-        .unwrap_or_else(|e| panic!("get-network-log output not JSON: {} — {}", e, stdout(&log_out)));
+    assert!(
+        log_out.status.success(),
+        "get-network-log failed: {}",
+        stderr(&log_out)
+    );
+    let output: serde_json::Value = serde_json::from_str(&stdout(&log_out)).unwrap_or_else(|e| {
+        panic!(
+            "get-network-log output not JSON: {} — {}",
+            e,
+            stdout(&log_out)
+        )
+    });
 
     assert_eq!(output["ok"], true);
     let entries = output["entries"].as_array().unwrap();
-    assert!(!entries.is_empty(), "should have captured at least one request");
+    assert!(
+        !entries.is_empty(),
+        "should have captured at least one request"
+    );
 
-    let httpbin_entry = entries.iter().find(|e| {
-        e["url"].as_str().unwrap_or("").contains("httpbin.org")
-    });
-    assert!(httpbin_entry.is_some(), "httpbin.org request should be captured");
+    let httpbin_entry = entries
+        .iter()
+        .find(|e| e["url"].as_str().unwrap_or("").contains("httpbin.org"));
+    assert!(
+        httpbin_entry.is_some(),
+        "httpbin.org request should be captured"
+    );
     assert_eq!(httpbin_entry.unwrap()["status"], 200);
 
     run_live(&["close-session", &session_id]);
@@ -1661,14 +1738,23 @@ fn test_get_network_log_url_filter() {
     let profile = first_profile();
 
     let open = run_live(&["open-session", &profile]);
-    assert!(open.status.success(), "open-session failed: {}", stderr(&open));
+    assert!(
+        open.status.success(),
+        "open-session failed: {}",
+        stderr(&open)
+    );
     let session_id = parse_json_field(&stdout(&open), "session_id");
 
     let tab = run_live(&["new-tab", &session_id]);
     assert!(tab.status.success(), "new-tab failed: {}", stderr(&tab));
     let target_id = parse_json_field(&stdout(&tab), "target_id");
 
-    let nav = run_live(&["navigate", &session_id, &target_id, "https://httpbin.org/get"]);
+    let nav = run_live(&[
+        "navigate",
+        &session_id,
+        &target_id,
+        "https://httpbin.org/get",
+    ]);
     assert!(nav.status.success(), "navigate failed: {}", stderr(&nav));
 
     // get-content waits for DOM to be ready, ensuring the page loaded and network
@@ -1676,19 +1762,33 @@ fn test_get_network_log_url_filter() {
     run_live(&["get-content", &session_id, &target_id]);
 
     let log_out = run_live(&[
-        "get-network-log", &session_id,
-        "--target-id", &target_id,
-        "--url-pattern", "httpbin.org",
+        "get-network-log",
+        &session_id,
+        "--target-id",
+        &target_id,
+        "--url-pattern",
+        "httpbin.org",
     ]);
-    assert!(log_out.status.success(), "get-network-log failed: {}", stderr(&log_out));
-    let output: serde_json::Value = serde_json::from_str(&stdout(&log_out))
-        .unwrap_or_else(|e| panic!("get-network-log output not JSON: {} — {}", e, stdout(&log_out)));
+    assert!(
+        log_out.status.success(),
+        "get-network-log failed: {}",
+        stderr(&log_out)
+    );
+    let output: serde_json::Value = serde_json::from_str(&stdout(&log_out)).unwrap_or_else(|e| {
+        panic!(
+            "get-network-log output not JSON: {} — {}",
+            e,
+            stdout(&log_out)
+        )
+    });
 
     assert_eq!(output["ok"], true);
     let entries = output["entries"].as_array().unwrap();
     for e in entries {
-        assert!(e["url"].as_str().unwrap().contains("httpbin.org"),
-            "all entries should match url filter");
+        assert!(
+            e["url"].as_str().unwrap().contains("httpbin.org"),
+            "all entries should match url filter"
+        );
     }
 
     run_live(&["close-session", &session_id]);
@@ -1704,14 +1804,27 @@ fn test_get_network_log_validation_error() {
     let profile = first_profile();
 
     let open = run_live(&["open-session", &profile]);
-    assert!(open.status.success(), "open-session failed: {}", stderr(&open));
+    assert!(
+        open.status.success(),
+        "open-session failed: {}",
+        stderr(&open)
+    );
     let session_id = parse_json_field(&stdout(&open), "session_id");
 
     // No --target-id and no --all-tabs: expect VALIDATION_ERROR
     let log_out = run_live(&["get-network-log", &session_id]);
-    assert!(log_out.status.success(), "get-network-log should succeed (returns JSON error): {}", stderr(&log_out));
-    let output: serde_json::Value = serde_json::from_str(&stdout(&log_out))
-        .unwrap_or_else(|e| panic!("get-network-log output not JSON: {} — {}", e, stdout(&log_out)));
+    assert!(
+        log_out.status.success(),
+        "get-network-log should succeed (returns JSON error): {}",
+        stderr(&log_out)
+    );
+    let output: serde_json::Value = serde_json::from_str(&stdout(&log_out)).unwrap_or_else(|e| {
+        panic!(
+            "get-network-log output not JSON: {} — {}",
+            e,
+            stdout(&log_out)
+        )
+    });
     assert_eq!(output["ok"], false);
     assert_eq!(output["error_type"], "VALIDATION_ERROR");
 
@@ -1725,7 +1838,12 @@ fn test_get_network_log_validation_error() {
 #[test]
 #[serial]
 fn test_get_console_log_invalid_session() {
-    let output = run(&["get-console-log", "invalid-session-id", "--target-id", "tab1"]);
+    let output = run(&[
+        "get-console-log",
+        "invalid-session-id",
+        "--target-id",
+        "tab1",
+    ]);
     assert!(!output.status.success());
 }
 
@@ -1750,10 +1868,20 @@ fn test_evaluate_error_includes_console_errors() {
     assert!(nav.status.success());
 
     // First generate some console output
-    run_live(&["evaluate", &session_id, &target_id, "console.error('test error message')"]);
+    run_live(&[
+        "evaluate",
+        &session_id,
+        &target_id,
+        "console.error('test error message')",
+    ]);
 
     // Now trigger a JS exception by evaluating undefined function call
-    let eval = run_live(&["evaluate", &session_id, &target_id, "undefined_function_xyz()"]);
+    let eval = run_live(&[
+        "evaluate",
+        &session_id,
+        &target_id,
+        "undefined_function_xyz()",
+    ]);
     // evaluate error returns ok:false as JSON (exit 0) OR exits non-zero
     // Either way, the output should be parseable JSON
     let s = stdout(&eval);
@@ -1796,8 +1924,18 @@ fn test_get_console_log_captures_messages() {
     assert!(nav.status.success());
 
     // Generate console messages
-    run_live(&["evaluate", &session_id, &target_id, "console.error('captured error')"]);
-    run_live(&["evaluate", &session_id, &target_id, "console.warn('captured warning')"]);
+    run_live(&[
+        "evaluate",
+        &session_id,
+        &target_id,
+        "console.error('captured error')",
+    ]);
+    run_live(&[
+        "evaluate",
+        &session_id,
+        &target_id,
+        "console.warn('captured warning')",
+    ]);
 
     // Short wait for async event processing
     std::thread::sleep(std::time::Duration::from_millis(200));
@@ -1905,8 +2043,7 @@ fn test_init_json_with_claude_md_returns_snippet() {
         String::from_utf8_lossy(&out.stderr)
     );
     let stdout = String::from_utf8_lossy(&out.stdout);
-    let v: serde_json::Value =
-        serde_json::from_str(stdout.trim()).expect("must be valid JSON");
+    let v: serde_json::Value = serde_json::from_str(stdout.trim()).expect("must be valid JSON");
     assert_eq!(v["ok"], true, "ok must be true: {v}");
     assert!(v["snippet"].is_string(), "snippet field missing: {v}");
     assert!(
@@ -1944,8 +2081,7 @@ fn test_init_json_with_agents_md_returns_snippet() {
         String::from_utf8_lossy(&out.stderr)
     );
     let stdout = String::from_utf8_lossy(&out.stdout);
-    let v: serde_json::Value =
-        serde_json::from_str(stdout.trim()).expect("must be valid JSON");
+    let v: serde_json::Value = serde_json::from_str(stdout.trim()).expect("must be valid JSON");
     assert_eq!(v["ok"], true, "ok must be true: {v}");
     assert!(v["snippet"].is_string(), "snippet field missing: {v}");
     assert_eq!(
@@ -1995,11 +2131,15 @@ fn test_generate_adapter_missing_api_key_returns_error() {
         .args(["generate-adapter", "https://example.com", "test_adapter"])
         .output()
         .expect("failed to run pagerunner");
-    assert!(!out.status.success(), "expected non-zero exit without API key");
+    assert!(
+        !out.status.success(),
+        "expected non-zero exit without API key"
+    );
     let err = String::from_utf8_lossy(&out.stderr);
     assert!(
         err.contains("ANTHROPIC_API_KEY") || err.contains("not set"),
-        "expected API key error, got: {}", err
+        "expected API key error, got: {}",
+        err
     );
 }
 
@@ -2013,11 +2153,15 @@ fn test_get_site_knowledge_includes_endpoints_field() {
     assert!(out.status.success());
     // Verify output is valid JSON (null is valid for unknown origin)
     let stdout = String::from_utf8_lossy(&out.stdout);
-    let parsed: serde_json::Value = serde_json::from_str(stdout.trim()).expect("output should be valid JSON");
+    let parsed: serde_json::Value =
+        serde_json::from_str(stdout.trim()).expect("output should be valid JSON");
     // If an entry exists, it should have an endpoints field; if null, that's OK for unknown origin
     if let Some(obj) = parsed.as_object() {
-        assert!(obj.contains_key("endpoints"),
-            "site knowledge response should include endpoints field, got: {:?}", obj.keys().collect::<Vec<_>>());
+        assert!(
+            obj.contains_key("endpoints"),
+            "site knowledge response should include endpoints field, got: {:?}",
+            obj.keys().collect::<Vec<_>>()
+        );
     }
     // parsed == null means no entry yet — that's expected for a fresh origin
 }
@@ -2042,7 +2186,13 @@ fn test_call_site_api_stale_adapter_returns_error() {
     // Since we can't easily mark it stale without a Chrome session, test
     // via the non-Chrome path: call with invalid session ID should error.
     // (Full stale adapter behavior is covered by Chrome live tests.)
-    let output = run(&["call-site-api", "bad-session", "bad-target", "https://example.com", "test"]);
+    let output = run(&[
+        "call-site-api",
+        "bad-session",
+        "bad-target",
+        "https://example.com",
+        "test",
+    ]);
     assert!(!output.status.success());
 }
 
@@ -2054,7 +2204,11 @@ fn test_register_and_call_adapter_roundtrip() {
     let profile = first_profile();
 
     let session_out = run_live(&["open-session", &profile]);
-    assert!(session_out.status.success(), "open-session failed: {}", stderr(&session_out));
+    assert!(
+        session_out.status.success(),
+        "open-session failed: {}",
+        stderr(&session_out)
+    );
     let sid = parse_json_field(&stdout(&session_out), "session_id");
 
     let tab_out = run_live(&["new-tab", &sid]);
@@ -2071,7 +2225,11 @@ fn test_register_and_call_adapter_roundtrip() {
         "Get page title",
         js_code,
     ]);
-    assert!(reg_out.status.success(), "register-adapter failed: {}", stderr(&reg_out));
+    assert!(
+        reg_out.status.success(),
+        "register-adapter failed: {}",
+        stderr(&reg_out)
+    );
 
     // Call the adapter
     let call_out = run_live(&[
@@ -2081,7 +2239,11 @@ fn test_register_and_call_adapter_roundtrip() {
         "https://example.com",
         "get-title",
     ]);
-    assert!(call_out.status.success(), "call-site-api failed: {}", stderr(&call_out));
+    assert!(
+        call_out.status.success(),
+        "call-site-api failed: {}",
+        stderr(&call_out)
+    );
     let out_str = stdout(&call_out);
     assert!(
         out_str.contains("Example Domain") || out_str.contains("UNTRUSTED_WEB_CONTENT"),
@@ -2091,7 +2253,11 @@ fn test_register_and_call_adapter_roundtrip() {
 
     // Verify get_site_knowledge shows the adapter
     let sk_out = run_live(&["get-site-knowledge", "https://example.com"]);
-    assert!(sk_out.status.success(), "get-site-knowledge failed: {}", stderr(&sk_out));
+    assert!(
+        sk_out.status.success(),
+        "get-site-knowledge failed: {}",
+        stderr(&sk_out)
+    );
     let sk_json: serde_json::Value =
         serde_json::from_str(stdout(&sk_out).trim()).expect("valid JSON from get-site-knowledge");
     assert!(
@@ -2111,7 +2277,11 @@ fn test_call_site_api_origin_mismatch_returns_error() {
     let profile = first_profile();
 
     let session_out = run_live(&["open-session", &profile]);
-    assert!(session_out.status.success(), "open-session failed: {}", stderr(&session_out));
+    assert!(
+        session_out.status.success(),
+        "open-session failed: {}",
+        stderr(&session_out)
+    );
     let sid = parse_json_field(&stdout(&session_out), "session_id");
 
     let tab_out = run_live(&["new-tab", &sid]);
@@ -2130,14 +2300,11 @@ fn test_call_site_api_origin_mismatch_returns_error() {
     ]);
 
     // Call with mismatched origin — should error
-    let call_out = run_live(&[
-        "call-site-api",
-        &sid,
-        &tid,
-        "https://linear.app",
-        "test",
-    ]);
-    assert!(!call_out.status.success(), "expected non-zero exit for origin mismatch");
+    let call_out = run_live(&["call-site-api", &sid, &tid, "https://linear.app", "test"]);
+    assert!(
+        !call_out.status.success(),
+        "expected non-zero exit for origin mismatch"
+    );
     let err = stderr(&call_out);
     assert!(
         err.contains("does not match") || err.contains("origin") || err.contains("mismatch"),
@@ -2156,7 +2323,11 @@ fn test_selector_fragility_warning_appears() {
     let profile = first_profile();
 
     let session_out = run_live(&["open-session", &profile]);
-    assert!(session_out.status.success(), "open-session failed: {}", stderr(&session_out));
+    assert!(
+        session_out.status.success(),
+        "open-session failed: {}",
+        stderr(&session_out)
+    );
     let sid = parse_json_field(&stdout(&session_out), "session_id");
 
     let tab_out = run_live(&["new-tab", &sid]);
@@ -2187,15 +2358,22 @@ fn test_selector_fragility_warning_appears() {
 
     // Verify get_site_knowledge shows the selector
     let sk_out = run_live(&["get-site-knowledge", "https://example.com"]);
-    assert!(sk_out.status.success(), "get-site-knowledge failed: {}", stderr(&sk_out));
+    assert!(
+        sk_out.status.success(),
+        "get-site-knowledge failed: {}",
+        stderr(&sk_out)
+    );
     let sk_json: serde_json::Value =
         serde_json::from_str(stdout(&sk_out).trim()).expect("valid JSON from get-site-knowledge");
     let selectors = sk_json["selectors"].as_array().unwrap_or_else(|| {
-        panic!("expected selectors array in site knowledge: {}", stdout(&sk_out))
+        panic!(
+            "expected selectors array in site knowledge: {}",
+            stdout(&sk_out)
+        )
     });
-    let our_selector = selectors.iter().find(|s| {
-        s["selector"].as_str().unwrap_or("") == nonexistent_selector
-    });
+    let our_selector = selectors
+        .iter()
+        .find(|s| s["selector"].as_str().unwrap_or("") == nonexistent_selector);
     assert!(
         our_selector.is_some(),
         "expected selector '{}' in site_knowledge selectors",

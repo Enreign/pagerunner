@@ -14,9 +14,7 @@ pub async fn generate(
     adapter_name: &str,
 ) -> Result<String> {
     let api_key = std::env::var("ANTHROPIC_API_KEY").map_err(|_| {
-        PagerunnerError::Config(
-            "ANTHROPIC_API_KEY not set — cannot generate adapter".into(),
-        )
+        PagerunnerError::Config("ANTHROPIC_API_KEY not set — cannot generate adapter".into())
     })?;
 
     let prompt = build_prompt(origin, entry, adapter_name);
@@ -58,11 +56,7 @@ pub async fn generate(
     Ok(js_code)
 }
 
-pub fn build_prompt(
-    origin: &str,
-    entry: &SiteKnowledgeEntry,
-    adapter_name: &str,
-) -> String {
+pub fn build_prompt(origin: &str, entry: &SiteKnowledgeEntry, adapter_name: &str) -> String {
     let endpoints: Vec<String> = entry
         .endpoints
         .iter()

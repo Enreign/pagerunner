@@ -90,6 +90,7 @@ pub fn redact_detected_tokens(headers: &HashMap<String, String>) -> HashMap<Stri
 /// Returns the (possibly redacted) headers:
 /// - On success: returns headers unchanged
 /// - On any encryption error: returns headers with detected token values replaced by [REDACTED]
+///
 /// Best-effort: logs warnings on vault/storage failure, never propagates errors.
 pub fn detect_and_vault(
     headers: &HashMap<String, String>,
@@ -255,7 +256,10 @@ mod tests {
 
     #[test]
     fn redact_detected_tokens_no_change_when_no_tokens() {
-        let h = headers(&[("content-type", "application/json"), ("accept", "text/html")]);
+        let h = headers(&[
+            ("content-type", "application/json"),
+            ("accept", "text/html"),
+        ]);
         let redacted = redact_detected_tokens(&h);
         assert_eq!(redacted.get("content-type").unwrap(), "application/json");
         assert_eq!(redacted.get("accept").unwrap(), "text/html");
@@ -263,15 +267,15 @@ mod tests {
 
     #[test]
     fn detect_and_vault_stores_vault_ref_and_returns_original_headers() {
+        use crate::site_knowledge::SiteKnowledgeStore;
         use std::sync::Arc;
         use tempfile::tempdir;
-        use crate::site_knowledge::SiteKnowledgeStore;
 
         let dir = tempdir().unwrap();
         let key = crate::db::Db::generate_key();
-        let db = Arc::new(crate::db::Db::open_with_key(
-            dir.path().join("t.db").to_str().unwrap(), key
-        ).unwrap());
+        let db = Arc::new(
+            crate::db::Db::open_with_key(dir.path().join("t.db").to_str().unwrap(), key).unwrap(),
+        );
         let store = SiteKnowledgeStore::new(db, key);
 
         let h = headers(&[

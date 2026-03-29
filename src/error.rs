@@ -134,7 +134,10 @@ mod tests {
 
     #[test]
     fn io_error_maps_to_io_error() {
-        let e = PagerunnerError::Io(std::io::Error::new(std::io::ErrorKind::NotFound, "file not found"));
+        let e = PagerunnerError::Io(std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            "file not found",
+        ));
         assert_eq!(e.error_type(), "io_error");
         assert!(!e.recovery_hint().is_empty());
     }

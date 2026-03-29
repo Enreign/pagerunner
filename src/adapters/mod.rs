@@ -10,7 +10,8 @@ pub fn seed_adapters() -> &'static [SeedAdapter] {
         SeedAdapter {
             origin: "https://github.com",
             name: "list-issues",
-            description: "List issues for a GitHub repository. params: { owner, repo, state?, limit? }",
+            description:
+                "List issues for a GitHub repository. params: { owner, repo, state?, limit? }",
             js_code: include_str!("github_list_issues.js"),
         },
         SeedAdapter {
@@ -22,13 +23,15 @@ pub fn seed_adapters() -> &'static [SeedAdapter] {
         SeedAdapter {
             origin: "https://github.com",
             name: "search-issues",
-            description: "Search GitHub issues using GitHub search syntax. params: { query, limit? }",
+            description:
+                "Search GitHub issues using GitHub search syntax. params: { query, limit? }",
             js_code: include_str!("github_search_issues.js"),
         },
         SeedAdapter {
             origin: "https://linear.app",
             name: "create-issue",
-            description: "Create a Linear issue. params: { team_id, title, description?, state_id? }",
+            description:
+                "Create a Linear issue. params: { team_id, title, description?, state_id? }",
             js_code: include_str!("linear_create_issue.js"),
         },
         SeedAdapter {
@@ -46,13 +49,15 @@ pub fn seed_adapters() -> &'static [SeedAdapter] {
         SeedAdapter {
             origin: "https://jira.atlassian.com",
             name: "create-issue",
-            description: "Create a Jira issue. params: { project_key, summary, issue_type?, description? }",
+            description:
+                "Create a Jira issue. params: { project_key, summary, issue_type?, description? }",
             js_code: include_str!("jira_create_issue.js"),
         },
         SeedAdapter {
             origin: "https://jira.atlassian.com",
             name: "transition-issue",
-            description: "Transition a Jira issue to a new status. params: { issue_key, transition_id }",
+            description:
+                "Transition a Jira issue to a new status. params: { issue_key, transition_id }",
             js_code: include_str!("jira_transition_issue.js"),
         },
         SeedAdapter {
@@ -95,10 +100,22 @@ mod tests {
     #[test]
     fn all_seed_adapters_have_non_empty_fields() {
         for adapter in seed_adapters() {
-            assert!(!adapter.origin.is_empty(), "origin empty for {}", adapter.name);
+            assert!(
+                !adapter.origin.is_empty(),
+                "origin empty for {}",
+                adapter.name
+            );
             assert!(!adapter.name.is_empty());
-            assert!(!adapter.description.is_empty(), "description empty for {}", adapter.name);
-            assert!(!adapter.js_code.is_empty(), "js_code empty for {}", adapter.name);
+            assert!(
+                !adapter.description.is_empty(),
+                "description empty for {}",
+                adapter.name
+            );
+            assert!(
+                !adapter.js_code.is_empty(),
+                "js_code empty for {}",
+                adapter.name
+            );
         }
     }
 
@@ -107,7 +124,8 @@ mod tests {
         for adapter in seed_adapters() {
             assert!(
                 adapter.origin.starts_with("https://"),
-                "origin '{}' must start with https://", adapter.origin
+                "origin '{}' must start with https://",
+                adapter.origin
             );
         }
     }

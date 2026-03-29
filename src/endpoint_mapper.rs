@@ -3,13 +3,11 @@
 use crate::site_knowledge::{ApiKind, CrudOp, EndpointEntry, SiteKnowledgeStore};
 
 const SKIP_EXTENSIONS: &[&str] = &[
-    ".js", ".css", ".png", ".jpg", ".jpeg", ".gif", ".svg",
-    ".ico", ".woff", ".woff2", ".ttf", ".map", ".xml",
+    ".js", ".css", ".png", ".jpg", ".jpeg", ".gif", ".svg", ".ico", ".woff", ".woff2", ".ttf",
+    ".map", ".xml",
 ];
 
-const SKIP_PREFIXES: &[&str] = &[
-    "/static/", "/assets/", "/public/", "/_next/", "/favicon",
-];
+const SKIP_PREFIXES: &[&str] = &["/static/", "/assets/", "/public/", "/_next/", "/favicon"];
 
 pub fn should_skip(path: &str) -> bool {
     for ext in SKIP_EXTENSIONS {
@@ -28,7 +26,13 @@ pub fn should_skip(path: &str) -> bool {
 /// Replace variable path segments with `{id}` placeholders.
 pub fn parameterize_path(path: &str) -> String {
     path.split('/')
-        .map(|seg| if looks_like_id(seg) { "{id}".to_string() } else { seg.to_string() })
+        .map(|seg| {
+            if looks_like_id(seg) {
+                "{id}".to_string()
+            } else {
+                seg.to_string()
+            }
+        })
         .collect::<Vec<_>>()
         .join("/")
 }
@@ -44,7 +48,11 @@ fn looks_like_id(s: &str) -> bool {
     // UUID: "550e8400-e29b-41d4-a716-446655440000" (36 chars, 4 dashes)
     if s.len() == 36 && s.chars().filter(|&c| c == '-').count() == 4 {
         let parts: Vec<&str> = s.split('-').collect();
-        if parts.len() == 5 && parts.iter().all(|p| p.chars().all(|c| c.is_ascii_hexdigit())) {
+        if parts.len() == 5
+            && parts
+                .iter()
+                .all(|p| p.chars().all(|c| c.is_ascii_hexdigit()))
+        {
             return true;
         }
     }
@@ -108,10 +116,7 @@ pub fn detect_crud(method: &str, path_pattern: &str) -> Option<CrudOp> {
 /// The get→modify→put is not atomic, so concurrent calls can lose observation_count
 /// increments for the same endpoint. This is intentional best-effort behavior —
 /// schema confidence will converge correctly over time even with occasional dropped updates.
-pub fn ingest(
-    entry: &crate::network_log::NetworkEntry,
-    store: &SiteKnowledgeStore,
-) {
+pub fn ingest(entry: &crate::network_log::NetworkEntry, store: &SiteKnowledgeStore) {
     let origin = match crate::network_log::url_to_origin(&entry.url) {
         Some(o) => o,
         None => return,
@@ -133,27 +138,38 @@ pub fn ingest(
     let mut sk_entry = store.get(&origin).unwrap_or_default().unwrap_or_default();
     let now = crate::site_knowledge::now_micros();
 
-    let ep = sk_entry.endpoints.entry(key).or_insert_with(|| EndpointEntry {
-        method: entry.method.to_uppercase(),
-        path_pattern: path_pattern.clone(),
-        api_kind: api_kind.clone(),
-        crud_op: crud_op.clone(),
-        observation_count: 0,
-        last_seen: now,
-        schema: None,
-    });
+    let ep = sk_entry
+        .endpoints
+        .entry(key)
+        .or_insert_with(|| EndpointEntry {
+            method: entry.method.to_uppercase(),
+            path_pattern: path_pattern.clone(),
+            api_kind: api_kind.clone(),
+            crud_op: crud_op.clone(),
+            observation_count: 0,
+            last_seen: now,
+            schema: None,
+        });
     ep.observation_count += 1;
     ep.last_seen = now;
     // Update schema if response body is parseable JSON
     if let Some(ref body) = entry.response_body {
         if let Ok(val) = serde_json::from_str::<serde_json::Value>(body) {
-            crate::schema_inference::update_endpoint_schema(ep, entry.request_body.as_deref(), &val);
+            crate::schema_inference::update_endpoint_schema(
+                ep,
+                entry.request_body.as_deref(),
+                &val,
+            );
         }
     }
 
     sk_entry.last_updated = now;
     if let Err(e) = store.put(&origin, &sk_entry) {
-        tracing::warn!("endpoint_mapper: failed to persist site_knowledge for {}: {}", origin, e);
+        tracing::warn!(
+            "endpoint_mapper: failed to persist site_knowledge for {}: {}",
+            origin,
+            e
+        );
     }
 }
 
@@ -186,14 +202,20 @@ mod tests {
 
     #[test]
     fn parameterize_mixed_path() {
-        assert_eq!(parameterize_path("/api/users/42/comments"), "/api/users/{id}/comments");
+        assert_eq!(
+            parameterize_path("/api/users/42/comments"),
+            "/api/users/{id}/comments"
+        );
     }
 
     #[test]
     fn classify_graphql_by_body() {
         use crate::site_knowledge::ApiKind;
         assert_eq!(
-            classify_api("https://example.com/graphql", Some(r#"{"query":"{ users { id } }"}"#)),
+            classify_api(
+                "https://example.com/graphql",
+                Some(r#"{"query":"{ users { id } }"}"#)
+            ),
             ApiKind::GraphQL
         );
     }
@@ -263,16 +285,17 @@ mod tests {
 
     #[test]
     fn ingest_stores_endpoint_in_site_knowledge() {
+        use crate::db::Db;
+        use crate::network_log::NetworkEntry;
+        use crate::site_knowledge::SiteKnowledgeStore;
+        use std::collections::HashMap;
         use std::sync::Arc;
         use tempfile::tempdir;
-        use crate::db::Db;
-        use crate::site_knowledge::SiteKnowledgeStore;
-        use crate::network_log::NetworkEntry;
-        use std::collections::HashMap;
 
         let dir = tempdir().unwrap();
         let key = Db::generate_key();
-        let db = Arc::new(Db::open_with_key(dir.path().join("t.db").to_str().unwrap(), key).unwrap());
+        let db =
+            Arc::new(Db::open_with_key(dir.path().join("t.db").to_str().unwrap(), key).unwrap());
         let store = SiteKnowledgeStore::new(db, key);
 
         let entry = NetworkEntry {
@@ -292,22 +315,26 @@ mod tests {
         ingest(&entry, &store);
 
         let sk = store.get("https://api.example.com").unwrap().unwrap();
-        assert!(sk.endpoints.contains_key("GET /users/{id}"),
-            "endpoints: {:?}", sk.endpoints.keys().collect::<Vec<_>>());
+        assert!(
+            sk.endpoints.contains_key("GET /users/{id}"),
+            "endpoints: {:?}",
+            sk.endpoints.keys().collect::<Vec<_>>()
+        );
     }
 
     #[test]
     fn ingest_increments_observation_count() {
+        use crate::db::Db;
+        use crate::network_log::NetworkEntry;
+        use crate::site_knowledge::SiteKnowledgeStore;
+        use std::collections::HashMap;
         use std::sync::Arc;
         use tempfile::tempdir;
-        use crate::db::Db;
-        use crate::site_knowledge::SiteKnowledgeStore;
-        use crate::network_log::NetworkEntry;
-        use std::collections::HashMap;
 
         let dir = tempdir().unwrap();
         let key = Db::generate_key();
-        let db = Arc::new(Db::open_with_key(dir.path().join("t.db").to_str().unwrap(), key).unwrap());
+        let db =
+            Arc::new(Db::open_with_key(dir.path().join("t.db").to_str().unwrap(), key).unwrap());
         let store = SiteKnowledgeStore::new(db, key);
 
         let make_entry = || NetworkEntry {
