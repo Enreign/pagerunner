@@ -43,6 +43,8 @@ brew install pagerunner
 
 # Option B — Cargo (if you have Rust):
 cargo install pagerunner
+# Note: if you get "requires rustc 1.91+" despite having a newer Rust installed,
+# Homebrew's Rust may be shadowing rustup's. Fix: export PATH="$HOME/.cargo/bin:$PATH"
 
 # Option C — Pre-built binary (no dependencies):
 
@@ -287,9 +289,9 @@ A native Swift companion app lives at `apps/menubar/`. It shows all Chrome profi
 **Build and run:**
 
 ```bash
-cd apps/menubar
-swift build -c release
 pagerunner daemon &
+cd apps/menubar
+bash scripts/package.sh   # builds + bundles into scripts/Pagerunner.app
 open scripts/Pagerunner.app
 ```
 
@@ -369,11 +371,15 @@ pkill -f "pagerunner daemon"
 **Install as a background service** (starts at login, restarts on crash):
 
 ```bash
-cargo build --release
 ./scripts/install-launchd.sh
 ```
 
-Logs at `~/.pagerunner/daemon.log`.
+The script detects your installed `pagerunner` binary automatically. Logs at `~/.pagerunner/daemon.log`.
+
+> **Note:** After installing the daemon service, restart Claude Code. On the next launch,
+> the daemon starts first (via launchd) and the MCP server connects to it in proxy mode.
+> If Claude Code is already running when you install the daemon, you need two restarts:
+> one to let launchd start the daemon, and one for the MCP server to reconnect to it.
 
 ## Snapshots
 

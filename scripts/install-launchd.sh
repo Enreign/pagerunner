@@ -1,11 +1,16 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-BINARY="$(cd "$(dirname "$0")/.." && pwd)/target/release/pagerunner"
+# Prefer an explicit BINARY env override, then PATH, then a local build as fallback
+BINARY="${BINARY:-$(which pagerunner 2>/dev/null || echo "$(cd "$(dirname "$0")/.." && pwd)/target/release/pagerunner")}"
 PLIST="$HOME/Library/LaunchAgents/com.pagerunner.daemon.plist"
 
 if [[ ! -f "$BINARY" ]]; then
-    echo "Error: binary not found at $BINARY — run 'cargo build --release' first"
+    echo "Error: pagerunner binary not found."
+    echo "  Install via: brew install enreign/pagerunner/pagerunner"
+    echo "               cargo install pagerunner"
+    echo "               or build locally with: cargo build --release"
+    echo "  Then re-run this script (or set BINARY=/path/to/pagerunner)."
     exit 1
 fi
 

@@ -684,7 +684,7 @@ async fn run() -> anyhow::Result<()> {
                 println!("Daemon:  {} ✓ running", socket_path.display());
             } else {
                 println!(
-                    "Daemon:  {} ✗ not running  (run `pagerunner daemon &` for multi-session use)",
+                    "Daemon:  {} ✗ not running  (standalone mode — OK for single session; run `pagerunner daemon &` to share state across sessions)",
                     socket_path.display()
                 );
             }
