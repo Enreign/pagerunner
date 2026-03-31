@@ -86,14 +86,18 @@ final class AppState {
     /// Update the sessions list. Preserves existing sessions when the new list is suspiciously
     /// empty (daemon hiccup) — only clears when we had no sessions to begin with.
     /// Also removes tabs for sessions that are no longer present.
-    func updateSessions(_ newSessions: [Session]) {
+    /// Returns true if the update was applied, false if the old state was preserved.
+    @discardableResult
+    func updateSessions(_ newSessions: [Session]) -> Bool {
         if !newSessions.isEmpty || sessions.isEmpty {
             sessions = newSessions
             // Remove tabs for sessions that no longer exist
             let activeIds = Set(newSessions.map { $0.id })
             tabs = tabs.filter { activeIds.contains($0.key) }
+            return true
         }
-        // else: transient empty response — preserve existing sessions and their tabs
+        // Transient empty response — preserve existing sessions and their tabs
+        return false
     }
 
     /// Update tabs for a session. Pass nil on a failed fetch to preserve existing tabs;

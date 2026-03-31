@@ -20,8 +20,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     var notificationService: NotificationService?
     private var notificationPoller: NotificationPoller!
     // Idle detection: tracks last tab-count-change time per session
-    private var sessionIdleTracker: [String: (tabCount: Int, stableFrom: Date)] = [:]
-    private var idleNotifiedSessions: Set<String> = []
+    var sessionIdleTracker: [String: (tabCount: Int, stableFrom: Date)] = [:]
+    var idleNotifiedSessions: Set<String> = []
     // Session lifecycle tracking for started/crashed notifications
     var previousSessionStates: [String: SessionStatus] = [:]
     // Checkpoint tracking for checkpoint-saved notifications
@@ -117,7 +117,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                       let session = try? JSONDecoder().decode(Session.self, from: jsonData) else { return nil }
                 return session
             }
-            appState.updateSessions(sessions)
+            let sessionsApplied = appState.updateSessions(sessions)
             // Track which sessions have ever been alive
             for s in sessions where s.status == .alive {
                 appState.everAliveSessions.insert(s.id)
@@ -134,7 +134,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     notificationService?.notifySessionCrashed(profile: session.profile, sessionId: session.id)
                 }
             }
-            previousSessionStates = Dictionary(uniqueKeysWithValues: sessions.map { ($0.id, $0.status) })
+            // Only update previousSessionStates when the update was actually applied.
+            // If we preserved (empty response), keep previous states so sessions that
+            // reappear next poll don't incorrectly fire "session started" notifications.
+            if sessionsApplied {
+                previousSessionStates = Dictionary(uniqueKeysWithValues: sessions.map { ($0.id, $0.status) })
+            }
 
             appState.recordSuccess()
 
@@ -190,10 +195,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 }
             }
 
-            // Clean up tracker entries for sessions that no longer exist
-            let activeIds = Set(appState.sessions.map { $0.id })
-            sessionIdleTracker = sessionIdleTracker.filter { activeIds.contains($0.key) }
-            idleNotifiedSessions = idleNotifiedSessions.filter { activeIds.contains($0) }
+            // Clean up tracker entries for sessions that are no longer alive.
+            // Crashed/gone sessions will never trigger idle, so drop their entries immediately.
+            let aliveIds = Set(appState.sessions.filter { $0.status == .alive }.map { $0.id })
+            sessionIdleTracker = sessionIdleTracker.filter { aliveIds.contains($0.key) }
+            idleNotifiedSessions = idleNotifiedSessions.filter { aliveIds.contains($0) }
 
             // 3. list_session_checkpoints for each unique profile
             let uniqueProfiles = Set(sessions.map { $0.profile })

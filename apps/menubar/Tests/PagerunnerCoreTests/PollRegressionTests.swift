@@ -257,6 +257,95 @@ struct PollRegressionTests {
 
         #expect(state.sessions.isEmpty)
     }
+
+    @Test("updateSessions: returns true when update is applied")
+    func updateSessionsReturnsTrueOnApply() {
+        let state = AppState()
+        let s = Session(id: "s1", profile: "p", displayName: "P", stealth: false, status: .alive)
+        let applied = state.updateSessions([s])
+        #expect(applied == true)
+    }
+
+    @Test("updateSessions: returns false when preserved (empty response with existing sessions)")
+    func updateSessionsReturnsFalseOnPreserve() {
+        let state = AppState()
+        let s = Session(id: "s1", profile: "p", displayName: "P", stealth: false, status: .alive)
+        state.sessions = [s]
+        let applied = state.updateSessions([])
+        #expect(applied == false)
+        #expect(state.sessions.count == 1) // preserved
+    }
+
+    // MARK: Gap A regression — previousSessionStates must not be reset during preservation
+
+    /// Regression for: when updateSessions preserves (empty daemon response), previousSessionStates
+    /// was still replaced with [] — causing sessions that reappear to fire spurious "started" notifications.
+    @Test("preserved sessions do not cause spurious 'started' notification on next poll")
+    func preservedSessionsNoSpuriousStartNotification() async throws {
+        // Poll 1: session s1 is alive — sets previousSessionStates[s1] = .alive
+        // Poll 2: daemon returns empty (preserved) — previousSessionStates must NOT be wiped
+        // Poll 3: daemon returns s1 alive again — must NOT fire "started" since prev is still .alive
+
+        let server = MultiMockSocketServer()
+        // Poll 1: profiles + sessions with s1
+        // Poll 2: profiles + sessions empty (daemon hiccup)
+        // Poll 3: profiles + sessions with s1 again + tabs
+        await server.start(responses: [
+            emptyProfiles, oneAliveSession,          // poll 1
+            emptyProfiles, sessionsNoDataKey,         // poll 2 (empty-ish)
+            emptyProfiles, oneAliveSession, oneTab,   // poll 3
+        ])
+        try await Task.sleep(for: .milliseconds(50))
+
+        let delegate = AppDelegate()
+        let client = DaemonClient(socketPath: await server.socketPath)
+
+        // Poll 1 — establishes s1 as known alive
+        await delegate.poll(client: client)
+        #expect(delegate.previousSessionStates["s1"] == .alive)
+
+        // Poll 2 — empty response, should preserve both sessions and previousSessionStates
+        await delegate.poll(client: client)
+        #expect(delegate.appState.sessions.count == 1, "sessions preserved")
+        #expect(delegate.previousSessionStates["s1"] == .alive, "previousSessionStates preserved")
+
+        // Poll 3 — s1 reappears; previousSessionStates[s1] is still .alive so no "started" fires
+        // We verify by checking that s1's prev was .alive before this poll
+        let prevBeforePoll3 = delegate.previousSessionStates["s1"]
+        await delegate.poll(client: client)
+        #expect(prevBeforePoll3 == .alive, "prev was alive — no spurious start notification")
+
+        await server.stop()
+    }
+
+    // MARK: Gap B regression — idle tracker cleaned up for crashed sessions
+
+    @Test("idle tracker entries for crashed sessions are removed")
+    func idleTrackerClearedForCrashedSessions() async throws {
+        let server = MultiMockSocketServer()
+        let oneDeadSession = daemonResponse(
+            #"{"ok":true,"data":[{"id":"s1","profile":"personal","display_name":"Personal","status":"crashed","stealth":false}]}"#
+        )
+        // list_profiles + list_sessions (s1 crashed) + list_session_checkpoints (personal)
+        await server.start(responses: [emptyProfiles, oneDeadSession, emptyProfiles])
+        try await Task.sleep(for: .milliseconds(50))
+
+        let delegate = AppDelegate()
+        delegate.previousSessionStates = ["s1": .alive]
+        // Pre-seed the tracker as if s1 was previously alive and being tracked
+        delegate.sessionIdleTracker["s1"] = (tabCount: 2, stableFrom: Date())
+        delegate.idleNotifiedSessions.insert("s1")
+
+        let client = DaemonClient(socketPath: await server.socketPath)
+        await delegate.poll(client: client)
+
+        // s1 is now crashed — its tracker entries must be cleared
+        #expect(delegate.appState.sessions.first?.status == .crashed)
+        #expect(delegate.sessionIdleTracker["s1"] == nil, "tracker entry removed for crashed session")
+        #expect(!delegate.idleNotifiedSessions.contains("s1"), "idle flag removed for crashed session")
+
+        await server.stop()
+    }
 }
 
 // MARK: - PollingService concurrency tests
