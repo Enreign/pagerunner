@@ -82,6 +82,7 @@ struct CheckpointRow: View {
                     guard let sid = sessionId else { return }
                     Task { @MainActor in
                         _ = try? await daemon.call(tool: "restore_session_checkpoint", args: ["session_id": sid, "checkpoint_id": checkpoint.id])
+                        appState.updateTabs(for: sid, newTabs: [])
                     }
                 }
                 .font(.system(size: 11))
