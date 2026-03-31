@@ -1,32 +1,38 @@
 {
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
   "name": "io.github.Enreign/pagerunner",
-  "title": "Pagerunner — The Browser Layer That Learns",
-  "description": "Real Chrome profiles with site intelligence — already logged in, PII anonymization, sessions persist",
+  "title": "Pagerunner \u2014 The Browser Layer That Learns",
+  "description": "Real Chrome profiles with site intelligence \u2014 already logged in, PII anonymization, sessions persist",
   "repository": {
     "url": "https://github.com/Enreign/pagerunner.git",
     "source": "github"
   },
-  "version": "0.6.0",
+  "version": "0.6.1",
   "websiteUrl": "https://github.com/Enreign/pagerunner",
   "icons": [
     {
       "src": "https://raw.githubusercontent.com/Enreign/pagerunner/main/assets/icon-512.png",
-      "sizes": ["512x512"]
+      "sizes": [
+        "512x512"
+      ]
     },
     {
       "src": "https://raw.githubusercontent.com/Enreign/pagerunner/main/assets/icon-96.png",
-      "sizes": ["96x96"]
+      "sizes": [
+        "96x96"
+      ]
     }
   ],
   "packages": [
     {
       "registryType": "npm",
       "identifier": "pagerunner",
-      "version": "0.6.0",
+      "version": "0.6.1",
       "transport": {
         "type": "stdio",
-        "args": ["mcp"]
+        "args": [
+          "mcp"
+        ]
       }
     }
   ]

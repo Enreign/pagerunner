@@ -1,8 +1,8 @@
 {
   "name": "pagerunner",
-  "title": "Pagerunner — The Browser Layer That Learns",
-  "version": "0.6.0",
-  "description": "Real Chrome profiles with site intelligence — already logged in, PII anonymization, sessions persist",
+  "title": "Pagerunner \u2014 The Browser Layer That Learns",
+  "version": "0.6.1",
+  "description": "Real Chrome profiles with site intelligence \u2014 already logged in, PII anonymization, sessions persist",
   "author": {
     "name": "Enreign",
     "email": "contact@enreign.io"
@@ -62,17 +62,17 @@
           {
             "os": "macos",
             "arch": "arm64",
-            "url": "https://github.com/Enreign/pagerunner/releases/download/v0.6.0/pagerunner-macos-arm64"
+            "url": "https://github.com/Enreign/pagerunner/releases/download/v0.6.1/pagerunner-macos-arm64"
           },
           {
             "os": "macos",
             "arch": "x86_64",
-            "url": "https://github.com/Enreign/pagerunner/releases/download/v0.6.0/pagerunner-macos-x86_64"
+            "url": "https://github.com/Enreign/pagerunner/releases/download/v0.6.1/pagerunner-macos-x86_64"
           },
           {
             "os": "linux",
             "arch": "x86_64",
-            "url": "https://github.com/Enreign/pagerunner/releases/download/v0.6.0/pagerunner-linux-x86_64"
+            "url": "https://github.com/Enreign/pagerunner/releases/download/v0.6.1/pagerunner-linux-x86_64"
           }
         ]
       },
@@ -146,6 +146,7 @@
   "releaseNotes": {
     "v0.6.0": "https://github.com/Enreign/pagerunner/releases/tag/v0.6.0",
     "v0.5.0": "https://github.com/Enreign/pagerunner/releases/tag/v0.5.0",
-    "v0.4.0": "https://github.com/Enreign/pagerunner/releases/tag/v0.4.0"
+    "v0.4.0": "https://github.com/Enreign/pagerunner/releases/tag/v0.4.0",
+    "v0.6.1": "https://github.com/Enreign/pagerunner/releases/tag/v0.6.1"
   }
 }

@@ -1,6 +1,6 @@
 [package]
 name = "pagerunner"
-version = "0.6.0"
+version = "0.6.1"
 edition = "2021"
 rust-version = "1.91"
 description = "Browser MCP server that learns — real Chrome profiles, site intelligence, PII anonymization, persistent sessions, encrypted state"
