@@ -94,7 +94,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
             // 1. list_sessions
             let sessionsRaw = try await client.call(tool: "list_sessions")
-            guard let data = sessionsRaw["data"]?.arrayValue else { return }
+            guard let data = sessionsRaw["data"]?.arrayValue else {
+                appState.recordSuccess()
+                return
+            }
             let sessions: [Session] = data.compactMap { item -> Session? in
                 guard let obj = item.objectValue,
                       let id = obj["id"]?.stringValue,
@@ -151,7 +154,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                         }
                     }
                 } else {
-                    appState.tabs[session.id] = []
+                    // Keep previous tabs on transient failure rather than clearing
+                    if appState.tabs[session.id] == nil {
+                        appState.tabs[session.id] = []
+                    }
                 }
             }
 
