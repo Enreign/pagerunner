@@ -83,6 +83,34 @@ final class AppState {
         checkpoints[profile] ?? []
     }
 
+    /// Update the sessions list. Preserves existing sessions when the new list is suspiciously
+    /// empty (daemon hiccup) — only clears when we had no sessions to begin with.
+    /// Also removes tabs for sessions that are no longer present.
+    /// Returns true if the update was applied, false if the old state was preserved.
+    @discardableResult
+    func updateSessions(_ newSessions: [Session]) -> Bool {
+        if !newSessions.isEmpty || sessions.isEmpty {
+            sessions = newSessions
+            // Remove tabs for sessions that no longer exist
+            let activeIds = Set(newSessions.map { $0.id })
+            tabs = tabs.filter { activeIds.contains($0.key) }
+            return true
+        }
+        // Transient empty response — preserve existing sessions and their tabs
+        return false
+    }
+
+    /// Update tabs for a session. Pass nil on a failed fetch to preserve existing tabs;
+    /// only initialises to empty if no tabs have ever been loaded for this session.
+    func updateTabs(for sessionId: String, newTabs: [Tab]?) {
+        if let tabs = newTabs {
+            self.tabs[sessionId] = tabs
+        } else if self.tabs[sessionId] == nil {
+            self.tabs[sessionId] = []
+        }
+        // else: transient failure — keep whatever was there
+    }
+
     // MARK: - Daemon restart
 
     func restartDaemon() async {
@@ -103,6 +131,7 @@ final class AppState {
             try? await Task.sleep(for: .milliseconds(500))
             if (try? await daemonClient.call(tool: "list_profiles")) != nil { break }
         }
+        transition = .none  // Always clear — next successful poll will confirm daemon is up
     }
 
     // MARK: - Profile refresh
