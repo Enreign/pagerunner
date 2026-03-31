@@ -7,6 +7,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.1] — macOS Menu Bar Reliability & Onboarding Fixes
+
+### Fixed
+
+**macOS Menu Bar — Session/Tab Continuity**
+- Sessions and tabs are now preserved on transient poll failures (empty daemon response during a hiccup no longer wipes visible state)
+- `list_sessions` missing `data` key no longer increments the consecutive-failure counter — daemon is treated as alive
+- `list_tabs` failure no longer clears existing tabs — stale tabs remain visible until a successful refresh
+- `previousSessionStates` is no longer wiped when sessions are preserved, preventing spurious "session started" notifications after a transient empty response
+- Idle tracker entries are now cleaned up when sessions crash, not just when they disappear entirely
+- Concurrent poll guard: a second poll triggered by opening the panel no longer runs while the first is still in flight
+
+**macOS Menu Bar — Optimistic UI**
+- Closing a session removes it from the UI immediately (no 2s wait for next poll)
+- Closing a tab removes it from the UI immediately
+- Opening a new tab shows a placeholder immediately; replaced by real data on next poll
+- Restoring a checkpoint clears stale tabs immediately so the restored state appears on the next poll
+- `detachProfile` now removes the profile from `remoteSessions` — VM badge no longer lingers after detach
+- Discovery cache is invalidated after attaching a Chrome instance, so re-scanning finds the right set of ports
+
+**Onboarding**
+- `install-launchd.sh` now detects the pagerunner binary via `which pagerunner` (works for Homebrew/Cargo/binary installs — no longer requires a source build at `target/release/`)
+- Daemon status output no longer shows a false alarm when running in standalone mode — now reads "standalone mode — OK for single session" instead of implying the daemon is broken
+- README: correct menu bar build instructions (`package.sh`, not `swift build`); document Homebrew Rust PATH shadowing for `cargo install` users; clarify two-restart requirement for launchd daemon setup
+- Release pipeline: draft releases now wait for all platform binaries to upload before going live; Homebrew tap PR is opened automatically on release
+
+### Internal
+- `cargo fmt` and Clippy lint fixes applied across all `src/` files (pre-existing CI failures on `main`)
+- 14 new regression tests in `apps/menubar/Tests/PagerunnerCoreTests/PollRegressionTests.swift` covering all fixed behaviours
+
 ## [0.6.0] — Session Persistence & TCP-Only Chrome
 
 ### Added
