@@ -218,6 +218,7 @@ final class AppState {
             _ = try? await daemonClient.call(tool: "close_session", args: ["session_id": session.id])
         }
         try ConfigEditor.removeDebugPortFromProfile(name: profile.name)
+        remoteSessions.remove(profile.name)
         await restartDaemon()
         await refreshProfiles()
         navigation = .profile(profile.name)
@@ -230,6 +231,7 @@ final class AppState {
             discoveredInstances[idx].attachState = .attaching
             do {
                 try ConfigEditor.addDebugPortToProfile(name: profileName, port: instance.port)
+                await discoveryService.invalidateCache()
                 await restartDaemon()
                 await refreshProfiles()
                 _ = try? await daemonClient.call(tool: "open_session", args: ["profile": profileName])
@@ -253,6 +255,7 @@ final class AppState {
                 try ConfigEditor.addAttachedProfile(name: label, displayName: displayName, port: instance.port)
 
                 // Restart daemon to pick up the new profile entry
+                await discoveryService.invalidateCache()
                 await restartDaemon()
                 await refreshProfiles()
                 _ = try? await daemonClient.call(tool: "open_session", args: ["profile": label])

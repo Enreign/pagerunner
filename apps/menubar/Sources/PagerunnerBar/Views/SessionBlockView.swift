@@ -23,6 +23,7 @@ struct SessionBlockView: View {
         Button {
             Task { @MainActor in
                 _ = try? await daemon.call(tool: "close_session", args: ["session_id": session.id])
+                appState.sessions = appState.sessions.filter { $0.id != session.id }
             }
         } label: {
             Text("✕")
@@ -84,6 +85,11 @@ struct SessionBlockView: View {
                     Button {
                         Task { @MainActor in
                             _ = try? await daemon.call(tool: "new_tab", args: ["session_id": session.id])
+                            let dict: [String: Any] = ["target_id": "pending-\(UUID().uuidString)", "url": "about:blank", "title": "New Tab"]
+                            if let jsonData = try? JSONSerialization.data(withJSONObject: dict),
+                               let placeholder = try? JSONDecoder().decode(PagerunnerCore.Tab.self, from: jsonData) {
+                                appState.updateTabs(for: session.id, newTabs: tabs + [placeholder])
+                            }
                         }
                     } label: {
                         Image(systemName: "plus")
@@ -176,7 +182,7 @@ struct SessionBlockView: View {
 
                 if !isCollapsed {
                     ForEach(tabs) { tab in
-                        TabRowView(tab: tab, sessionId: session.id, tabs: tabs, controller: controller, isRemote: appState.remoteSessions.contains(session.profile))
+                        TabRowView(tab: tab, sessionId: session.id, tabs: tabs, appState: appState, controller: controller, isRemote: appState.remoteSessions.contains(session.profile))
                     }
                     .padding(.bottom, 4)
                 }
@@ -223,6 +229,7 @@ struct SessionBlockView: View {
                         tool: "close_session",
                         args: ["session_id": session.id]
                     )
+                    appState.sessions = appState.sessions.filter { $0.id != session.id }
                 }
             }
             Button("Cancel", role: .cancel) {}
@@ -236,6 +243,7 @@ struct TabRowView: View {
     let tab: PagerunnerCore.Tab
     let sessionId: String
     let tabs: [PagerunnerCore.Tab]
+    @Bindable var appState: AppState
     let controller: StatusItemController
     let isRemote: Bool
     @Environment(\.daemonClient) private var daemon
@@ -303,6 +311,7 @@ struct TabRowView: View {
                 Button {
                     Task { @MainActor in
                         _ = try? await daemon.call(tool: "close_tab", args: ["session_id": sessionId, "target_id": tab.targetId])
+                        appState.updateTabs(for: sessionId, newTabs: tabs.filter { $0.targetId != tab.targetId })
                     }
                 } label: {
                     Text("✕")
@@ -358,6 +367,7 @@ struct TabRowView: View {
                             tool: "close_tab",
                             args: ["session_id": sessionId, "target_id": tab.targetId]
                         )
+                        appState.updateTabs(for: sessionId, newTabs: tabs.filter { $0.targetId != tab.targetId })
                     }
                 }
             }
