@@ -83,6 +83,17 @@ final class AppState {
         checkpoints[profile] ?? []
     }
 
+    /// Update tabs for a session. Pass nil on a failed fetch to preserve existing tabs;
+    /// only initialises to empty if no tabs have ever been loaded for this session.
+    func updateTabs(for sessionId: String, newTabs: [Tab]?) {
+        if let tabs = newTabs {
+            self.tabs[sessionId] = tabs
+        } else if self.tabs[sessionId] == nil {
+            self.tabs[sessionId] = []
+        }
+        // else: transient failure — keep whatever was there
+    }
+
     // MARK: - Daemon restart
 
     func restartDaemon() async {

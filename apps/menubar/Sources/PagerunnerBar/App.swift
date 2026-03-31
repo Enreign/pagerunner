@@ -15,15 +15,15 @@ struct PagerunnerBarApp {
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusItemController: StatusItemController!
-    private var appState = AppState()
+    var appState = AppState()
     private var pollingService: PollingService!
-    private var notificationService: NotificationService!
+    var notificationService: NotificationService?
     private var notificationPoller: NotificationPoller!
     // Idle detection: tracks last tab-count-change time per session
     private var sessionIdleTracker: [String: (tabCount: Int, stableFrom: Date)] = [:]
     private var idleNotifiedSessions: Set<String> = []
     // Session lifecycle tracking for started/crashed notifications
-    private var previousSessionStates: [String: SessionStatus] = [:]
+    var previousSessionStates: [String: SessionStatus] = [:]
     // Checkpoint tracking for checkpoint-saved notifications
     private var knownCheckpointIds: Set<String> = []
     private var profilesWithCheckpointsSeeded: Set<String> = []
@@ -42,10 +42,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         // Request notification permission and register categories
         notificationService = NotificationService()
-        notificationPoller = NotificationPoller(notificationService: notificationService)
+        notificationPoller = NotificationPoller(notificationService: notificationService!)
         notificationPoller.start()
         Task { @MainActor in
-            await notificationService.requestPermission()
+            await notificationService?.requestPermission()
         }
 
         // Resolve binary path
@@ -60,11 +60,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         statusItemController = StatusItemController(appState: appState, pollingService: pollingService)
-        notificationService.configure(appState: appState, controller: statusItemController)
+        notificationService?.configure(appState: appState, controller: statusItemController)
         pollingService.start()
     }
 
-    private func poll(client: DaemonClient) async {
+    func poll(client: DaemonClient) async {
         do {
             // 0. list_profiles
             if let profilesRaw = try? await client.call(tool: "list_profiles") {
@@ -128,10 +128,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 let prev = previousSessionStates[session.id]
                 if prev == nil && session.status == .alive
                    && NotificationSettings.notifyOnStart(profile: session.profile) {
-                    notificationService.notifySessionStarted(profileName: session.profile)
+                    notificationService?.notifySessionStarted(profileName: session.profile)
                 } else if prev == .alive && session.status == .crashed
                    && NotificationSettings.notifyOnCrash(profile: session.profile) {
-                    notificationService.notifySessionCrashed(profile: session.profile, sessionId: session.id)
+                    notificationService?.notifySessionCrashed(profile: session.profile, sessionId: session.id)
                 }
             }
             previousSessionStates = Dictionary(uniqueKeysWithValues: sessions.map { ($0.id, $0.status) })
@@ -140,24 +140,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
             // 2. list_tabs for each alive session (serial, best-effort)
             for session in sessions where session.status == SessionStatus.alive {
-                if let tabsRaw = try? await client.call(tool: "list_tabs", args: ["session_id": session.id]) {
-                    if let tabData = tabsRaw["data"]?.arrayValue {
-                        appState.tabs[session.id] = tabData.compactMap { t -> PagerunnerCore.Tab? in
-                            guard let obj = t.objectValue,
-                                  let targetId = obj["target_id"]?.stringValue,
-                                  let url = obj["url"]?.stringValue,
-                                  let title = obj["title"]?.stringValue else { return nil }
-                            let dict: [String: Any] = ["target_id": targetId, "url": url, "title": title]
-                            guard let jsonData = try? JSONSerialization.data(withJSONObject: dict),
-                                  let tab = try? JSONDecoder().decode(PagerunnerCore.Tab.self, from: jsonData) else { return nil }
-                            return tab
-                        }
+                if let tabsRaw = try? await client.call(tool: "list_tabs", args: ["session_id": session.id]),
+                   let tabData = tabsRaw["data"]?.arrayValue {
+                    let fetched = tabData.compactMap { t -> PagerunnerCore.Tab? in
+                        guard let obj = t.objectValue,
+                              let targetId = obj["target_id"]?.stringValue,
+                              let url = obj["url"]?.stringValue,
+                              let title = obj["title"]?.stringValue else { return nil }
+                        let dict: [String: Any] = ["target_id": targetId, "url": url, "title": title]
+                        guard let jsonData = try? JSONSerialization.data(withJSONObject: dict),
+                              let tab = try? JSONDecoder().decode(PagerunnerCore.Tab.self, from: jsonData) else { return nil }
+                        return tab
                     }
+                    appState.updateTabs(for: session.id, newTabs: fetched)
                 } else {
-                    // Keep previous tabs on transient failure rather than clearing
-                    if appState.tabs[session.id] == nil {
-                        appState.tabs[session.id] = []
-                    }
+                    // Failure or missing data — preserve existing tabs, only init to [] on first load
+                    appState.updateTabs(for: session.id, newTabs: nil)
                 }
             }
 
@@ -179,7 +177,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     } else if !idleNotifiedSessions.contains(session.id) {
                         let minutesIdle = now.timeIntervalSince(tracker.stableFrom) / 60
                         if minutesIdle >= Double(threshold) {
-                            notificationService.notifyAgentIdle(
+                            notificationService?.notifyAgentIdle(
                                 profileName: profile.displayName,
                                 idleMinutes: threshold,
                                 sessionId: session.id
@@ -234,7 +232,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                         if profilesWithCheckpointsSeeded.contains(profile) {
                             for cp in appState.checkpoints[profile] ?? [] {
                                 if !knownCheckpointIds.contains(cp.checkpointId) {
-                                    notificationService.notifyCheckpointSaved(name: cp.name)
+                                    notificationService?.notifyCheckpointSaved(name: cp.name)
                                 }
                             }
                         } else {
@@ -252,7 +250,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             if wasRunningOrStale && appState.daemonStatus == .stopped
                && appState.transition == .none
                && NotificationSettings.notifyOnDaemonHealth() {
-                notificationService.notifyDaemonStopped()
+                notificationService?.notifyDaemonStopped()
             }
         }
     }
