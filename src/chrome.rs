@@ -24,11 +24,11 @@ pub struct SpawnResult {
 /// Bind to port 0 to get an OS-assigned free port, then immediately release it.
 /// Small race window before Chrome binds to the port — acceptable for local dev use.
 fn alloc_free_port() -> crate::error::Result<u16> {
-    let listener = std::net::TcpListener::bind("127.0.0.1:0")
-        .map_err(|e| crate::error::PagerunnerError::Config(
-            format!("Failed to allocate debug port: {}", e)
-        ))?;
-    let port = listener.local_addr()
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").map_err(|e| {
+        crate::error::PagerunnerError::Config(format!("Failed to allocate debug port: {}", e))
+    })?;
+    let port = listener
+        .local_addr()
         .map_err(|e| crate::error::PagerunnerError::Config(e.to_string()))?
         .port();
     // Drop listener releases the port
@@ -116,7 +116,10 @@ mod tests {
         // Two consecutive calls should return different ports (OS assigns distinct ports)
         let p1 = alloc_free_port().unwrap();
         let p2 = alloc_free_port().unwrap();
-        assert_ne!(p1, p2, "consecutive alloc_free_port calls should return distinct ports");
+        assert_ne!(
+            p1, p2,
+            "consecutive alloc_free_port calls should return distinct ports"
+        );
     }
 
     #[test]

@@ -82,7 +82,10 @@ struct TestDaemon {
 impl TestDaemon {
     fn snapshot_chrome_pids() -> std::collections::HashSet<u32> {
         let mut pids = std::collections::HashSet::new();
-        if let Ok(out) = Command::new("pgrep").args(&["-f", "remote-debugging-port"]).output() {
+        if let Ok(out) = Command::new("pgrep")
+            .args(&["-f", "remote-debugging-port"])
+            .output()
+        {
             let s = String::from_utf8_lossy(&out.stdout);
             for line in s.lines() {
                 if let Ok(pid) = line.trim().parse::<u32>() {
@@ -120,7 +123,9 @@ impl Drop for TestDaemon {
         std::thread::sleep(std::time::Duration::from_millis(200));
         let pids_after = TestDaemon::snapshot_chrome_pids();
         for pid in pids_after.difference(&self.chrome_pids_before) {
-            let _ = Command::new("kill").args(&["-9", &pid.to_string()]).output();
+            let _ = Command::new("kill")
+                .args(&["-9", &pid.to_string()])
+                .output();
         }
     }
 }
@@ -152,7 +157,10 @@ fn start_daemon_with(binary: &std::path::Path) -> TestDaemon {
             break;
         }
     }
-    TestDaemon { child, chrome_pids_before }
+    TestDaemon {
+        child,
+        chrome_pids_before,
+    }
 }
 
 fn start_test_daemon() -> TestDaemon {
@@ -315,7 +323,10 @@ fn test_list_sessions_returns_json() {
 #[serial]
 fn test_attach_session_missing_args_exits_nonzero() {
     let out = run(&["attach-session"]);
-    assert!(!out.status.success(), "expected non-zero exit when no port/url given");
+    assert!(
+        !out.status.success(),
+        "expected non-zero exit when no port/url given"
+    );
 }
 
 /// attach_session with an unreachable port returns an error (no Chrome running there)
@@ -324,7 +335,10 @@ fn test_attach_session_missing_args_exits_nonzero() {
 fn test_attach_session_unreachable_port_exits_nonzero() {
     // Port 19999 is extremely unlikely to have Chrome
     let out = run(&["attach-session", "--debug-port", "19999"]);
-    assert!(!out.status.success(), "expected non-zero exit for unreachable port");
+    assert!(
+        !out.status.success(),
+        "expected non-zero exit for unreachable port"
+    );
     assert!(!stderr(&out).is_empty(), "expected error on stderr");
 }
 
@@ -2398,8 +2412,11 @@ fn test_cli_close_tab_last_tab_returns_error() {
     let profile = profiles["data"][0]["name"].as_str().unwrap().to_string();
 
     let open_out = run_live(&["open-session", &profile]);
-    let session_id = serde_json::from_str::<serde_json::Value>(&stdout(&open_out))
-        .unwrap()["session_id"].as_str().unwrap().to_string();
+    let session_id = serde_json::from_str::<serde_json::Value>(&stdout(&open_out)).unwrap()
+        ["session_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
 
     let tabs_out = run_live(&["list-tabs", &session_id]);
     let tabs: serde_json::Value = serde_json::from_str(&stdout(&tabs_out)).unwrap();
@@ -2412,8 +2429,10 @@ fn test_cli_close_tab_last_tab_returns_error() {
         "close-tab on last tab should exit non-zero"
     );
     assert!(
-        stderr(&close_out).contains("Cannot close last tab") || stderr(&close_out).contains("last tab"),
-        "error message should mention last tab: {}", stderr(&close_out)
+        stderr(&close_out).contains("Cannot close last tab")
+            || stderr(&close_out).contains("last tab"),
+        "error message should mention last tab: {}",
+        stderr(&close_out)
     );
 
     run_live(&["close-session", &session_id]);
@@ -2430,8 +2449,11 @@ fn test_cli_close_tab_succeeds_with_multiple_tabs() {
     let profile = profiles["data"][0]["name"].as_str().unwrap().to_string();
 
     let open_out = run_live(&["open-session", &profile]);
-    let session_id = serde_json::from_str::<serde_json::Value>(&stdout(&open_out))
-        .unwrap()["session_id"].as_str().unwrap().to_string();
+    let session_id = serde_json::from_str::<serde_json::Value>(&stdout(&open_out)).unwrap()
+        ["session_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
 
     // Open a second tab so we have 2 total
     run_live(&["new-tab", &session_id]);
@@ -2460,14 +2482,24 @@ fn test_cli_save_session_checkpoint_returns_checkpoint_id() {
     let profile = profiles["data"][0]["name"].as_str().unwrap().to_string();
 
     let open_out = run_live(&["open-session", &profile]);
-    let session_id = serde_json::from_str::<serde_json::Value>(&stdout(&open_out))
-        .unwrap()["session_id"].as_str().unwrap().to_string();
+    let session_id = serde_json::from_str::<serde_json::Value>(&stdout(&open_out)).unwrap()
+        ["session_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
 
     let save_out = run_live(&["save-session-checkpoint", &session_id]);
-    assert!(save_out.status.success(), "save-session-checkpoint failed: {}", stderr(&save_out));
+    assert!(
+        save_out.status.success(),
+        "save-session-checkpoint failed: {}",
+        stderr(&save_out)
+    );
     let result: serde_json::Value = serde_json::from_str(&stdout(&save_out)).unwrap();
     assert_eq!(result["ok"], true);
-    assert!(result["checkpoint_id"].as_str().is_some(), "must return checkpoint_id");
+    assert!(
+        result["checkpoint_id"].as_str().is_some(),
+        "must return checkpoint_id"
+    );
     assert!(result["name"].as_str().is_some(), "must return name");
 
     run_live(&["close-session", &session_id]);
@@ -2484,11 +2516,19 @@ fn test_cli_restore_session_checkpoint_roundtrip() {
     let profile = profiles["data"][0]["name"].as_str().unwrap().to_string();
 
     let open_out = run_live(&["open-session", &profile]);
-    let session_id = serde_json::from_str::<serde_json::Value>(&stdout(&open_out))
-        .unwrap()["session_id"].as_str().unwrap().to_string();
+    let session_id = serde_json::from_str::<serde_json::Value>(&stdout(&open_out)).unwrap()
+        ["session_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
 
     // Save a checkpoint
-    let save_out = run_live(&["save-session-checkpoint", &session_id, "--name", "Test checkpoint"]);
+    let save_out = run_live(&[
+        "save-session-checkpoint",
+        &session_id,
+        "--name",
+        "Test checkpoint",
+    ]);
     assert!(save_out.status.success(), "{}", stderr(&save_out));
     let saved: serde_json::Value = serde_json::from_str(&stdout(&save_out)).unwrap();
     assert_eq!(saved["ok"], true);
@@ -2522,10 +2562,15 @@ fn test_cli_delete_session_checkpoint_not_found() {
     // Uses isolated test DB — no Chrome, no daemon needed.
     let output = run(&[
         "delete-session-checkpoint",
-        "--profile", "personal",
-        "--checkpoint-id", "nonexistent-uuid",
+        "--profile",
+        "personal",
+        "--checkpoint-id",
+        "nonexistent-uuid",
     ]);
-    assert!(!output.status.success(), "should fail for missing checkpoint");
+    assert!(
+        !output.status.success(),
+        "should fail for missing checkpoint"
+    );
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -2539,23 +2584,22 @@ const ATTACH_DEBUG_PORT: u16 = 19222;
 /// user's Chrome. Blocks until the DevTools HTTP endpoint is ready.
 fn start_chrome_with_debug_port(port: u16) -> (std::process::Child, tempfile::TempDir) {
     let profile_dir = tempfile::tempdir().expect("tempdir");
-    let child = std::process::Command::new(
-        "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
-    )
-    .args(&[
-        &format!("--remote-debugging-port={}", port),
-        "--no-first-run",
-        "--no-default-browser-check",
-        "--disable-sync",
-        "--disable-extensions",
-        "--remote-allow-origins=*",
-        &format!("--user-data-dir={}", profile_dir.path().display()),
-        "about:blank",
-    ])
-    .stdout(std::process::Stdio::null())
-    .stderr(std::process::Stdio::null())
-    .spawn()
-    .expect("failed to start Chrome — is it installed at /Applications/Google Chrome.app?");
+    let child =
+        std::process::Command::new("/Applications/Google Chrome.app/Contents/MacOS/Google Chrome")
+            .args(&[
+                &format!("--remote-debugging-port={}", port),
+                "--no-first-run",
+                "--no-default-browser-check",
+                "--disable-sync",
+                "--disable-extensions",
+                "--remote-allow-origins=*",
+                &format!("--user-data-dir={}", profile_dir.path().display()),
+                "about:blank",
+            ])
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .expect("failed to start Chrome — is it installed at /Applications/Google Chrome.app?");
 
     // Poll the DevTools HTTP endpoint until Chrome is ready (up to 6s)
     let version_url = format!("http://localhost:{}/json/version", port);
@@ -2570,7 +2614,11 @@ fn start_chrome_with_debug_port(port: u16) -> (std::process::Child, tempfile::Te
             break;
         }
     }
-    assert!(ready, "Chrome did not start remote-debugging at port {} in time", port);
+    assert!(
+        ready,
+        "Chrome did not start remote-debugging at port {} in time",
+        port
+    );
 
     (child, profile_dir)
 }
@@ -2598,9 +2646,15 @@ fn test_attach_session_connects_and_lists_tabs() {
     );
     let v: serde_json::Value = serde_json::from_str(&stdout(&attach_out)).unwrap();
     assert_eq!(v["ok"], true, "response: {}", stdout(&attach_out));
-    let session_id = v["session_id"].as_str().expect("session_id missing").to_string();
+    let session_id = v["session_id"]
+        .as_str()
+        .expect("session_id missing")
+        .to_string();
     assert!(
-        v["attached_to"].as_str().unwrap_or("").contains(&ATTACH_DEBUG_PORT.to_string()),
+        v["attached_to"]
+            .as_str()
+            .unwrap_or("")
+            .contains(&ATTACH_DEBUG_PORT.to_string()),
         "attached_to should include port: {}",
         stdout(&attach_out)
     );
@@ -2610,10 +2664,12 @@ fn test_attach_session_connects_and_lists_tabs() {
     assert!(sessions_out.status.success());
     let sessions: serde_json::Value = serde_json::from_str(&stdout(&sessions_out)).unwrap();
     let list = sessions["result"]["data"].as_array().expect("data array");
-    let found = list
-        .iter()
-        .any(|s| s["id"].as_str() == Some(&session_id));
-    assert!(found, "attached session not in list-sessions: {}", stdout(&sessions_out));
+    let found = list.iter().any(|s| s["id"].as_str() == Some(&session_id));
+    assert!(
+        found,
+        "attached session not in list-sessions: {}",
+        stdout(&sessions_out)
+    );
 
     // list-tabs: should return at least one tab (the about:blank Chrome opened)
     let tabs_out = run_live(&["list-tabs", &session_id]);
@@ -2624,10 +2680,16 @@ fn test_attach_session_connects_and_lists_tabs() {
     );
     let tabs_v: serde_json::Value = serde_json::from_str(&stdout(&tabs_out)).unwrap();
     let tabs = tabs_v["data"].as_array().expect("tabs data array");
-    assert!(!tabs.is_empty(), "expected at least one tab from attached Chrome");
+    assert!(
+        !tabs.is_empty(),
+        "expected at least one tab from attached Chrome"
+    );
 
     // Navigate in the attached tab
-    let target_id = tabs[0]["target_id"].as_str().expect("target_id").to_string();
+    let target_id = tabs[0]["target_id"]
+        .as_str()
+        .expect("target_id")
+        .to_string();
     let nav_out = run_live(&["navigate", &session_id, &target_id, "https://example.com"]);
     assert!(
         nav_out.status.success(),
@@ -2668,19 +2730,30 @@ fn test_attach_session_navigate_and_get_content() {
     let _daemon = start_test_daemon();
     let (mut chrome, _profile_dir) = start_chrome_with_debug_port(ATTACH_DEBUG_PORT);
 
-    let attach_out = run_live(&["attach-session", "--debug-port", &ATTACH_DEBUG_PORT.to_string()]);
+    let attach_out = run_live(&[
+        "attach-session",
+        "--debug-port",
+        &ATTACH_DEBUG_PORT.to_string(),
+    ]);
     assert!(attach_out.status.success(), "{}", stderr(&attach_out));
     let session_id = parse_json_field(&stdout(&attach_out), "session_id");
 
     let tabs_out = run_live(&["list-tabs", &session_id]);
     let tabs_v: serde_json::Value = serde_json::from_str(&stdout(&tabs_out)).unwrap();
-    let target_id = tabs_v["data"][0]["target_id"].as_str().expect("target_id").to_string();
+    let target_id = tabs_v["data"][0]["target_id"]
+        .as_str()
+        .expect("target_id")
+        .to_string();
 
     let nav = run_live(&["navigate", &session_id, &target_id, "https://example.com"]);
     assert!(nav.status.success(), "navigate failed: {}", stderr(&nav));
 
     let content = run_live(&["get-content", &session_id, &target_id]);
-    assert!(content.status.success(), "get-content failed: {}", stderr(&content));
+    assert!(
+        content.status.success(),
+        "get-content failed: {}",
+        stderr(&content)
+    );
     assert!(
         stdout(&content).contains("Example Domain"),
         "expected page content in attached session, got: {}",
@@ -2715,19 +2788,30 @@ fn test_multi_window_two_sessions_same_profile() {
     assert!(open2.status.success(), "open-session 2: {}", stderr(&open2));
     let sid2 = parse_json_field(&stdout(&open2), "session_id");
 
-    assert_ne!(sid1, sid2, "each open-session must return a distinct session_id");
+    assert_ne!(
+        sid1, sid2,
+        "each open-session must return a distinct session_id"
+    );
 
     // Both sessions visible in list-sessions
     let sessions_out = run_live(&["list-sessions"]);
     let sv: serde_json::Value = serde_json::from_str(&stdout(&sessions_out)).unwrap();
     let list = sv["result"]["data"].as_array().expect("data array");
     let ids: Vec<&str> = list.iter().filter_map(|s| s["id"].as_str()).collect();
-    assert!(ids.contains(&sid1.as_str()), "session 1 missing from list-sessions");
-    assert!(ids.contains(&sid2.as_str()), "session 2 missing from list-sessions");
+    assert!(
+        ids.contains(&sid1.as_str()),
+        "session 1 missing from list-sessions"
+    );
+    assert!(
+        ids.contains(&sid2.as_str()),
+        "session 2 missing from list-sessions"
+    );
 
     // Each session's tab list must be non-empty and disjoint from the other
-    let tabs1_v: serde_json::Value = serde_json::from_str(&stdout(&run_live(&["list-tabs", &sid1]))).unwrap();
-    let tabs2_v: serde_json::Value = serde_json::from_str(&stdout(&run_live(&["list-tabs", &sid2]))).unwrap();
+    let tabs1_v: serde_json::Value =
+        serde_json::from_str(&stdout(&run_live(&["list-tabs", &sid1]))).unwrap();
+    let tabs2_v: serde_json::Value =
+        serde_json::from_str(&stdout(&run_live(&["list-tabs", &sid2]))).unwrap();
     let tabs1: Vec<&str> = tabs1_v["data"]
         .as_array()
         .expect("tabs1 data")
@@ -2755,7 +2839,11 @@ fn test_multi_window_two_sessions_same_profile() {
 
     // Close session 2 (secondary): Chrome should stay alive for session 1
     let close2 = run_live(&["close-session", &sid2]);
-    assert!(close2.status.success(), "close session 2: {}", stderr(&close2));
+    assert!(
+        close2.status.success(),
+        "close session 2: {}",
+        stderr(&close2)
+    );
 
     // Session 1 still works
     let tabs1_after = run_live(&["list-tabs", &sid1]);
@@ -2781,7 +2869,11 @@ fn test_registry_not_written_on_open_session_invalid_profile() {
     assert!(!out.status.success());
     // No sessions should exist
     let list_out = run(&["list-sessions"]);
-    assert!(list_out.status.success(), "list-sessions failed: {}", stderr(&list_out));
+    assert!(
+        list_out.status.success(),
+        "list-sessions failed: {}",
+        stderr(&list_out)
+    );
     let s = stdout(&list_out);
     let v: serde_json::Value = serde_json::from_str(s.trim()).expect("must be JSON");
     let arr = if v.is_array() {
@@ -2794,7 +2886,11 @@ fn test_registry_not_written_on_open_session_invalid_profile() {
             .expect("expected array at result.data")
             .clone()
     };
-    assert!(arr.is_empty(), "expected no sessions after failed open, got: {:?}", arr);
+    assert!(
+        arr.is_empty(),
+        "expected no sessions after failed open, got: {:?}",
+        arr
+    );
 }
 
 /// Open a real session — it should appear in list_sessions with alive status.
@@ -2809,14 +2905,23 @@ fn test_registry_entry_visible_after_open_session() {
     let profile = profiles["data"][0]["name"].as_str().unwrap().to_string();
 
     let open = run_live(&["open-session", &profile]);
-    assert!(open.status.success(), "open-session failed: {}", stderr(&open));
+    assert!(
+        open.status.success(),
+        "open-session failed: {}",
+        stderr(&open)
+    );
     let v: serde_json::Value = serde_json::from_str(&stdout(&open)).unwrap();
     let session_id = v["session_id"].as_str().unwrap().to_string();
 
     let list_out = run_live(&["list-sessions"]);
-    assert!(list_out.status.success(), "list-sessions failed: {}", stderr(&list_out));
+    assert!(
+        list_out.status.success(),
+        "list-sessions failed: {}",
+        stderr(&list_out)
+    );
     let lv: serde_json::Value = serde_json::from_str(&stdout(&list_out)).unwrap();
-    let data = lv["data"].as_array()
+    let data = lv["data"]
+        .as_array()
         .or_else(|| lv["result"]["data"].as_array())
         .expect("expected data array in list-sessions output");
     assert!(
@@ -2840,24 +2945,44 @@ fn test_close_session_writes_auto_checkpoint() {
     let profile = profiles["data"][0]["name"].as_str().unwrap().to_string();
 
     let open = run_live(&["open-session", &profile]);
-    assert!(open.status.success(), "open-session failed: {}", stderr(&open));
+    assert!(
+        open.status.success(),
+        "open-session failed: {}",
+        stderr(&open)
+    );
     let v: serde_json::Value = serde_json::from_str(&stdout(&open)).unwrap();
     let session_id = v["session_id"].as_str().unwrap().to_string();
 
     // Close it — should trigger auto-checkpoint
     let close = run_live(&["close-session", &session_id]);
-    assert!(close.status.success(), "close-session failed: {}", stderr(&close));
+    assert!(
+        close.status.success(),
+        "close-session failed: {}",
+        stderr(&close)
+    );
 
     // An autosave checkpoint should now exist for this profile
     let ckpts_out = run_live(&["list-session-checkpoints", "--profile", &profile]);
-    assert!(ckpts_out.status.success(), "list-session-checkpoints failed: {}", stderr(&ckpts_out));
+    assert!(
+        ckpts_out.status.success(),
+        "list-session-checkpoints failed: {}",
+        stderr(&ckpts_out)
+    );
     let ckpts: serde_json::Value = serde_json::from_str(&stdout(&ckpts_out)).unwrap();
-    let data = ckpts["data"].as_array()
+    let data = ckpts["data"]
+        .as_array()
         .or_else(|| ckpts["result"]["data"].as_array())
         .expect("expected data array in list-session-checkpoints output");
-    assert!(!data.is_empty(), "auto-checkpoint should be written on close");
+    assert!(
+        !data.is_empty(),
+        "auto-checkpoint should be written on close"
+    );
     let name = data[0]["name"].as_str().unwrap_or("");
-    assert!(name.starts_with("Autosave"), "checkpoint should be named Autosave · …, got: {:?}", name);
+    assert!(
+        name.starts_with("Autosave"),
+        "checkpoint should be named Autosave · …, got: {:?}",
+        name
+    );
 }
 
 /// With TCP-only transport, Chrome survives daemon restart.
@@ -2876,7 +3001,11 @@ fn test_session_reattach_after_daemon_restart() {
 
     // Open a session
     let open = run_live(&["open-session", &profile]);
-    assert!(open.status.success(), "open-session failed: {}", stderr(&open));
+    assert!(
+        open.status.success(),
+        "open-session failed: {}",
+        stderr(&open)
+    );
 
     // Stop daemon — Chrome stays running (TCP-only, no pipe coupling)
     daemon.drop_keep_chrome();
@@ -2889,22 +3018,29 @@ fn test_session_reattach_after_daemon_restart() {
 
     // Session should be back as alive (possibly new session_id, but profile present)
     let list = run_live(&["list-sessions"]);
-    assert!(list.status.success(), "list-sessions failed: {}", stderr(&list));
+    assert!(
+        list.status.success(),
+        "list-sessions failed: {}",
+        stderr(&list)
+    );
     let lv: serde_json::Value = serde_json::from_str(&stdout(&list)).unwrap();
-    let data = lv["data"].as_array()
+    let data = lv["data"]
+        .as_array()
         .or_else(|| lv["result"]["data"].as_array())
         .expect("expected data array in list-sessions output");
     assert!(
         data.iter().any(|s| {
-            s["profile"].as_str() == Some(&profile)
-                && s["status"].as_str() == Some("alive")
+            s["profile"].as_str() == Some(&profile) && s["status"].as_str() == Some("alive")
         }),
         "session should be reattached after daemon restart, got: {:?}",
         data
     );
 
     // Cleanup: close the reattached session
-    if let Some(s) = data.iter().find(|s| s["profile"].as_str() == Some(&profile)) {
+    if let Some(s) = data
+        .iter()
+        .find(|s| s["profile"].as_str() == Some(&profile))
+    {
         let sid = s["id"].as_str().unwrap();
         run_live(&["close-session", sid]);
     }

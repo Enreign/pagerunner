@@ -81,26 +81,24 @@ async fn wait_for_chrome_ws_url(debug_port: u16) -> crate::error::Result<String>
         .map_err(|e| crate::error::PagerunnerError::Config(e.to_string()))?;
 
     for attempt in 0..50 {
-        match client.get(&version_url).send().await {
-            Ok(resp) => {
-                if let Ok(json) = resp.json::<serde_json::Value>().await {
-                    if let Some(ws_url) = json["webSocketDebuggerUrl"].as_str() {
-                        tracing::debug!(
-                            port = debug_port,
-                            attempts = attempt + 1,
-                            "Chrome TCP endpoint ready"
-                        );
-                        return Ok(ws_url.to_string());
-                    }
+        if let Ok(resp) = client.get(&version_url).send().await {
+            if let Ok(json) = resp.json::<serde_json::Value>().await {
+                if let Some(ws_url) = json["webSocketDebuggerUrl"].as_str() {
+                    tracing::debug!(
+                        port = debug_port,
+                        attempts = attempt + 1,
+                        "Chrome TCP endpoint ready"
+                    );
+                    return Ok(ws_url.to_string());
                 }
             }
-            Err(_) => {}
         }
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
     }
 
     Err(crate::error::PagerunnerError::Config(format!(
-        "Chrome did not respond on port {} after 5 seconds", debug_port
+        "Chrome did not respond on port {} after 5 seconds",
+        debug_port
     )))
 }
 
@@ -137,17 +135,27 @@ impl SessionManager {
                     let site_store_clone = site_store.clone();
 
                     // Open a new Chrome window within the existing process
-                    let result = cdp.send("Target.createTarget", serde_json::json!({
-                        "url": "about:blank",
-                        "newWindow": true
-                    })).await?;
+                    let result = cdp
+                        .send(
+                            "Target.createTarget",
+                            serde_json::json!({
+                                "url": "about:blank",
+                                "newWindow": true
+                            }),
+                        )
+                        .await?;
                     let root_target_id = result["targetId"]
                         .as_str()
-                        .ok_or_else(|| crate::error::PagerunnerError::Cdp("No targetId from createTarget newWindow".into()))?
+                        .ok_or_else(|| {
+                            crate::error::PagerunnerError::Cdp(
+                                "No targetId from createTarget newWindow".into(),
+                            )
+                        })?
                         .to_string();
 
                     let id = Uuid::new_v4().to_string();
-                    let cdp_sessions_rev = std::sync::Arc::new(std::sync::RwLock::new(HashMap::new()));
+                    let cdp_sessions_rev =
+                        std::sync::Arc::new(std::sync::RwLock::new(HashMap::new()));
                     let mut owned_targets = std::collections::HashSet::new();
                     owned_targets.insert(root_target_id);
 
@@ -155,69 +163,72 @@ impl SessionManager {
                     let cdp_for_processor = cdp.clone();
                     let session_id_for_processor = id.clone();
                     let rev_map = cdp_sessions_rev.clone();
-                    let processor_handle = tokio::spawn(crate::network_log::network_event_processor(
-                        events_rx,
-                        cdp_for_processor,
-                        session_id_for_processor,
-                        db_for_processor,
-                        rev_map,
-                        network_config_capacity,
-                        site_store_clone,
-                    ));
+                    let processor_handle =
+                        tokio::spawn(crate::network_log::network_event_processor(
+                            events_rx,
+                            cdp_for_processor,
+                            session_id_for_processor,
+                            db_for_processor,
+                            rev_map,
+                            network_config_capacity,
+                            site_store_clone,
+                        ));
 
                     let events_rx2 = cdp.subscribe_events();
                     let console_buffer = crate::console_log::new_buffer();
                     let console_buffer_for_proc = console_buffer.clone();
                     let rev_map2 = cdp_sessions_rev.clone();
-                    let console_processor_handle = tokio::spawn(crate::console_log::console_event_processor(
-                        events_rx2,
-                        console_buffer_for_proc,
-                        rev_map2,
-                    ));
+                    let console_processor_handle =
+                        tokio::spawn(crate::console_log::console_event_processor(
+                            events_rx2,
+                            console_buffer_for_proc,
+                            rev_map2,
+                        ));
 
                     let tab_urls: TabUrlMap = Arc::new(RwLock::new(HashMap::new()));
                     let events_rx3 = cdp.subscribe_events();
                     let rev_map3 = cdp_sessions_rev.clone();
                     let tab_urls_for_proc = tab_urls.clone();
-                    let frame_nav_handle = tokio::spawn(frame_nav_processor(
-                        events_rx3,
-                        rev_map3,
-                        tab_urls_for_proc,
-                    ));
+                    let frame_nav_handle =
+                        tokio::spawn(frame_nav_processor(events_rx3, rev_map3, tab_urls_for_proc));
 
-                    self.sessions.insert(id.clone(), Session {
-                        id: id.clone(),
-                        profile_name: profile.name.clone(),
-                        profile_display_name: profile.display_name.clone(),
-                        stealth,
-                        alive: true,
-                        debug_port: 0,
-                        chrome: None,
-                        owns_process: false,
-                        is_attached: false,
-                        owned_targets,
-                        primary_session_id: Some(primary_id),
-                        cdp,
-                        cdp_sessions: HashMap::new(),
-                        security_policy,
-                        nav_count: 0,
-                        tab_urls,
-                        anon_config: None,
-                        _reader_task: tokio::spawn(async {}), // secondary: reader already running in primary
-                        cdp_sessions_rev,
-                        _network_processor: Some(processor_handle),
-                        network_enabled: false,
-                        console_buffer,
-                        _console_processor: Some(console_processor_handle),
-                        _frame_nav_processor: Some(frame_nav_handle),
-                    });
+                    self.sessions.insert(
+                        id.clone(),
+                        Session {
+                            id: id.clone(),
+                            profile_name: profile.name.clone(),
+                            profile_display_name: profile.display_name.clone(),
+                            stealth,
+                            alive: true,
+                            debug_port: 0,
+                            chrome: None,
+                            owns_process: false,
+                            is_attached: false,
+                            owned_targets,
+                            primary_session_id: Some(primary_id),
+                            cdp,
+                            cdp_sessions: HashMap::new(),
+                            security_policy,
+                            nav_count: 0,
+                            tab_urls,
+                            anon_config: None,
+                            _reader_task: tokio::spawn(async {}), // secondary: reader already running in primary
+                            cdp_sessions_rev,
+                            _network_processor: Some(processor_handle),
+                            network_enabled: false,
+                            console_buffer,
+                            _console_processor: Some(console_processor_handle),
+                            _frame_nav_processor: Some(frame_nav_handle),
+                        },
+                    );
                     return Ok(id);
                 }
             }
         }
 
-        let user_data_dir = profile.user_data_dir.as_deref()
-            .ok_or_else(|| crate::error::PagerunnerError::Config("Profile has no user_data_dir".into()))?;
+        let user_data_dir = profile.user_data_dir.as_deref().ok_or_else(|| {
+            crate::error::PagerunnerError::Config("Profile has no user_data_dir".into())
+        })?;
         let result = crate::chrome::ChromeProcess::spawn(user_data_dir, stealth).await?;
         // Connect to Chrome via TCP WebSocket (same path as attach_session)
         let ws_url = wait_for_chrome_ws_url(result.debug_port).await?;
@@ -263,7 +274,8 @@ impl SessionManager {
 
         // Collect initial tabs before inserting the session
         let initial_tabs = crate::browser::list_tabs(&cdp).await.unwrap_or_default();
-        let owned_targets: std::collections::HashSet<String> = initial_tabs.iter().map(|t| t.target_id.clone()).collect();
+        let owned_targets: std::collections::HashSet<String> =
+            initial_tabs.iter().map(|t| t.target_id.clone()).collect();
 
         self.sessions.insert(
             id.clone(),
@@ -294,7 +306,8 @@ impl SessionManager {
                 _frame_nav_processor: Some(frame_nav_processor_handle),
             },
         );
-        self.profile_primary.insert(profile.name.clone(), id.clone());
+        self.profile_primary
+            .insert(profile.name.clone(), id.clone());
         Ok(id)
     }
 
@@ -314,21 +327,28 @@ impl SessionManager {
         let version_url = format!("{}/json/version", debug_url.trim_end_matches('/'));
         let version: serde_json::Value = reqwest::get(&version_url)
             .await
-            .map_err(|e| crate::error::PagerunnerError::Config(
-                format!("Cannot reach Chrome at {}: {}", debug_url, e)
-            ))?
+            .map_err(|e| {
+                crate::error::PagerunnerError::Config(format!(
+                    "Cannot reach Chrome at {}: {}",
+                    debug_url, e
+                ))
+            })?
             .json()
             .await
-            .map_err(|e| crate::error::PagerunnerError::Config(
-                format!("Bad response from Chrome at {}: {}", debug_url, e)
-            ))?;
+            .map_err(|e| {
+                crate::error::PagerunnerError::Config(format!(
+                    "Bad response from Chrome at {}: {}",
+                    debug_url, e
+                ))
+            })?;
 
-        let ws_url_raw = version["webSocketDebuggerUrl"]
-            .as_str()
-            .ok_or_else(|| crate::error::PagerunnerError::Config(
+        let ws_url_raw = version["webSocketDebuggerUrl"].as_str().ok_or_else(|| {
+            crate::error::PagerunnerError::Config(
                 "No webSocketDebuggerUrl in Chrome /json/version response — \
-                 is Chrome running with --remote-debugging-port?".into()
-            ))?;
+                 is Chrome running with --remote-debugging-port?"
+                    .into(),
+            )
+        })?;
 
         // Chrome behind a proxy (VM, gvproxy) returns a webSocketDebuggerUrl
         // with no port (e.g. `ws://localhost/devtools/browser/...`). Rewrite
@@ -408,38 +428,38 @@ impl SessionManager {
         let events_rx3 = cdp.subscribe_events();
         let rev_map3 = cdp_sessions_rev.clone();
         let tab_urls_for_proc = tab_urls.clone();
-        let frame_nav_handle = tokio::spawn(frame_nav_processor(
-            events_rx3,
-            rev_map3,
-            tab_urls_for_proc,
-        ));
+        let frame_nav_handle =
+            tokio::spawn(frame_nav_processor(events_rx3, rev_map3, tab_urls_for_proc));
 
-        self.sessions.insert(id.clone(), Session {
-            id: id.clone(),
-            profile_name,
-            profile_display_name: display_name,
-            stealth: false,
-            alive: true,
-            debug_port: 0,
-            chrome: None,
-            owns_process: false,
-            is_attached: true,
-            owned_targets,
-            primary_session_id: None,
-            cdp,
-            cdp_sessions: HashMap::new(),
-            security_policy: None,
-            nav_count: 0,
-            tab_urls,
-            anon_config: None,
-            _reader_task: reader_task,
-            cdp_sessions_rev,
-            _network_processor: Some(processor_handle),
-            network_enabled: false,
-            console_buffer,
-            _console_processor: Some(console_processor_handle),
-            _frame_nav_processor: Some(frame_nav_handle),
-        });
+        self.sessions.insert(
+            id.clone(),
+            Session {
+                id: id.clone(),
+                profile_name,
+                profile_display_name: display_name,
+                stealth: false,
+                alive: true,
+                debug_port: 0,
+                chrome: None,
+                owns_process: false,
+                is_attached: true,
+                owned_targets,
+                primary_session_id: None,
+                cdp,
+                cdp_sessions: HashMap::new(),
+                security_policy: None,
+                nav_count: 0,
+                tab_urls,
+                anon_config: None,
+                _reader_task: reader_task,
+                cdp_sessions_rev,
+                _network_processor: Some(processor_handle),
+                network_enabled: false,
+                console_buffer,
+                _console_processor: Some(console_processor_handle),
+                _frame_nav_processor: Some(frame_nav_handle),
+            },
+        );
 
         Ok(id)
     }
@@ -455,14 +475,19 @@ impl SessionManager {
         } else if !session.owns_process {
             // Secondary session: close all owned tabs, don't kill Chrome
             for target_id in &session.owned_targets {
-                let _ = session.cdp
-                    .send("Target.closeTarget", serde_json::json!({ "targetId": target_id }))
+                let _ = session
+                    .cdp
+                    .send(
+                        "Target.closeTarget",
+                        serde_json::json!({ "targetId": target_id }),
+                    )
                     .await;
             }
         } else {
             // Primary session: remove all secondary sessions for this profile first
             let profile = session.profile_name.clone();
-            let secondary_ids: Vec<String> = self.sessions
+            let secondary_ids: Vec<String> = self
+                .sessions
                 .values()
                 .filter(|s| s.profile_name == profile && !s.owns_process)
                 .map(|s| s.id.clone())
@@ -481,10 +506,9 @@ impl SessionManager {
                     .send("Browser.close", serde_json::json!({}))
                     .await;
                 if let Some(ref mut chrome) = session.chrome {
-                    let graceful = tokio::time::timeout(
-                        std::time::Duration::from_secs(3),
-                        chrome.wait(),
-                    ).await;
+                    let graceful =
+                        tokio::time::timeout(std::time::Duration::from_secs(3), chrome.wait())
+                            .await;
                     if graceful.is_err() {
                         chrome.kill().await?;
                     }
@@ -521,7 +545,9 @@ impl SessionManager {
         // Abort background tasks for newly-detected crashed sessions so their
         // event-loop awaits (events.recv()) are cancelled immediately.
         for session in self.sessions.values_mut() {
-            if !session.alive { continue; }
+            if !session.alive {
+                continue;
+            }
             let crashed = if session.owns_process {
                 !session.is_chrome_running()
             } else {
@@ -532,13 +558,21 @@ impl SessionManager {
             if crashed {
                 session.alive = false;
                 session._reader_task.abort();
-                if let Some(ref h) = session._network_processor   { h.abort(); }
-                if let Some(ref h) = session._console_processor   { h.abort(); }
-                if let Some(ref h) = session._frame_nav_processor { h.abort(); }
+                if let Some(ref h) = session._network_processor {
+                    h.abort();
+                }
+                if let Some(ref h) = session._console_processor {
+                    h.abort();
+                }
+                if let Some(ref h) = session._frame_nav_processor {
+                    h.abort();
+                }
             }
         }
         // Secondary sessions whose primary is dead also become dead.
-        let dead_primaries: std::collections::HashSet<String> = self.sessions.values()
+        let dead_primaries: std::collections::HashSet<String> = self
+            .sessions
+            .values()
             .filter(|s| !s.alive && s.owns_process)
             .map(|s| s.id.clone())
             .collect();
@@ -588,7 +622,8 @@ impl SessionManager {
 
         // For secondary sessions, check if the primary session is still alive
         if !session.owns_process {
-            let primary_alive = session.primary_session_id
+            let primary_alive = session
+                .primary_session_id
                 .as_ref()
                 .and_then(|pid| self.sessions.get(pid))
                 .map(|p| p.alive)
