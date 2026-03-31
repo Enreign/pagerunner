@@ -255,7 +255,8 @@ jobs:
         run: |
           VERSION="${TAG#v}"
           # Check if this version is already on crates.io — if so, skip gracefully
-          if curl -sf "https://crates.io/api/v1/crates/pagerunner/${VERSION}" > /dev/null 2>&1; then
+          # crates.io requires a User-Agent header; without it requests return 403
+          if curl -sf -A "pagerunner-release-ci/1.0" "https://crates.io/api/v1/crates/pagerunner/${VERSION}" > /dev/null 2>&1; then
             echo "pagerunner@${VERSION} already on crates.io — skipping"
           else
             cargo publish --locked --token ${{ secrets.CRATES_IO_TOKEN }}
