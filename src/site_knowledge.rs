@@ -341,20 +341,30 @@ mod tests {
             ..Default::default()
         };
         let ninety_one_days_micros: u64 = 91 * 24 * 60 * 60 * 1_000_000;
-        assert!(SiteKnowledgeStore::is_expired(&entry, ninety_one_days_micros, 90));
+        assert!(SiteKnowledgeStore::is_expired(
+            &entry,
+            ninety_one_days_micros,
+            90
+        ));
     }
 
     #[test]
     fn is_expired_false_within_90_days() {
         let now = now_micros();
-        let entry = SiteKnowledgeEntry { last_updated: now, ..Default::default() };
+        let entry = SiteKnowledgeEntry {
+            last_updated: now,
+            ..Default::default()
+        };
         assert!(!SiteKnowledgeStore::is_expired(&entry, now, 90));
     }
 
     #[test]
     fn is_expired_false_when_ttl_days_zero() {
         // ttl_days == 0 means indefinite — never expires even if very old
-        let entry = SiteKnowledgeEntry { last_updated: 0, ..Default::default() };
+        let entry = SiteKnowledgeEntry {
+            last_updated: 0,
+            ..Default::default()
+        };
         let very_old: u64 = 1000 * 24 * 60 * 60 * 1_000_000;
         assert!(!SiteKnowledgeStore::is_expired(&entry, very_old, 0));
     }

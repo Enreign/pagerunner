@@ -346,7 +346,10 @@ user_data_dir = "/tmp/chrome-test"
         let config: PagerunnerConfig = toml::from_str(toml).unwrap();
         assert_eq!(config.profiles.len(), 1);
         assert_eq!(config.profiles[0].name, "test");
-        assert_eq!(config.profiles[0].user_data_dir.as_deref(), Some("/tmp/chrome-test"));
+        assert_eq!(
+            config.profiles[0].user_data_dir.as_deref(),
+            Some("/tmp/chrome-test")
+        );
     }
 
     #[test]
@@ -584,7 +587,10 @@ display_name = "Personal"
 user_data_dir = "/tmp/chrome"
 "#;
         let cfg: PagerunnerConfig = toml::from_str(toml).unwrap();
-        assert_eq!(cfg.profiles[0].user_data_dir.as_deref(), Some("/tmp/chrome"));
+        assert_eq!(
+            cfg.profiles[0].user_data_dir.as_deref(),
+            Some("/tmp/chrome")
+        );
         assert!(cfg.profiles[0].debug_port.is_none());
     }
 }

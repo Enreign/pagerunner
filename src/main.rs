@@ -20,8 +20,8 @@ mod init;
 mod ipc;
 mod mcp_server;
 mod network_guard;
-pub mod notification;
 mod network_log;
+pub mod notification;
 mod sanitizer;
 mod schema_inference;
 mod security;
@@ -618,7 +618,11 @@ async fn run() -> anyhow::Result<()> {
         Commands::Profiles => {
             let config = config::PagerunnerConfig::load()?;
             for p in &config.profiles {
-                println!("{}: {}", p.name, p.user_data_dir.as_deref().unwrap_or("(attached)"));
+                println!(
+                    "{}: {}",
+                    p.name,
+                    p.user_data_dir.as_deref().unwrap_or("(attached)")
+                );
             }
         }
         Commands::ExampleConfig => {
@@ -781,7 +785,11 @@ async fn run() -> anyhow::Result<()> {
             )
             .await?;
         }
-        Commands::AttachSession { debug_port, debug_url, profile } => {
+        Commands::AttachSession {
+            debug_port,
+            debug_url,
+            profile,
+        } => {
             let config = config::PagerunnerConfig::load()?;
             let mut args = serde_json::json!({});
             if let Some(port) = debug_port {
@@ -789,7 +797,9 @@ async fn run() -> anyhow::Result<()> {
             } else if let Some(url) = debug_url {
                 args["debug_url"] = serde_json::json!(url);
             } else {
-                eprintln!("error: attach-session requires --debug-port <PORT> or --debug-url <URL>");
+                eprintln!(
+                    "error: attach-session requires --debug-port <PORT> or --debug-url <URL>"
+                );
                 std::process::exit(1);
             }
             if let Some(p) = profile {
@@ -847,7 +857,10 @@ async fn run() -> anyhow::Result<()> {
             )
             .await?;
         }
-        Commands::CloseTab { session_id, target_id } => {
+        Commands::CloseTab {
+            session_id,
+            target_id,
+        } => {
             let config = config::PagerunnerConfig::load()?;
             crate::cli_tools::run_tool(
                 "close_tab",
@@ -1107,7 +1120,10 @@ async fn run() -> anyhow::Result<()> {
             )
             .await?;
         }
-        Commands::RestoreSessionCheckpoint { session_id, checkpoint_id } => {
+        Commands::RestoreSessionCheckpoint {
+            session_id,
+            checkpoint_id,
+        } => {
             let config = config::PagerunnerConfig::load()?;
             crate::cli_tools::run_tool(
                 "restore_session_checkpoint",
@@ -1127,7 +1143,10 @@ async fn run() -> anyhow::Result<()> {
             )
             .await?;
         }
-        Commands::DeleteSessionCheckpoint { profile, checkpoint_id } => {
+        Commands::DeleteSessionCheckpoint {
+            profile,
+            checkpoint_id,
+        } => {
             let config = config::PagerunnerConfig::load()?;
             crate::cli_tools::run_tool(
                 "delete_session_checkpoint",

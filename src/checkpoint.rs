@@ -1,6 +1,6 @@
-use serde::{Deserialize, Serialize};
 use crate::db::Db;
 use crate::error::Result;
+use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct CheckpointTab {
@@ -12,7 +12,7 @@ pub struct CheckpointTab {
 pub struct SessionCheckpoint {
     pub checkpoint_id: String,
     pub name: String,
-    pub saved_at: u64,   // Unix seconds
+    pub saved_at: u64, // Unix seconds
     pub profile: String,
     pub tabs: Vec<CheckpointTab>,
 }
@@ -28,17 +28,17 @@ pub fn checkpoint_profile_prefix(profile: &str) -> String {
 }
 
 pub fn save_checkpoint(db: &Db, checkpoint: &SessionCheckpoint) -> Result<()> {
-    let key = checkpoint_key(&checkpoint.profile, checkpoint.saved_at, &checkpoint.checkpoint_id);
+    let key = checkpoint_key(
+        &checkpoint.profile,
+        checkpoint.saved_at,
+        &checkpoint.checkpoint_id,
+    );
     let bytes = serde_json::to_vec(checkpoint)
         .map_err(|e| crate::error::PagerunnerError::Config(e.to_string()))?;
     db.put("checkpoints", &key, &bytes)
 }
 
-pub fn load_checkpoint(
-    db: &Db,
-    profile: &str,
-    checkpoint_id: &str,
-) -> Result<SessionCheckpoint> {
+pub fn load_checkpoint(db: &Db, profile: &str, checkpoint_id: &str) -> Result<SessionCheckpoint> {
     let prefix = checkpoint_profile_prefix(profile);
     let entries = db.scan_prefix("checkpoints", &prefix)?;
     for (_, bytes) in entries {
@@ -120,7 +120,9 @@ pub async fn save_session_checkpoint(
 
     for tab in &tabs {
         if let Some(origin) = extract_origin(&tab.url) {
-            seen_origins.entry(origin.clone()).or_insert_with(|| tab.target_id.clone());
+            seen_origins
+                .entry(origin.clone())
+                .or_insert_with(|| tab.target_id.clone());
             checkpoint_tabs.push(CheckpointTab {
                 url: tab.url.clone(),
                 origin: origin.clone(),
@@ -130,7 +132,10 @@ pub async fn save_session_checkpoint(
 
     // Step 4: save snapshot for each unique origin (best-effort)
     for (origin, target_id) in &seen_origins {
-        if let Err(e) = crate::snapshot::save_snapshot(session, target_id, origin, db, max_snapshot_versions).await {
+        if let Err(e) =
+            crate::snapshot::save_snapshot(session, target_id, origin, db, max_snapshot_versions)
+                .await
+        {
             tracing::warn!(origin = %origin, error = %e, "save_session_checkpoint: snapshot failed");
         }
     }
@@ -216,7 +221,9 @@ pub async fn restore_session_checkpoint(
     let mut seen_origins = std::collections::HashSet::new();
     for (target_id, origin) in &opened {
         if seen_origins.insert(origin.clone()) {
-            if let Ok(()) = crate::snapshot::restore_snapshot(session, target_id, origin, None, db).await {
+            if let Ok(()) =
+                crate::snapshot::restore_snapshot(session, target_id, origin, None, db).await
+            {
                 snapshots_restored += 1;
             }
         }
@@ -254,8 +261,14 @@ mod tests {
             saved_at: 1711500000,
             profile: "personal".into(),
             tabs: vec![
-                CheckpointTab { url: "https://github.com/foo".into(), origin: "https://github.com".into() },
-                CheckpointTab { url: "https://linear.app/team".into(), origin: "https://linear.app".into() },
+                CheckpointTab {
+                    url: "https://github.com/foo".into(),
+                    origin: "https://github.com".into(),
+                },
+                CheckpointTab {
+                    url: "https://linear.app/team".into(),
+                    origin: "https://linear.app".into(),
+                },
             ],
         };
         save_checkpoint(&db, &ckpt).unwrap();

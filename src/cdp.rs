@@ -164,20 +164,16 @@ async fn reader_task(read_fd: tokio::fs::File, inner: std::sync::Arc<CdpInner>) 
         let mut buf = Vec::new();
         loop {
             let mut byte = [0u8; 1];
-            match reader.read_exact(&mut byte).await {
-                Err(_) => {
-                    // Pipe closed — mark closed, then unblock all pending send() callers.
-                    inner.closed.store(true, Ordering::Release);
-                    if let Ok(mut pending) = inner.pending.lock() {
-                        for (_, tx) in pending.drain() {
-                            let _ = tx.send(Err(PagerunnerError::Cdp(
-                                "Chrome connection closed".into(),
-                            )));
-                        }
+            if reader.read_exact(&mut byte).await.is_err() {
+                // Pipe closed — mark closed, then unblock all pending send() callers.
+                inner.closed.store(true, Ordering::Release);
+                if let Ok(mut pending) = inner.pending.lock() {
+                    for (_, tx) in pending.drain() {
+                        let _ =
+                            tx.send(Err(PagerunnerError::Cdp("Chrome connection closed".into())));
                     }
-                    return;
                 }
-                Ok(_) => {}
+                return;
             }
             if byte[0] == b'\0' {
                 break;

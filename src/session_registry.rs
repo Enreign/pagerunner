@@ -71,7 +71,10 @@ pub async fn reconcile_sessions(
         return vec![];
     }
 
-    tracing::info!("Session registry: {} entries, attempting reattach", entries.len());
+    tracing::info!(
+        "Session registry: {} entries, attempting reattach",
+        entries.len()
+    );
     let mut reattached = Vec::new();
 
     for entry in entries {
@@ -85,7 +88,8 @@ pub async fn reconcile_sessions(
                 std::sync::Arc::clone(db),
                 &config.network,
                 site_store.clone(),
-            ).await
+            )
+            .await
         };
 
         match result {
@@ -132,10 +136,7 @@ mod tests {
 
     fn make_db() -> (Db, tempfile::TempDir) {
         let dir = tempdir().unwrap();
-        let db = Db::open_with_key(
-            dir.path().join("t.db").to_str().unwrap(),
-            [0u8; 32],
-        ).unwrap();
+        let db = Db::open_with_key(dir.path().join("t.db").to_str().unwrap(), [0u8; 32]).unwrap();
         (db, dir)
     }
 
@@ -214,7 +215,10 @@ mod tests {
     fn test_overwrite_entry() {
         let (db, _dir) = make_db();
         save_entry(&db, &make_entry("sess-ow", 1000)).unwrap();
-        let updated = SessionRegistryEntry { debug_port: 2000, ..make_entry("sess-ow", 1000) };
+        let updated = SessionRegistryEntry {
+            debug_port: 2000,
+            ..make_entry("sess-ow", 1000)
+        };
         save_entry(&db, &updated).unwrap();
         let loaded = load_entry(&db, "sess-ow").unwrap().unwrap();
         assert_eq!(loaded.debug_port, 2000);
