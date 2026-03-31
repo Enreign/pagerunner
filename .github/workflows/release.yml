@@ -207,6 +207,13 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
+          # Skip if a PR already exists for this version
+          EXISTING=$(gh pr list --repo Enreign/homebrew-pagerunner --head "${BRANCH}" --json number --jq '.[0].number // empty')
+          if [ -n "${EXISTING}" ]; then
+            echo "PR #${EXISTING} already exists for ${BRANCH} — skipping"
+            exit 0
+          fi
+
           git checkout -b "${BRANCH}"
           git add Formula/pagerunner.rb
           git commit -m "pagerunner ${VERSION}"
@@ -238,8 +245,9 @@ jobs:
 
       - name: Install mcp-publisher
         run: |
-          curl -fsSL https://github.com/modelcontextprotocol/registry/releases/latest/download/mcp-publisher-linux-amd64 \
-            -o /usr/local/bin/mcp-publisher && chmod +x /usr/local/bin/mcp-publisher
+          curl -fsSL https://github.com/modelcontextprotocol/registry/releases/latest/download/mcp-publisher_linux_amd64.tar.gz \
+            | tar -xz -C /usr/local/bin mcp-publisher
+          chmod +x /usr/local/bin/mcp-publisher
 
       - name: Update server.json version
         env:
