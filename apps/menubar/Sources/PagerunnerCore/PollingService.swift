@@ -44,6 +44,7 @@ public final class PollingService {
     private var currentTask: Task<Void, Never>?
     private var panelVisible = false
     private let pollHandler: PollHandler
+    private var isPolling = false
 
     public init(pollHandler: @escaping PollHandler) {
         self.pollHandler = pollHandler
@@ -82,7 +83,12 @@ public final class PollingService {
                 try? await Task.sleep(for: .seconds(interval))
             }
             while !Task.isCancelled {
-                await self?.pollHandler()
+                guard let self else { return }
+                if !self.isPolling {
+                    self.isPolling = true
+                    await self.pollHandler()
+                    self.isPolling = false
+                }
                 try? await Task.sleep(for: .seconds(interval))
             }
         }

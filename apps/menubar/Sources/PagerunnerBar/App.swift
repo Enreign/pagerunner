@@ -117,7 +117,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                       let session = try? JSONDecoder().decode(Session.self, from: jsonData) else { return nil }
                 return session
             }
-            appState.sessions = sessions
+            appState.updateSessions(sessions)
             // Track which sessions have ever been alive
             for s in sessions where s.status == .alive {
                 appState.everAliveSessions.insert(s.id)

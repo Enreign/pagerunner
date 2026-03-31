@@ -206,4 +206,86 @@ struct PollRegressionTests {
         #expect(state.tabs["s1"]?.count == 1)
         #expect(state.tabs["s1"]?.first?.targetId == "new")
     }
+
+    // MARK: AppState.updateSessions unit tests
+
+    @Test("updateSessions: empty list preserves existing sessions")
+    func updateSessionsEmptyPreservesExisting() {
+        let state = AppState()
+        let session = Session(id: "s1", profile: "personal", displayName: "Personal", stealth: false, status: .alive)
+        state.sessions = [session]
+
+        state.updateSessions([])
+
+        #expect(state.sessions.count == 1)
+        #expect(state.sessions.first?.id == "s1")
+    }
+
+    @Test("updateSessions: non-empty list replaces sessions")
+    func updateSessionsNonEmptyReplaces() {
+        let state = AppState()
+        let old = Session(id: "s1", profile: "personal", displayName: "Personal", stealth: false, status: .alive)
+        let new = Session(id: "s2", profile: "work", displayName: "Work", stealth: false, status: .alive)
+        state.sessions = [old]
+
+        state.updateSessions([new])
+
+        #expect(state.sessions.count == 1)
+        #expect(state.sessions.first?.id == "s2")
+    }
+
+    @Test("updateSessions: removes tabs for sessions that disappeared")
+    func updateSessionsCleansUpDeadTabs() {
+        let state = AppState()
+        let tab = Tab(targetId: "t1", url: "https://example.com", title: "Example")
+        state.tabs["dead-session"] = [tab]
+        state.tabs["live-session"] = [tab]
+
+        let live = Session(id: "live-session", profile: "p", displayName: "P", stealth: false, status: .alive)
+        state.updateSessions([live])
+
+        #expect(state.tabs["dead-session"] == nil)
+        #expect(state.tabs["live-session"] != nil)
+    }
+
+    @Test("updateSessions: empty initial state accepts empty list")
+    func updateSessionsEmptyToEmpty() {
+        let state = AppState()
+        #expect(state.sessions.isEmpty)
+
+        state.updateSessions([])
+
+        #expect(state.sessions.isEmpty)
+    }
+}
+
+// MARK: - PollingService concurrency tests
+
+@Suite("PollingService concurrency")
+@MainActor
+struct PollingServiceConcurrencyTests {
+
+    @Test("concurrent poll guard: second call skipped while first is in flight")
+    func concurrentPollGuardSkipsSecondCall() async {
+        // Use a counter to track how many times the handler actually ran to completion
+        actor Counter { var n = 0; func inc() { n += 1 } }
+        let counter = Counter()
+
+        // A poll handler that takes 200ms (simulates a slow poll)
+        let service = PollingService { @MainActor in
+            try? await Task.sleep(for: .milliseconds(200))
+            await counter.inc()
+        }
+        service.start()  // starts with immediate: true — first poll fires immediately
+
+        // Immediately trigger a second loop (simulates panel open while first poll in flight)
+        service.panelDidOpen()
+
+        // Wait enough time for at most 1 poll to complete (300ms > 200ms handler but < 2 polls)
+        try? await Task.sleep(for: .milliseconds(300))
+        service.stop()
+
+        // Only 1 completion — the in-flight poll was not interrupted or doubled
+        #expect(await counter.n == 1)
+    }
 }
