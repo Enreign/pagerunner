@@ -7,6 +7,27 @@ use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::sync::Mutex;
 
+/// DB table for secrets sealed from LLM access. Readable only via CLI `use-secret`.
+pub const SEALED_SECRETS_TABLE: &str = "sealed_secrets";
+
+/// Validate a secret name: alphanumeric, hyphens, underscores only; 1–64 chars.
+fn validate_secret_name(name: &str) -> Result<()> {
+    if name.is_empty() || name.len() > 64 {
+        return Err(PagerunnerError::Config(
+            "secret name must be 1–64 characters".into(),
+        ));
+    }
+    if !name
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+    {
+        return Err(PagerunnerError::Config(
+            "secret name may only contain alphanumeric characters, hyphens, and underscores".into(),
+        ));
+    }
+    Ok(())
+}
+
 /// Response from a tool call, including the result and optional semantic metadata.
 #[derive(Debug, Clone)]
 pub struct ToolResponse {
@@ -67,7 +88,7 @@ pub fn all_tools() -> Vec<Value> {
                     "anonymization_entities": {
                         "type": "array",
                         "items": { "type": "string" },
-                        "description": "Entity types to detect inline, e.g. [\"EMAIL\", \"PHONE\", \"CREDIT_CARD\", \"IBAN\", \"SSN\", \"IP\"]. Mutually exclusive with anonymization_profile."
+                        "description": "Entity types to detect inline, e.g. [\"EMAIL\", \"PHONE\", \"CREDIT_CARD\", \"IBAN\", \"SSN\", \"IP\", \"SECRET\"]. SECRET scrubs API keys and tokens (npm, GitHub, Stripe, OpenAI, AWS, etc.) before content reaches the LLM. Mutually exclusive with anonymization_profile."
                     },
                     "anonymization_mode": {
                         "type": "string",
@@ -194,9 +215,33 @@ pub fn all_tools() -> Vec<Value> {
                 "properties": {
                     "session_id": { "type": "string" },
                     "target_id": { "type": "string" },
-                    "expression": { "type": "string", "description": "JavaScript expression to evaluate" }
+                    "expression": { "type": "string", "description": "JavaScript expression to evaluate" },
+                    "store_as_secret": {
+                        "type": "string",
+                        "description": "If set, the result is stored in the sealed secret store under this name and is NOT returned to the LLM. Use to capture credentials without them passing through the model. Retrieve later with: pagerunner use-secret <name> -- <command>"
+                    }
                 },
                 "required": ["session_id", "target_id", "expression"]
+            }
+        }),
+        json!({
+            "name": "extract_secret",
+            "description": "Evaluate a JavaScript expression or CSS selector in a tab, store the result as a named secret in the sealed store, and return only the name — the value never reaches the LLM. Use this when a page shows a credential (token, API key) and you need to capture it for use in a shell command. Retrieve with: pagerunner use-secret <name> -- <command>",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "session_id": { "type": "string" },
+                    "target_id": { "type": "string" },
+                    "expression": {
+                        "type": "string",
+                        "description": "JavaScript expression whose result is the secret value. Examples: document.querySelector('.token').textContent.trim() — or any JS expression that returns the credential string."
+                    },
+                    "name": {
+                        "type": "string",
+                        "description": "Name to store the secret under (alphanumeric + hyphens/underscores, e.g. 'npm_token', 'stripe_key'). Used later with: pagerunner use-secret <name> -- <command>"
+                    }
+                },
+                "required": ["session_id", "target_id", "expression", "name"]
             }
         }),
         json!({
@@ -1301,6 +1346,7 @@ fn entity_type_from_config(
         ETC::Ip => ET::Ip,
         ETC::Person => ET::Person,
         ETC::Org => ET::Org,
+        ETC::Secret => ET::Secret,
     }
 }
 
@@ -1365,6 +1411,7 @@ fn parse_entity_type_str(s: &str) -> Result<crate::anonymizer::patterns::EntityT
                 ))
             }
         }
+        "SECRET" => Ok(ET::Secret),
         other => Err(crate::error::PagerunnerError::Config(format!(
             "unknown entity type: {}",
             other
@@ -2257,6 +2304,17 @@ async fn dispatch_tool_inner(
                             crate::config::AnonMode::Tokenize => "tokenize",
                             crate::config::AnonMode::Redact => "redact",
                         };
+                        // Dedicated SecretScrubbed event when credentials were found
+                        if let Some(&secret_count) = anon_result.entity_counts.get("SECRET") {
+                            a.record(crate::audit::AuditEvent::new(
+                                crate::audit::AuditEventKind::SecretScrubbed {
+                                    session_id: sid.to_string(),
+                                    target_id: tid.to_string(),
+                                    count: secret_count,
+                                },
+                            ))
+                            .await;
+                        }
                         a.record(crate::audit::AuditEvent::new(
                             crate::audit::AuditEventKind::ContentAnonymized {
                                 session_id: sid.to_string(),
@@ -2359,6 +2417,7 @@ async fn dispatch_tool_inner(
             let expr = args["expression"].as_str().ok_or_else(|| {
                 crate::error::PagerunnerError::Config("Missing expression".into())
             })?;
+            let store_as_secret = args["store_as_secret"].as_str();
             let mut mgr = sessions.lock().await;
             let session = mgr.get_live(sid)?;
             // Clone buffer Arc before evaluate (which mutably borrows session)
@@ -2383,6 +2442,35 @@ async fn dispatch_tool_inner(
                 Ok(v) => v,
             };
             let raw = serde_json::to_string_pretty(&result)?;
+
+            // store_as_secret: seal the value in the secret store, return only the name.
+            // The raw value never reaches the LLM.
+            if let Some(secret_name) = store_as_secret {
+                validate_secret_name(secret_name)?;
+                // Extract plain string value from JSON result (strip surrounding quotes if any)
+                let secret_value = result
+                    .as_str()
+                    .map(|s| s.to_string())
+                    .unwrap_or_else(|| raw.trim().to_string());
+                db.put(SEALED_SECRETS_TABLE, secret_name, secret_value.as_bytes())
+                    .map_err(|e| crate::error::PagerunnerError::Config(e.to_string()))?;
+                if let Some(audit) = audit {
+                    audit
+                        .record(crate::audit::AuditEvent::new(
+                            crate::audit::AuditEventKind::SecretStored {
+                                name: secret_name.to_string(),
+                                source: "store_as_secret".to_string(),
+                            },
+                        ))
+                        .await;
+                }
+                return Ok(serde_json::json!({
+                    "ok": true,
+                    "stored_as": secret_name,
+                    "hint": format!("Retrieve with: pagerunner use-secret {} -- <command>", secret_name)
+                })
+                .to_string());
+            }
 
             // Anonymization path: entity decode → anonymize (no truncation for evaluate results).
             if let Some(anon_config) = session.anon_config.clone() {
@@ -2955,6 +3043,54 @@ async fn dispatch_tool_inner(
             Ok(serde_json::json!({"ok": true}).to_string())
         }
 
+        "extract_secret" => {
+            let sid = args["session_id"].as_str().ok_or_else(|| {
+                crate::error::PagerunnerError::Config("Missing session_id".into())
+            })?;
+            let tid = args["target_id"]
+                .as_str()
+                .ok_or_else(|| crate::error::PagerunnerError::Config("Missing target_id".into()))?;
+            let expr = args["expression"].as_str().ok_or_else(|| {
+                crate::error::PagerunnerError::Config("Missing expression".into())
+            })?;
+            let name = args["name"]
+                .as_str()
+                .ok_or_else(|| crate::error::PagerunnerError::Config("Missing name".into()))?;
+            validate_secret_name(name)?;
+            let mut mgr = sessions.lock().await;
+            let session = mgr.get_live(sid)?;
+            let eval_result = browser::evaluate(session, tid, expr).await?;
+            // Extract string value; if result is a JSON string unwrap it, else serialize
+            let secret_value = eval_result
+                .as_str()
+                .map(|s| s.to_string())
+                .unwrap_or_else(|| eval_result.to_string());
+            if secret_value.trim().is_empty() {
+                return Err(crate::error::PagerunnerError::Config(
+                    "expression returned empty value — check the selector/expression".into(),
+                ));
+            }
+            db.put(SEALED_SECRETS_TABLE, name, secret_value.as_bytes())
+                .map_err(|e| crate::error::PagerunnerError::Config(e.to_string()))?;
+            if let Some(audit) = audit {
+                audit
+                    .record(crate::audit::AuditEvent::new(
+                        crate::audit::AuditEventKind::SecretStored {
+                            name: name.to_string(),
+                            source: "extract_secret".to_string(),
+                        },
+                    ))
+                    .await;
+            }
+            // Value is deliberately not returned — only the name
+            Ok(serde_json::json!({
+                "ok": true,
+                "stored_as": name,
+                "hint": format!("Retrieve with: pagerunner use-secret {} -- <command>", name)
+            })
+            .to_string())
+        }
+
         "kv_set" => {
             let ns = args["namespace"]
                 .as_str()
@@ -2962,6 +3098,11 @@ async fn dispatch_tool_inner(
             if ns.contains('/') {
                 return Err(crate::error::PagerunnerError::Config(
                     "namespace must not contain '/'".into(),
+                ));
+            }
+            if ns == "sealed_secrets" {
+                return Err(crate::error::PagerunnerError::Config(
+                    "namespace 'sealed_secrets' is reserved for the secret store — use extract_secret or store_as_secret".into(),
                 ));
             }
             let key = args["key"]
@@ -2983,6 +3124,9 @@ async fn dispatch_tool_inner(
                 return Err(crate::error::PagerunnerError::Config(
                     "namespace must not contain '/'".into(),
                 ));
+            }
+            if ns == "sealed_secrets" {
+                return Ok(serde_json::json!({"ok": false, "sealed": true, "hint": "Secret values are sealed — retrieve with: pagerunner use-secret <name> -- <command>"}).to_string());
             }
             let key = args["key"]
                 .as_str()
@@ -5031,6 +5175,95 @@ mod register_adapter_tests {
         assert!(
             permitted.is_err(),
             "call_site_api should be blocked by tool permission policy"
+        );
+    }
+
+}
+
+#[cfg(test)]
+mod secret_tests {
+    use super::*;
+    use crate::config::EntityTypeConfig;
+
+    // ── Secret entity type config mapping ─────────────────────────────────
+
+    #[test]
+    fn test_entity_type_from_config_secret() {
+        let et = entity_type_from_config(&EntityTypeConfig::Secret);
+        assert_eq!(et, crate::anonymizer::patterns::EntityType::Secret);
+    }
+
+    #[test]
+    fn test_parse_entity_type_str_secret() {
+        let et = parse_entity_type_str("SECRET");
+        assert!(et.is_ok());
+        assert_eq!(et.unwrap(), crate::anonymizer::patterns::EntityType::Secret);
+    }
+
+    // ── Sealed KV — validate_secret_name ──────────────────────────────────
+
+    #[test]
+    fn test_validate_secret_name_valid() {
+        assert!(validate_secret_name("npm_token").is_ok());
+        assert!(validate_secret_name("stripe-key").is_ok());
+        assert!(validate_secret_name("abc123").is_ok());
+        assert!(validate_secret_name("a").is_ok());
+    }
+
+    #[test]
+    fn test_validate_secret_name_empty() {
+        assert!(validate_secret_name("").is_err());
+    }
+
+    #[test]
+    fn test_validate_secret_name_too_long() {
+        assert!(validate_secret_name(&"a".repeat(65)).is_err());
+    }
+
+    #[test]
+    fn test_validate_secret_name_invalid_chars() {
+        assert!(validate_secret_name("my/secret").is_err());
+        assert!(validate_secret_name("my secret").is_err());
+        assert!(validate_secret_name("my@secret").is_err());
+    }
+
+    // ── extract_secret tool listed in all_tools ────────────────────────────
+
+    #[test]
+    fn test_extract_secret_tool_listed() {
+        let tools = all_tools();
+        assert!(
+            tools.iter().any(|t| t["name"] == "extract_secret"),
+            "extract_secret must be in all_tools()"
+        );
+    }
+
+    #[test]
+    fn test_extract_secret_tool_has_required_fields() {
+        let tools = all_tools();
+        let tool = tools.iter().find(|t| t["name"] == "extract_secret").unwrap();
+        let required = tool["inputSchema"]["required"].as_array().unwrap();
+        let req_names: Vec<&str> = required.iter().map(|v| v.as_str().unwrap()).collect();
+        assert!(req_names.contains(&"session_id"));
+        assert!(req_names.contains(&"target_id"));
+        assert!(req_names.contains(&"expression"));
+        assert!(req_names.contains(&"name"));
+    }
+
+    #[test]
+    fn test_evaluate_tool_has_store_as_secret_param() {
+        let tools = all_tools();
+        let tool = tools.iter().find(|t| t["name"] == "evaluate").unwrap();
+        assert!(
+            tool["inputSchema"]["properties"]["store_as_secret"].is_object(),
+            "evaluate must have store_as_secret property"
+        );
+        // store_as_secret is optional — not in required
+        let required = tool["inputSchema"]["required"].as_array().unwrap();
+        let req_names: Vec<&str> = required.iter().map(|v| v.as_str().unwrap()).collect();
+        assert!(
+            !req_names.contains(&"store_as_secret"),
+            "store_as_secret must not be required"
         );
     }
 }

@@ -158,6 +158,8 @@ impl AnonEngine {
                     .filter(|e| !matches!(e, EntityType::Person | EntityType::Org))
                     .cloned()
                     .collect();
+                // Note: Secret IS included in residual scan — if a secret somehow survived
+                // substitution (shouldn't happen), we want to catch it.
                 std::borrow::Cow::Owned(filtered)
             } else {
                 std::borrow::Cow::Borrowed(&self.config.entities)
@@ -187,8 +189,9 @@ pub fn entity_type_label(entity_type: &EntityType) -> String {
         EntityType::Iban => "IBAN".to_string(),
         EntityType::Ssn => "SSN".to_string(),
         EntityType::Ip => "IP".to_string(),
-        EntityType::Person => "PERSON".to_string(), // NEW
-        EntityType::Org => "ORG".to_string(),       // NEW
+        EntityType::Person => "PERSON".to_string(),
+        EntityType::Org => "ORG".to_string(),
+        EntityType::Secret => "SECRET".to_string(),
         EntityType::Custom(name) => name.clone(),
     }
 }

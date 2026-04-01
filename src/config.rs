@@ -63,8 +63,12 @@ pub enum EntityTypeConfig {
     Iban,
     Ssn,
     Ip,
-    Person, // NEW
-    Org,    // NEW
+    Person,
+    Org,
+    /// Scrub API keys, tokens, and credentials before content reaches the LLM.
+    /// Covers ~18 Tier 1 service patterns (npm, GitHub, Stripe, OpenAI, AWS, etc.)
+    /// plus JWT tokens and PEM private key headers.
+    Secret,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
