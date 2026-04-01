@@ -582,6 +582,134 @@ fn test_kv_clear_removes_all_keys() {
     );
 }
 
+// ---------------------------------------------------------------------------
+// Sealed secret store: list-secrets, delete-secret, use-secret
+// These tests use the isolated test DB (run()) — no daemon or Chrome needed.
+// ---------------------------------------------------------------------------
+
+/// Seed a named secret directly into the test DB using pagerunner's internal
+/// DB path. We do this by writing via kv-set to sealed_secrets namespace
+/// (which is blocked by MCP but accessible via the Db directly).
+/// Instead, we use use-secret to verify error paths and list-secrets for empty state.
+
+#[test]
+#[serial]
+fn test_list_secrets_empty_returns_json() {
+    // Fresh test DB: list-secrets should return {"secrets":[]}
+    let out = run(&["list-secrets"]);
+    assert!(
+        out.status.success(),
+        "list-secrets failed: {}",
+        stderr(&out)
+    );
+    let s = stdout(&out);
+    let v: serde_json::Value =
+        serde_json::from_str(&s).unwrap_or_else(|_| panic!("expected JSON, got: {}", s));
+    assert!(
+        v["secrets"].is_array(),
+        "expected secrets array in: {}",
+        s
+    );
+}
+
+#[test]
+#[serial]
+fn test_use_secret_unknown_name_exits_nonzero() {
+    // Asking for a secret that doesn't exist must fail with a clear error.
+    let out = run(&["use-secret", "nonexistent_secret_xyz", "--", "cat"]);
+    assert!(
+        !out.status.success(),
+        "expected non-zero exit for unknown secret"
+    );
+    let err = stderr(&out);
+    assert!(
+        err.contains("nonexistent_secret_xyz") || err.contains("not found"),
+        "error must mention the secret name, got: {}",
+        err
+    );
+}
+
+#[test]
+#[serial]
+fn test_delete_secret_nonexistent_succeeds() {
+    // Deleting a secret that doesn't exist should succeed silently (idempotent).
+    let out = run(&["delete-secret", "never_existed_xyz"]);
+    assert!(
+        out.status.success(),
+        "delete-secret on nonexistent key should succeed, got: {}",
+        stderr(&out)
+    );
+    let s = stdout(&out);
+    let v: serde_json::Value =
+        serde_json::from_str(&s).unwrap_or_else(|_| panic!("expected JSON, got: {}", s));
+    assert_eq!(v["ok"], true);
+}
+
+#[test]
+#[serial]
+fn test_extract_secret_invalid_session_exits_nonzero() {
+    // extract-secret with a bad session must fail before touching the secret store.
+    let out = run(&[
+        "extract-secret",
+        "no-such-session",
+        "no-such-target",
+        "document.title",
+        "test_secret",
+    ]);
+    assert!(
+        !out.status.success(),
+        "expected non-zero exit for invalid session"
+    );
+    assert!(!stderr(&out).is_empty(), "expected error on stderr");
+}
+
+#[test]
+#[serial]
+fn test_use_secret_value_never_in_stdout_or_stderr() {
+    // Even if use-secret fails, the secret value must never appear in output.
+    // We can't inject a real secret without Chrome, so we just verify that
+    // the error path for a missing secret doesn't echo back any payload.
+    let out = run(&["use-secret", "no_secret_here", "--", "echo", "test"]);
+    assert!(!out.status.success());
+    let combined = format!("{}{}", stdout(&out), stderr(&out));
+    // Nothing in the output should look like a secret value — just error metadata
+    assert!(
+        !combined.contains("npm_") && !combined.contains("ghp_"),
+        "output must never contain credential patterns: {}",
+        combined
+    );
+}
+
+#[test]
+#[serial]
+fn test_kv_set_to_sealed_secrets_namespace_is_blocked() {
+    // The MCP kv_set must refuse writes to the sealed_secrets namespace.
+    // At the CLI level, kv-set routes through the daemon/standalone handler
+    // which has the same guard. Use the test DB path.
+    let out = run(&["kv-set", "sealed_secrets", "mykey", "myvalue"]);
+    assert!(
+        !out.status.success(),
+        "kv-set to sealed_secrets namespace must be blocked"
+    );
+    let err = stderr(&out);
+    assert!(
+        err.contains("sealed_secrets") || err.contains("reserved"),
+        "error must mention sealed_secrets restriction, got: {}",
+        err
+    );
+}
+
+#[test]
+#[serial]
+fn test_notify_requires_title() {
+    // notify without a title must fail
+    let out = run(&["notify"]);
+    assert!(
+        !out.status.success(),
+        "notify without title must fail"
+    );
+}
+
 #[test]
 #[serial]
 fn test_open_session_unknown_profile_exits_nonzero() {

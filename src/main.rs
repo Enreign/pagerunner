@@ -431,6 +431,19 @@ enum Commands {
     DownloadModel,
 }
 
+/// Resolve the state DB path: PAGERUNNER_DB_PATH env var takes precedence,
+/// otherwise defaults to ~/.pagerunner/state.db.
+/// All CLI commands that open the DB directly must use this so that test
+/// isolation (PAGERUNNER_DB_PATH=/tmp/...) works correctly.
+fn resolve_db_path() -> crate::error::Result<std::path::PathBuf> {
+    if let Ok(p) = std::env::var("PAGERUNNER_DB_PATH") {
+        return Ok(std::path::PathBuf::from(p));
+    }
+    let home = dirs::home_dir()
+        .ok_or_else(|| crate::error::PagerunnerError::Config("Cannot find home dir".into()))?;
+    Ok(home.join(".pagerunner/state.db"))
+}
+
 #[cfg(feature = "ner")]
 fn download_ner_model() -> anyhow::Result<()> {
     use crate::anonymizer::ner::{verify_model_hash, MODEL_SHA256, MODEL_URL, TOKENIZER_URL};
@@ -1339,14 +1352,13 @@ async fn run() -> anyhow::Result<()> {
                 eprintln!("Example: pagerunner use-secret npm_token -- gh secret set NPM_TOKEN --repos owner/repo");
                 std::process::exit(1);
             }
-            let home = dirs::home_dir().expect("No home dir");
-            let db_path = home.join(".pagerunner/state.db");
+            let db_path = resolve_db_path()?;
             if !db_path.exists() {
                 eprintln!("No secrets found (database not yet created).");
                 std::process::exit(1);
             }
             let db_path_str = db_path.to_str().ok_or_else(|| {
-                crate::error::PagerunnerError::Config("Non-UTF-8 home path".into())
+                crate::error::PagerunnerError::Config("Non-UTF-8 db path".into())
             })?;
             let db = crate::db::Db::open(db_path_str)?;
             let secret_bytes = db
@@ -1362,7 +1374,9 @@ async fn run() -> anyhow::Result<()> {
             })?;
 
             // Emit audit event — command binary only, never the full args
-            let audit_path = home.join(".pagerunner/audit.log");
+            let audit_path = dirs::home_dir()
+                .expect("No home dir")
+                .join(".pagerunner/audit.log");
             let audit = crate::audit::AuditLog::new(audit_path, std::sync::Arc::new(db));
             audit
                 .record(crate::audit::AuditEvent::new(
@@ -1398,14 +1412,13 @@ async fn run() -> anyhow::Result<()> {
         }
 
         Commands::ListSecrets => {
-            let home = dirs::home_dir().expect("No home dir");
-            let db_path = home.join(".pagerunner/state.db");
+            let db_path = resolve_db_path()?;
             if !db_path.exists() {
                 println!("{{\"secrets\":[]}}");
                 return Ok(());
             }
             let db_path_str = db_path.to_str().ok_or_else(|| {
-                crate::error::PagerunnerError::Config("Non-UTF-8 home path".into())
+                crate::error::PagerunnerError::Config("Non-UTF-8 db path".into())
             })?;
             let db = crate::db::Db::open(db_path_str)?;
             let entries = db.scan_prefix(crate::mcp_server::SEALED_SECRETS_TABLE, "")?;
@@ -1414,10 +1427,9 @@ async fn run() -> anyhow::Result<()> {
         }
 
         Commands::DeleteSecret { name } => {
-            let home = dirs::home_dir().expect("No home dir");
-            let db_path = home.join(".pagerunner/state.db");
+            let db_path = resolve_db_path()?;
             let db_path_str = db_path.to_str().ok_or_else(|| {
-                crate::error::PagerunnerError::Config("Non-UTF-8 home path".into())
+                crate::error::PagerunnerError::Config("Non-UTF-8 db path".into())
             })?;
             let db = crate::db::Db::open(db_path_str)?;
             db.delete(crate::mcp_server::SEALED_SECRETS_TABLE, &name)?;
@@ -1599,14 +1611,13 @@ async fn run() -> anyhow::Result<()> {
                 None
             };
 
-            let home = dirs::home_dir().expect("No home dir");
-            let db_path = home.join(".pagerunner/state.db");
+            let db_path = resolve_db_path()?;
             if !db_path.exists() {
                 eprintln!("No audit records found (database not yet created).");
                 return Ok(());
             }
             let db_path_str = db_path.to_str().ok_or_else(|| {
-                crate::error::PagerunnerError::Config("Non-UTF-8 home path".into())
+                crate::error::PagerunnerError::Config("Non-UTF-8 db path".into())
             })?;
             let db = crate::db::Db::open(db_path_str)?;
             let entries = db.scan_prefix("audit", "")?;
