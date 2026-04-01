@@ -195,9 +195,13 @@ pub struct PagerunnerConfig {
 
 impl PagerunnerConfig {
     pub fn load() -> Result<Self> {
-        let path = dirs::home_dir()
-            .ok_or_else(|| PagerunnerError::Config("Cannot find home dir".into()))?
-            .join(".pagerunner/config.toml");
+        let path = if let Ok(p) = std::env::var("PAGERUNNER_CONFIG_PATH") {
+            std::path::PathBuf::from(p)
+        } else {
+            dirs::home_dir()
+                .ok_or_else(|| PagerunnerError::Config("Cannot find home dir".into()))?
+                .join(".pagerunner/config.toml")
+        };
 
         if !path.exists() {
             return Ok(Self::default());

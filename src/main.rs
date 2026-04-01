@@ -317,6 +317,11 @@ enum Commands {
     /// List secret names stored in the sealed store (names only — values are never shown).
     #[command(name = "list-secrets")]
     ListSecrets,
+    /// Delete a named secret from the sealed store.
+    #[command(name = "delete-secret")]
+    DeleteSecret {
+        name: String,
+    },
     /// Query network requests captured during a session
     #[command(name = "get-network-log")]
     GetNetworkLog {
@@ -1355,6 +1360,17 @@ async fn run() -> anyhow::Result<()> {
             let entries = db.scan_prefix(crate::mcp_server::SEALED_SECRETS_TABLE, "")?;
             let names: Vec<&str> = entries.iter().map(|(k, _)| k.as_str()).collect();
             println!("{}", serde_json::json!({"secrets": names}));
+        }
+
+        Commands::DeleteSecret { name } => {
+            let home = dirs::home_dir().expect("No home dir");
+            let db_path = home.join(".pagerunner/state.db");
+            let db_path_str = db_path.to_str().ok_or_else(|| {
+                crate::error::PagerunnerError::Config("Non-UTF-8 home path".into())
+            })?;
+            let db = crate::db::Db::open(db_path_str)?;
+            db.delete(crate::mcp_server::SEALED_SECRETS_TABLE, &name)?;
+            println!("{}", serde_json::json!({"ok": true, "deleted": name}));
         }
 
         Commands::GetNetworkLog {

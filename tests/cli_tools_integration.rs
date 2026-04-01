@@ -42,10 +42,13 @@ fn run(args: &[&str]) -> std::process::Output {
 /// Like `run`, but without PAGERUNNER_DB_PATH so calls route through the daemon.
 /// Required for Chrome tests: session state lives in the daemon's SessionManager.
 fn run_live(args: &[&str]) -> std::process::Output {
-    Command::new(bin())
-        .args(args)
-        .output()
-        .expect("failed to run pagerunner")
+    let mut cmd = Command::new(bin());
+    cmd.args(args);
+    // Forward test config path if set by start_daemon_with
+    if let Ok(p) = std::env::var("PAGERUNNER_CONFIG_PATH") {
+        cmd.env("PAGERUNNER_CONFIG_PATH", p);
+    }
+    cmd.output().expect("failed to run pagerunner")
 }
 
 /// Run a pagerunner command against the live test daemon and parse stdout as JSON.
@@ -77,6 +80,9 @@ struct TestDaemon {
     /// Snapshot of Chrome PIDs with --remote-debugging-port BEFORE this daemon started.
     /// On drop, any new Chrome debug processes are killed to prevent orphans.
     chrome_pids_before: std::collections::HashSet<u32>,
+    /// Temp dir holding the isolated Chrome user data dir + test config.toml.
+    /// Kept alive until the daemon is dropped to prevent early cleanup.
+    _test_config_dir: tempfile::TempDir,
 }
 
 impl TestDaemon {
@@ -130,10 +136,30 @@ impl Drop for TestDaemon {
     }
 }
 
+/// Name of the isolated test Chrome profile written by start_daemon_with().
+const TEST_PROFILE_NAME: &str = "test";
+
 fn start_daemon_with(binary: &std::path::Path) -> TestDaemon {
     // Snapshot Chrome PIDs BEFORE killing leftover daemons, so we can
     // distinguish pre-existing Chrome from Chrome spawned by this test.
     let chrome_pids_before = TestDaemon::snapshot_chrome_pids();
+
+    // Create an isolated Chrome user data dir and a minimal config.toml pointing to it.
+    // This prevents the daemon from loading the user's real ~/.pagerunner/config.toml,
+    // which references locked profile directories that cause Chrome to show
+    // "Something went wrong when opening your profile" dialogs.
+    let test_config_dir = tempfile::tempdir().expect("tempdir for test config");
+    let chrome_profile_dir = test_config_dir.path().join("chrome-profile");
+    std::fs::create_dir_all(&chrome_profile_dir).expect("create chrome profile dir");
+    let config_content = format!(
+        "[[profiles]]\nname = \"{}\"\ndisplay_name = \"Test Profile\"\nuser_data_dir = \"{}\"\n",
+        TEST_PROFILE_NAME,
+        chrome_profile_dir.display()
+    );
+    let config_path = test_config_dir.path().join("config.toml");
+    std::fs::write(&config_path, &config_content).expect("write test config");
+    // Forward to run_live() via environment — set before spawning daemon so both share it.
+    std::env::set_var("PAGERUNNER_CONFIG_PATH", &config_path);
 
     // Kill any leftover daemon, then wait for it to fully exit.
     std::process::Command::new("pkill")
@@ -145,6 +171,7 @@ fn start_daemon_with(binary: &std::path::Path) -> TestDaemon {
     let child = Command::new(binary)
         .args(&["daemon"])
         .env("PAGERUNNER_DB_PATH", test_db())
+        .env("PAGERUNNER_CONFIG_PATH", &config_path)
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
         .spawn()
@@ -160,6 +187,7 @@ fn start_daemon_with(binary: &std::path::Path) -> TestDaemon {
     TestDaemon {
         child,
         chrome_pids_before,
+        _test_config_dir: test_config_dir,
     }
 }
 
@@ -2000,7 +2028,12 @@ fn parse_json_field(json_str: &str, field: &str) -> String {
 }
 
 /// Returns the name of the first configured profile.
+/// When PAGERUNNER_CONFIG_PATH is set (i.e., test daemon is running with isolated config),
+/// we know the profile name is TEST_PROFILE_NAME — avoid the daemon round-trip.
 fn first_profile() -> String {
+    if std::env::var("PAGERUNNER_CONFIG_PATH").is_ok() {
+        return TEST_PROFILE_NAME.to_string();
+    }
     let out = run_live(&["list-profiles"]);
     let profiles: serde_json::Value =
         serde_json::from_str(&stdout(&out)).expect("list-profiles did not return JSON");

@@ -627,6 +627,48 @@ pub fn all_tools() -> Vec<Value> {
             }
         }),
         json!({
+            "name": "use_secret",
+            "description": "Run a shell command with a sealed secret injected via stdin. The secret value is read from the daemon's sealed store and piped directly to the command's stdin — it never passes through the LLM or appears in any response. Use this after extract_secret or store_as_secret to forward a captured credential to a CLI tool (e.g. gh secret set, curl). Returns stdout, stderr, and the exit code.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "name": {
+                        "type": "string",
+                        "description": "Name of the sealed secret to use (as stored by extract_secret or store_as_secret)"
+                    },
+                    "command": {
+                        "type": "array",
+                        "items": { "type": "string" },
+                        "description": "Command to run, e.g. [\"gh\", \"secret\", \"set\", \"NPM_TOKEN\", \"--repos\", \"owner/repo\"]. The secret is written to the command's stdin."
+                    }
+                },
+                "required": ["name", "command"]
+            }
+        }),
+        json!({
+            "name": "list_secrets",
+            "description": "List the names of secrets currently stored in the sealed store. Values are never returned — only names. Use to verify that extract_secret or store_as_secret succeeded before calling use_secret.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {},
+                "required": []
+            }
+        }),
+        json!({
+            "name": "delete_secret",
+            "description": "Delete a named secret from the sealed store. Use after the secret has been consumed (e.g. after use_secret succeeded) to clean up credentials that are no longer needed.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "name": {
+                        "type": "string",
+                        "description": "Name of the secret to delete"
+                    }
+                },
+                "required": ["name"]
+            }
+        }),
+        json!({
             "name": "notify",
             "description": "Send a macOS notification via the Pagerunner menu bar. Use this to alert the user when a task is done, an error occurred, or any event worth surfacing. The notification appears immediately and can deep-link back to the current session.",
             "inputSchema": {
@@ -3091,6 +3133,91 @@ async fn dispatch_tool_inner(
             .to_string())
         }
 
+        "use_secret" => {
+            let name = args["name"]
+                .as_str()
+                .ok_or_else(|| crate::error::PagerunnerError::Config("Missing name".into()))?;
+            validate_secret_name(name)?;
+            let command_arr = args["command"]
+                .as_array()
+                .ok_or_else(|| crate::error::PagerunnerError::Config("Missing command".into()))?;
+            if command_arr.is_empty() {
+                return Err(crate::error::PagerunnerError::Config(
+                    "command must be a non-empty array".into(),
+                ));
+            }
+            let secret_bytes = db
+                .get(SEALED_SECRETS_TABLE, name)
+                .map_err(|e| crate::error::PagerunnerError::Config(e.to_string()))?
+                .ok_or_else(|| {
+                    crate::error::PagerunnerError::Config(format!(
+                        "no secret named '{}' — use extract_secret or store_as_secret first",
+                        name
+                    ))
+                })?;
+            let program = command_arr[0]
+                .as_str()
+                .ok_or_else(|| crate::error::PagerunnerError::Config("command[0] must be a string".into()))?;
+            let cmd_args: Vec<&str> = command_arr[1..]
+                .iter()
+                .filter_map(|v| v.as_str())
+                .collect();
+            // Record audit BEFORE spawn — command binary only, never full args
+            if let Some(audit) = audit {
+                audit
+                    .record(crate::audit::AuditEvent::new(
+                        crate::audit::AuditEventKind::SecretUsed {
+                            name: name.to_string(),
+                            command: program.to_string(),
+                        },
+                    ))
+                    .await;
+            }
+            // Spawn with stdin piped; write secret; never capture it back
+            let mut child = std::process::Command::new(program)
+                .args(&cmd_args)
+                .stdin(std::process::Stdio::piped())
+                .stdout(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::piped())
+                .spawn()
+                .map_err(|e| {
+                    crate::error::PagerunnerError::Config(format!("failed to spawn command: {}", e))
+                })?;
+            if let Some(mut stdin) = child.stdin.take() {
+                use std::io::Write;
+                let _ = stdin.write_all(&secret_bytes);
+                // stdin dropped here → command's stdin is closed
+            }
+            let output = child.wait_with_output().map_err(|e| {
+                crate::error::PagerunnerError::Config(format!("command wait failed: {}", e))
+            })?;
+            Ok(serde_json::json!({
+                "ok": output.status.success(),
+                "exit_code": output.status.code().unwrap_or(-1),
+                "stdout": String::from_utf8_lossy(&output.stdout).to_string(),
+                "stderr": String::from_utf8_lossy(&output.stderr).to_string(),
+            })
+            .to_string())
+        }
+
+        "list_secrets" => {
+            let entries = db
+                .scan_prefix(SEALED_SECRETS_TABLE, "")
+                .map_err(|e| crate::error::PagerunnerError::Config(e.to_string()))?;
+            let names: Vec<&str> = entries.iter().map(|(k, _)| k.as_str()).collect();
+            Ok(serde_json::json!({"ok": true, "secrets": names}).to_string())
+        }
+
+        "delete_secret" => {
+            let name = args["name"]
+                .as_str()
+                .ok_or_else(|| crate::error::PagerunnerError::Config("Missing name".into()))?;
+            validate_secret_name(name)?;
+            db.delete(SEALED_SECRETS_TABLE, name)
+                .map_err(|e| crate::error::PagerunnerError::Config(e.to_string()))?;
+            Ok(serde_json::json!({"ok": true, "deleted": name}).to_string())
+        }
+
         "kv_set" => {
             let ns = args["namespace"]
                 .as_str()
@@ -5265,5 +5392,55 @@ mod secret_tests {
             !req_names.contains(&"store_as_secret"),
             "store_as_secret must not be required"
         );
+    }
+
+    // ── use_secret / list_secrets / delete_secret listed in all_tools ─────
+
+    #[test]
+    fn test_use_secret_tool_listed() {
+        let tools = all_tools();
+        assert!(
+            tools.iter().any(|t| t["name"] == "use_secret"),
+            "use_secret must be in all_tools()"
+        );
+    }
+
+    #[test]
+    fn test_use_secret_tool_requires_name_and_command() {
+        let tools = all_tools();
+        let tool = tools.iter().find(|t| t["name"] == "use_secret").unwrap();
+        let required = tool["inputSchema"]["required"].as_array().unwrap();
+        let req_names: Vec<&str> = required.iter().map(|v| v.as_str().unwrap()).collect();
+        assert!(req_names.contains(&"name"));
+        assert!(req_names.contains(&"command"));
+        // command must be an array type
+        assert_eq!(tool["inputSchema"]["properties"]["command"]["type"], "array");
+    }
+
+    #[test]
+    fn test_list_secrets_tool_listed() {
+        let tools = all_tools();
+        assert!(
+            tools.iter().any(|t| t["name"] == "list_secrets"),
+            "list_secrets must be in all_tools()"
+        );
+    }
+
+    #[test]
+    fn test_delete_secret_tool_listed() {
+        let tools = all_tools();
+        assert!(
+            tools.iter().any(|t| t["name"] == "delete_secret"),
+            "delete_secret must be in all_tools()"
+        );
+    }
+
+    #[test]
+    fn test_delete_secret_requires_name() {
+        let tools = all_tools();
+        let tool = tools.iter().find(|t| t["name"] == "delete_secret").unwrap();
+        let required = tool["inputSchema"]["required"].as_array().unwrap();
+        let req_names: Vec<&str> = required.iter().map(|v| v.as_str().unwrap()).collect();
+        assert!(req_names.contains(&"name"));
     }
 }
