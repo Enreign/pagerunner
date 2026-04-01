@@ -250,6 +250,38 @@ struct PollRegressionTests {
         #expect(state.tabs["live-session"] != nil)
     }
 
+    @Test("updateSessions: clears tabs for crashed sessions (sleep/wake regression)")
+    func updateSessionsClearsTabsForCrashedSessions() {
+        // Regression: after sleep, Chrome dies and sessions become .crashed.
+        // tabCount was still counting their stale tabs, showing e.g. "0 windows · 63 tabs".
+        // Fix: updateSessions only keeps tabs for alive sessions.
+        let state = AppState()
+        let tab = Tab(targetId: "t1", url: "https://example.com", title: "Example")
+        state.tabs["crashed-session"] = [tab]
+        state.tabs["alive-session"] = [tab]
+
+        let crashed = Session(id: "crashed-session", profile: "p", displayName: "P", stealth: false, status: .crashed)
+        let alive = Session(id: "alive-session", profile: "p", displayName: "P", stealth: false, status: .alive)
+        state.updateSessions([crashed, alive])
+
+        #expect(state.tabs["crashed-session"] == nil, "crashed session tabs must be cleared")
+        #expect(state.tabs["alive-session"] != nil, "alive session tabs must be preserved")
+    }
+
+    @Test("tabCount only counts alive sessions")
+    func tabCountExcludesCrashedSessions() {
+        let state = AppState()
+        let tab = Tab(targetId: "t1", url: "https://example.com", title: "Example")
+        state.sessions = [
+            Session(id: "alive", profile: "p", displayName: "P", stealth: false, status: .alive),
+            Session(id: "crashed", profile: "p", displayName: "P", stealth: false, status: .crashed)
+        ]
+        state.tabs["alive"] = [tab, tab]
+        state.tabs["crashed"] = [tab, tab, tab]
+
+        #expect(state.tabCount == 2, "crashed session tabs must not contribute to tabCount")
+    }
+
     @Test("updateSessions: empty initial state accepts empty list")
     func updateSessionsEmptyToEmpty() {
         let state = AppState()

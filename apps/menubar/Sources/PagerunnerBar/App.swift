@@ -62,6 +62,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         statusItemController = StatusItemController(appState: appState, pollingService: pollingService)
         notificationService?.configure(appState: appState, controller: statusItemController)
         pollingService.start()
+
+        // On wake from sleep, restart the polling loop immediately so the daemon
+        // and any surviving Chrome sessions are re-detected without waiting up to 10s.
+        NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.didWakeNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                self?.pollingService.panelDidOpen()  // switches to 2s interval, polls immediately
+            }
+        }
     }
 
     func poll(client: DaemonClient) async {

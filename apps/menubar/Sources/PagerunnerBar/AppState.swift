@@ -66,7 +66,10 @@ final class AppState {
 
     // MARK: - Computed
     var sessionCount: Int { sessions.filter { $0.status == .alive }.count }
-    var tabCount: Int { tabs.values.reduce(0) { $0 + $1.count } }
+    var tabCount: Int {
+        let aliveIds = Set(sessions.filter { $0.status == .alive }.map { $0.id })
+        return tabs.filter { aliveIds.contains($0.key) }.values.reduce(0) { $0 + $1.count }
+    }
 
     var personalProfiles: [Profile] { profiles.filter { $0.kind != "agent" } }
     var agentProfiles: [Profile] { profiles.filter { $0.kind == "agent" } }
@@ -91,9 +94,10 @@ final class AppState {
     func updateSessions(_ newSessions: [Session]) -> Bool {
         if !newSessions.isEmpty || sessions.isEmpty {
             sessions = newSessions
-            // Remove tabs for sessions that no longer exist
-            let activeIds = Set(newSessions.map { $0.id })
-            tabs = tabs.filter { activeIds.contains($0.key) }
+            // Keep tabs only for sessions that still exist AND are alive.
+            // Crashed/gone sessions have no live tabs — clearing them prevents stale counts.
+            let aliveIds = Set(newSessions.filter { $0.status == .alive }.map { $0.id })
+            tabs = tabs.filter { aliveIds.contains($0.key) }
             return true
         }
         // Transient empty response — preserve existing sessions and their tabs
