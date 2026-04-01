@@ -105,10 +105,10 @@ final class AppState {
     func updateTabs(for sessionId: String, newTabs: [Tab]?) {
         if let tabs = newTabs {
             self.tabs[sessionId] = tabs
-        } else if self.tabs[sessionId] == nil {
-            self.tabs[sessionId] = []
         }
-        // else: transient failure — keep whatever was there
+        // nil: transient failure — keep whatever was there, or nothing if not yet loaded.
+        // Do NOT initialise to [] here: a failed first fetch would permanently show 0 tabs
+        // because subsequent nil calls hit the "preserve existing" path and never recover.
     }
 
     // MARK: - Daemon restart

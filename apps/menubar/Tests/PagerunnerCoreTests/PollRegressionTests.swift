@@ -183,15 +183,17 @@ struct PollRegressionTests {
         #expect(state.tabs["s1"]?.first?.targetId == "t1")
     }
 
-    @Test("updateTabs: nil initialises to empty when session never loaded")
-    func updateTabsNilInitialisesEmpty() {
+    @Test("updateTabs: nil on never-loaded session leaves entry absent (no stuck-zero bug)")
+    func updateTabsNilDoesNotInitialiseEmpty() {
+        // Regression: previously nil initialised tabs[id] = [] on first call, which caused
+        // tabCount to get stuck at 0 — subsequent nil calls hit the "preserve" path and
+        // never recovered. Fix: do nothing on nil so the next successful fetch can populate.
         let state = AppState()
         #expect(state.tabs["s1"] == nil)
 
         state.updateTabs(for: "s1", newTabs: nil)
 
-        #expect(state.tabs["s1"] != nil)
-        #expect(state.tabs["s1"]?.isEmpty == true)
+        #expect(state.tabs["s1"] == nil, "nil fetch must not create an empty entry")
     }
 
     @Test("updateTabs: non-nil replaces tabs")
