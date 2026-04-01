@@ -2330,10 +2330,76 @@ async fn dispatch_tool_inner(
                     #[cfg(not(feature = "ner"))]
                     crate::anonymizer::AnonEngine::new(vault, anon_config.clone())
                 };
-                let anon_result = engine
-                    .process(sid, None, &decoded)
-                    .map_err(|e| crate::error::PagerunnerError::Config(e.to_string()))?;
+
+                // Handle residual PII detection with a structured audit event before blocking.
+                let anon_result = match engine.process(sid, None, &decoded) {
+                    Ok(r) => r,
+                    Err(crate::error::PagerunnerError::ResidualPiiDetected {
+                        ref entity_counts,
+                        count,
+                    }) => {
+                        tracing::warn!(
+                            session_id = %sid,
+                            target_id = %tid,
+                            count = count,
+                            entities = ?entity_counts,
+                            "ANONYMIZATION GAP (residual_scan): PII survived anonymization — blocked"
+                        );
+                        if let Some(a) = audit {
+                            a.record(crate::audit::AuditEvent::new(
+                                crate::audit::AuditEventKind::AnonymizationGap {
+                                    session_id: sid.to_string(),
+                                    target_id: tid.to_string(),
+                                    entity_counts: entity_counts.clone(),
+                                    source: "residual_scan".to_string(),
+                                },
+                            ))
+                            .await;
+                        }
+                        return Err(crate::error::PagerunnerError::Config(
+                            "Content blocked: PII survived anonymization (residual_scan). Check pagerunner audit for details.".into(),
+                        ));
+                    }
+                    Err(e) => return Err(e),
+                };
+
                 let mut output = anon_result.output;
+
+                // Entropy heuristic: scan for high-entropy strings near context keywords
+                // that the pattern-based pass may have missed (unknown credential formats).
+                let entropy_hits = crate::anonymizer::entropy::entropy_scan(&output);
+                if !entropy_hits.is_empty() {
+                    let count = entropy_hits.len();
+                    let mut gap_counts = std::collections::HashMap::new();
+                    for hit in &entropy_hits {
+                        *gap_counts
+                            .entry(format!("ENTROPY({})", hit.context_word))
+                            .or_insert(0usize) += 1;
+                    }
+                    tracing::warn!(
+                        session_id = %sid,
+                        target_id = %tid,
+                        count = count,
+                        entities = ?gap_counts,
+                        "ANONYMIZATION GAP (entropy_heuristic): high-entropy strings near credential keywords"
+                    );
+                    if let Some(a) = audit {
+                        a.record(crate::audit::AuditEvent::new(
+                            crate::audit::AuditEventKind::AnonymizationGap {
+                                session_id: sid.to_string(),
+                                target_id: tid.to_string(),
+                                entity_counts: gap_counts,
+                                source: "entropy_heuristic".to_string(),
+                            },
+                        ))
+                        .await;
+                    }
+                    // Entropy hits are warnings, not hard blocks — the content has already
+                    // passed the residual pattern scan. Log and continue so the LLM gets
+                    // content, but the audit trail records the gap.
+                    // If you want to fail-closed here, return Err(...) instead.
+                }
+
                 if output.len() > crate::sanitizer::MAX_CONTENT_LENGTH {
                     output
                         .truncate(output.floor_char_boundary(crate::sanitizer::MAX_CONTENT_LENGTH));
@@ -2523,16 +2589,103 @@ async fn dispatch_tool_inner(
                 let mut engine = {
                     #[cfg(feature = "ner")]
                     if ner_disabled {
-                        crate::anonymizer::AnonEngine::new_with_ner_disabled(vault, anon_config)
+                        crate::anonymizer::AnonEngine::new_with_ner_disabled(vault, anon_config.clone())
                     } else {
-                        crate::anonymizer::AnonEngine::new(vault, anon_config)
+                        crate::anonymizer::AnonEngine::new(vault, anon_config.clone())
                     }
                     #[cfg(not(feature = "ner"))]
-                    crate::anonymizer::AnonEngine::new(vault, anon_config)
+                    crate::anonymizer::AnonEngine::new(vault, anon_config.clone())
                 };
-                let anon_result = engine
-                    .process(sid, None, &decoded)
-                    .map_err(|e| crate::error::PagerunnerError::Config(e.to_string()))?;
+                let anon_result = match engine.process(sid, None, &decoded) {
+                    Ok(r) => r,
+                    Err(crate::error::PagerunnerError::ResidualPiiDetected {
+                        ref entity_counts,
+                        count,
+                    }) => {
+                        tracing::warn!(
+                            session_id = %sid,
+                            target_id = %tid,
+                            count = count,
+                            entities = ?entity_counts,
+                            "ANONYMIZATION GAP (residual_scan/evaluate): PII survived anonymization — blocked"
+                        );
+                        if let Some(a) = audit {
+                            a.record(crate::audit::AuditEvent::new(
+                                crate::audit::AuditEventKind::AnonymizationGap {
+                                    session_id: sid.to_string(),
+                                    target_id: tid.to_string(),
+                                    entity_counts: entity_counts.clone(),
+                                    source: "residual_scan".to_string(),
+                                },
+                            ))
+                            .await;
+                        }
+                        return Err(crate::error::PagerunnerError::Config(
+                            "Content blocked: PII survived anonymization (residual_scan). Check pagerunner audit for details.".into(),
+                        ));
+                    }
+                    Err(e) => return Err(e),
+                };
+
+                // Entropy heuristic on evaluate results
+                let entropy_hits = crate::anonymizer::entropy::entropy_scan(&anon_result.output);
+                if !entropy_hits.is_empty() {
+                    let count = entropy_hits.len();
+                    let mut gap_counts = std::collections::HashMap::new();
+                    for hit in &entropy_hits {
+                        *gap_counts
+                            .entry(format!("ENTROPY({})", hit.context_word))
+                            .or_insert(0usize) += 1;
+                    }
+                    tracing::warn!(
+                        session_id = %sid,
+                        target_id = %tid,
+                        count = count,
+                        entities = ?gap_counts,
+                        "ANONYMIZATION GAP (entropy_heuristic/evaluate): high-entropy strings near credential keywords"
+                    );
+                    if let Some(a) = audit {
+                        a.record(crate::audit::AuditEvent::new(
+                            crate::audit::AuditEventKind::AnonymizationGap {
+                                session_id: sid.to_string(),
+                                target_id: tid.to_string(),
+                                entity_counts: gap_counts,
+                                source: "entropy_heuristic".to_string(),
+                            },
+                        ))
+                        .await;
+                    }
+                }
+
+                // Emit ContentAnonymized audit for evaluate (previously missing)
+                if !anon_result.entity_counts.is_empty() {
+                    if let Some(a) = audit {
+                        let mode_str = match anon_config.mode {
+                            crate::config::AnonMode::Tokenize => "tokenize",
+                            crate::config::AnonMode::Redact => "redact",
+                        };
+                        if let Some(&secret_count) = anon_result.entity_counts.get("SECRET") {
+                            a.record(crate::audit::AuditEvent::new(
+                                crate::audit::AuditEventKind::SecretScrubbed {
+                                    session_id: sid.to_string(),
+                                    target_id: tid.to_string(),
+                                    count: secret_count,
+                                },
+                            ))
+                            .await;
+                        }
+                        a.record(crate::audit::AuditEvent::new(
+                            crate::audit::AuditEventKind::ContentAnonymized {
+                                session_id: sid.to_string(),
+                                target_id: tid.to_string(),
+                                mode: mode_str.to_string(),
+                                entity_counts: anon_result.entity_counts,
+                            },
+                        ))
+                        .await;
+                    }
+                }
+
                 let eval_val: serde_json::Value = serde_json::from_str(&anon_result.output)
                     .unwrap_or(serde_json::Value::String(anon_result.output));
                 return Ok(serde_json::json!({"ok": true, "result": eval_val}).to_string());

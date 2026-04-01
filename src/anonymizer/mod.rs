@@ -1,5 +1,6 @@
 #[cfg(feature = "ner")]
 pub mod ner;
+pub mod entropy;
 pub mod patterns;
 pub mod vault;
 
@@ -167,10 +168,17 @@ impl AnonEngine {
         };
         let residual = detect_spans(&output, &residual_entities, &self.config.custom_patterns);
         if !residual.is_empty() {
-            return Err(PagerunnerError::Config(format!(
-                "ResidualPiiDetected: {} entity(s) survived anonymization",
-                residual.len()
-            )));
+            let mut residual_counts: HashMap<String, usize> = HashMap::new();
+            for span in &residual {
+                *residual_counts
+                    .entry(entity_type_label(&span.entity_type))
+                    .or_insert(0) += 1;
+            }
+            let count = residual.len();
+            return Err(PagerunnerError::ResidualPiiDetected {
+                entity_counts: residual_counts,
+                count,
+            });
         }
 
         Ok(AnonResult {

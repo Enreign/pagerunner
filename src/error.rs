@@ -18,6 +18,14 @@ pub enum PagerunnerError {
     Io(#[from] std::io::Error),
     #[error("JSON error: {0}")]
     Json(#[from] serde_json::Error),
+    /// PII or credential survived anonymization and was blocked before reaching the LLM.
+    /// Carries per-entity counts so callers can emit structured audit events.
+    #[error("Anonymization gap: {count} entity(s) survived — blocked before reaching LLM")]
+    ResidualPiiDetected {
+        /// Map of entity label → count for what survived (e.g. {"SECRET": 1, "EMAIL": 2})
+        entity_counts: std::collections::HashMap<String, usize>,
+        count: usize,
+    },
 }
 
 pub type Result<T> = std::result::Result<T, PagerunnerError>;
@@ -58,6 +66,7 @@ impl PagerunnerError {
             Self::Io(_) => "io_error",
             Self::Json(_) => "internal_error",
             Self::SessionDead(_) => "session_dead",
+            Self::ResidualPiiDetected { .. } => "anonymization_gap",
         }
     }
 

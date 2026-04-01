@@ -629,6 +629,30 @@ fn format_audit_event(event: &crate::audit::AuditEvent) -> String {
         crate::audit::AuditEventKind::SecretUsed { name, command } => {
             format!("[{}] SECRET_USED     name={} command={}", ts, name, command)
         }
+        crate::audit::AuditEventKind::AnonymizationGap {
+            session_id,
+            target_id,
+            entity_counts,
+            source,
+        } => {
+            let sid = if session_id.len() >= 8 {
+                &session_id[..8]
+            } else {
+                session_id
+            };
+            let entities: Vec<String> = entity_counts
+                .iter()
+                .map(|(k, v)| format!("{}:{}", k, v))
+                .collect();
+            format!(
+                "[{}] ANONYMIZATION_GAP  session={} target={} source={} entities=[{}]",
+                ts,
+                sid,
+                target_id,
+                source,
+                entities.join(", ")
+            )
+        }
     }
 }
 
@@ -1545,6 +1569,9 @@ async fn run() -> anyhow::Result<()> {
                         | crate::audit::AuditEventKind::SecretStored { .. }
                         | crate::audit::AuditEventKind::SecretUsed { .. } => None,
                         crate::audit::AuditEventKind::SecretScrubbed { session_id, .. } => {
+                            Some(session_id.as_str())
+                        }
+                        crate::audit::AuditEventKind::AnonymizationGap { session_id, .. } => {
                             Some(session_id.as_str())
                         }
                     };

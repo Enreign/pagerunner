@@ -94,6 +94,17 @@ pub enum AuditEventKind {
         /// First token of the command only (e.g. "gh") — never full args
         command: String,
     },
+    /// PII or credential was detected in page content AFTER anonymization ran —
+    /// meaning the anonymizer missed it. Content was blocked before reaching the LLM.
+    /// Values are NEVER logged — only entity types, counts, and detection method.
+    AnonymizationGap {
+        session_id: String,
+        target_id: String,
+        /// Entity labels that survived with their counts (e.g. {"SECRET": 1, "EMAIL": 2})
+        entity_counts: std::collections::HashMap<String, usize>,
+        /// How the gap was detected: "residual_scan" | "entropy_heuristic"
+        source: String,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
