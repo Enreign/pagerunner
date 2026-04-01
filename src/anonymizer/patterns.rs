@@ -11,8 +11,9 @@ pub enum EntityType {
     Iban,
     Ssn,
     Ip,
-    Person,         // NEW — detected by NER, not regex
-    Org,            // NEW — detected by NER, not regex
+    Person,         // detected by NER, not regex
+    Org,            // detected by NER, not regex
+    Secret,         // API keys, tokens, private keys — scrubbed before content reaches LLM
     Custom(String), // custom pattern name
 }
 
@@ -65,6 +66,93 @@ fn re_ipv4() -> &'static Regex {
     RE_IPV4.get_or_init(|| Regex::new(r"\b(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})\b").unwrap())
 }
 
+// ── Secret / credential patterns ──────────────────────────────────────────
+// Tier 1: distinctive prefix + fixed length — very low false positive rate.
+// Order matters for `entity_priority`; Secret wins over all PII types.
+//
+// Pattern design principles:
+//   - Require word boundary or non-alphanumeric context to avoid partial matches
+//   - Exact lengths enforced where known (reduces false positives dramatically)
+//   - AWS secret access key excluded (40-char base64 is too ambiguous alone)
+
+/// Combined secret pattern: one alternation covers all Tier 1 credential formats.
+static RE_SECRET: OnceLock<Regex> = OnceLock::new();
+
+fn re_secret() -> &'static Regex {
+    RE_SECRET.get_or_init(|| {
+        Regex::new(
+            r"(?x)
+            # npm tokens
+            \bnpm_[A-Za-z0-9]{36}\b
+            |
+            # GitHub classic PATs (ghp_ / gho_ / ghu_ / ghs_ / ghr_)
+            \bgh[pousr]_[A-Za-z0-9]{36}\b
+            |
+            # GitHub fine-grained PATs
+            \bgithub_pat_[A-Za-z0-9]{22}_[A-Za-z0-9]{59}\b
+            |
+            # GitLab tokens (PAT glpat-, CI job glcbt-, deploy gldt-, feed glft-,
+            #                runner auth glrt-, pipeline trigger glptt-, OAuth gloas-)
+            \bgl(?:pat|cbt|dt|ft|rt|ptt|oas)-[A-Za-z0-9\-_]{20,}\b
+            |
+            # Stripe keys — sk_/pk_/rk_ with live/test/prod; length varies (10-99)
+            \b(?:sk|pk|rk)_(?:live|test|prod)_[0-9A-Za-z]{10,99}\b
+            |
+            # Anthropic API keys (sk-ant-api03-* and sk-ant-admin01-* and future prefixes)
+            \bsk-ant-[A-Za-z0-9\-_]{95}\b
+            |
+            # OpenAI classic keys — embed T3BlbkFJ anchor (base64 of OpenAI) to avoid
+            # false positives on arbitrary 48-char alphanumeric strings
+            \bsk-[A-Za-z0-9]{20}T3BlbkFJ[A-Za-z0-9]{20}\b
+            |
+            # OpenAI project / service-account / admin keys (longer structured format)
+            \bsk-(?:proj|svcacct|admin)-[A-Za-z0-9_\-]{50,}\b
+            |
+            # Hugging Face user access tokens (hf_) and org API tokens (api_org_)
+            \bhf_[A-Za-z0-9]{34,40}\b
+            |
+            \bapi_org_[A-Za-z0-9]{34}\b
+            |
+            # Google API keys
+            \bAIza[0-9A-Za-z\-_]{35}\b
+            |
+            # AWS access key IDs: long-term (AKIA), STS (ASIA), assumed-role (ABIA),
+            #                     cross-account (ACCA)
+            \b(?:AKIA|ASIA|ABIA|ACCA)[0-9A-Z]{16}\b
+            |
+            # Slack bot/user/workspace/legacy tokens
+            \bxox[bpars]-[0-9A-Za-z\-]+\b
+            |
+            # Slack app-level tokens (xapp-1-AXXXXXX-timestamp-hex)
+            \bxapp-\d-[A-Z0-9]+-\d+-[a-z0-9]+\b
+            |
+            # SendGrid API keys (SG. prefix, 66 more chars)
+            \bSG\.[A-Za-z0-9\-_]{22}\.[A-Za-z0-9\-_]{43}\b
+            |
+            # Twilio API key SIDs
+            \bSK[0-9a-fA-F]{32}\b
+            |
+            # Firebase legacy server keys
+            \bAAAA[A-Za-z0-9_\-]{7}:[A-Za-z0-9_\-]{140}\b
+            |
+            # HashiCorp Vault service tokens (hvs.) and batch tokens (hvb.)
+            \bhv[sb]\.[A-Za-z0-9_\-]{90,}\b
+            |
+            # Linear API keys
+            \blin_api_[A-Za-z0-9]{40}\b
+            |
+            # PEM private key headers — any type prefix or bare PKCS8
+            # Covers: RSA, EC, DSA, OPENSSH, ENCRYPTED, and bare PKCS8 (no type prefix)
+            -----BEGIN\s(?:[A-Z0-9]+\s)*PRIVATE\sKEY(?:\sBLOCK)?-----
+            |
+            # JWT tokens (three base64url segments separated by dots)
+            \beyJ[A-Za-z0-9\-_]+\.[A-Za-z0-9\-_]+\.[A-Za-z0-9\-_]+
+        ",
+        )
+        .unwrap()
+    })
+}
+
 /// Compiled custom pattern (regex or literal).
 #[derive(Debug, Clone)]
 pub struct CompiledCustomPattern {
@@ -100,6 +188,7 @@ pub fn detect_spans(
             ),
             EntityType::Ssn => collect_matches(text, re_ssn(), ssn_valid, EntityType::Ssn),
             EntityType::Ip => collect_matches(text, re_ipv4(), ipv4_valid, EntityType::Ip),
+            EntityType::Secret => collect_matches(text, re_secret(), |_| true, EntityType::Secret),
             EntityType::Person | EntityType::Org => vec![], // NER detection happens in AnonEngine::process
             EntityType::Custom(_) => vec![],                // custom handled below
         };
@@ -164,15 +253,17 @@ pub(crate) fn deduplicate_spans(mut spans: Vec<Span>) -> Vec<Span> {
 
 fn entity_priority(e: &EntityType) -> u8 {
     match e {
-        EntityType::CreditCard => 0,
-        EntityType::Iban => 1,
-        EntityType::Email => 2,
-        EntityType::Phone => 3,
-        EntityType::Ssn => 4,
-        EntityType::Ip => 5,
-        EntityType::Person => 6,    // NEW
-        EntityType::Org => 7,       // NEW
-        EntityType::Custom(_) => 8, // was 6
+        // Secrets win over everything — a credential is never a false positive for an email
+        EntityType::Secret => 0,
+        EntityType::CreditCard => 1,
+        EntityType::Iban => 2,
+        EntityType::Email => 3,
+        EntityType::Phone => 4,
+        EntityType::Ssn => 5,
+        EntityType::Ip => 6,
+        EntityType::Person => 7,
+        EntityType::Org => 8,
+        EntityType::Custom(_) => 9,
     }
 }
 
@@ -544,5 +635,270 @@ mod tests {
     #[test]
     fn test_iban_too_short() {
         assert!(!iban_valid("GB2"));
+    }
+
+    // ── Secret / credential pattern tests ─────────────────────────────────
+
+    fn detect_secret(text: &str) -> Vec<Span> {
+        detect_spans(text, &[EntityType::Secret], &[])
+    }
+
+    #[test]
+    fn test_secret_npm_token() {
+        // 36 alphanumeric chars after "npm_"
+        let token = "npm_".to_string() + &"A".repeat(36);
+        let spans = detect_secret(&format!("Your token: {}", token));
+        assert_eq!(spans.len(), 1);
+        assert_eq!(spans[0].entity_type, EntityType::Secret);
+    }
+
+    #[test]
+    fn test_secret_github_pat_classic() {
+        let token = "ghp_".to_string() + &"a1b2c3".repeat(6); // 36 chars
+        let spans = detect_secret(&format!("token: {}", token));
+        assert_eq!(spans.len(), 1);
+    }
+
+    #[test]
+    fn test_secret_github_pat_other_prefixes() {
+        for prefix in &["gho_", "ghu_", "ghs_", "ghr_"] {
+            let token = format!("{}{}", prefix, "a".repeat(36));
+            let spans = detect_secret(&token);
+            assert_eq!(spans.len(), 1, "prefix {} should match", prefix);
+        }
+    }
+
+    #[test]
+    fn test_secret_github_fine_grained() {
+        let token = format!("github_pat_{}_{}", "a".repeat(22), "b".repeat(59));
+        let spans = detect_secret(&token);
+        assert_eq!(spans.len(), 1);
+    }
+
+    #[test]
+    fn test_secret_stripe_key() {
+        let key = format!("sk_live_{}", "a1".repeat(12)); // 24 chars
+        let spans = detect_secret(&format!("Stripe key: {}", key));
+        assert_eq!(spans.len(), 1);
+    }
+
+    #[test]
+    fn test_secret_stripe_prod_key() {
+        let key = format!("sk_prod_{}", "a1".repeat(12));
+        let spans = detect_secret(&format!("Stripe prod key: {}", key));
+        assert_eq!(spans.len(), 1);
+    }
+
+    #[test]
+    fn test_secret_stripe_long_key() {
+        // Stripe key lengths vary — should match lengths beyond 24
+        let key = format!("sk_live_{}", "a".repeat(50));
+        let spans = detect_secret(&key);
+        assert_eq!(spans.len(), 1);
+    }
+
+    #[test]
+    fn test_secret_openai_classic_key() {
+        // Classic OpenAI key: sk- + 20 chars + T3BlbkFJ + 20 chars = 48 chars total
+        let key = format!("sk-{}T3BlbkFJ{}", "a".repeat(20), "b".repeat(20));
+        let spans = detect_secret(&format!("openai key: {}", key));
+        assert_eq!(spans.len(), 1);
+    }
+
+    #[test]
+    fn test_secret_openai_project_key() {
+        let key = format!("sk-proj-{}", "a".repeat(60));
+        let spans = detect_secret(&format!("openai key: {}", key));
+        assert_eq!(spans.len(), 1);
+    }
+
+    #[test]
+    fn test_secret_openai_no_false_positive() {
+        // sk- with 48 random chars but NO T3BlbkFJ anchor — must NOT match
+        let key = format!("sk-{}", "a".repeat(48));
+        let spans = detect_secret(&key);
+        assert_eq!(spans.len(), 0, "sk- without T3BlbkFJ anchor must not match");
+    }
+
+    #[test]
+    fn test_secret_anthropic_key() {
+        // sk-ant- prefix + exactly 95 chars
+        let key = format!("sk-ant-{}", "a1b2".repeat(23) + "abc"); // 92 + 3 = 95 chars
+        let spans = detect_secret(&key);
+        assert_eq!(spans.len(), 1);
+    }
+
+    #[test]
+    fn test_secret_google_api_key() {
+        // AIza prefix + exactly 35 chars (alphanumeric + - + _)
+        let key = format!("AIza{}", "a1B2c".repeat(7)); // 35 chars
+        let spans = detect_secret(&key);
+        assert_eq!(spans.len(), 1);
+    }
+
+    #[test]
+    fn test_secret_aws_iam_key() {
+        let key = "AKIA1234567890ABCDEF"; // AKIA + 16 uppercase alphanumeric
+        let spans = detect_secret(&format!("aws key id: {}", key));
+        assert_eq!(spans.len(), 1);
+    }
+
+    #[test]
+    fn test_secret_aws_sts_key() {
+        let key = "ASIA1234567890ABCDEF";
+        let spans = detect_secret(key);
+        assert_eq!(spans.len(), 1);
+    }
+
+    #[test]
+    fn test_secret_slack_bot_token() {
+        let token = "xoxb-12345-67890-abcdefghijklmnop";
+        let spans = detect_secret(&format!("slack: {}", token));
+        assert_eq!(spans.len(), 1);
+    }
+
+    #[test]
+    fn test_secret_slack_user_token() {
+        let token = "xoxp-12345-67890-abcdefghijklmnop";
+        let spans = detect_secret(token);
+        assert_eq!(spans.len(), 1);
+    }
+
+    #[test]
+    fn test_secret_slack_app_token() {
+        let token = "xapp-1-A012BC3DE4F-1234567890123-abcdef1234567890abcdef1234567890abcdef";
+        let spans = detect_secret(token);
+        assert_eq!(spans.len(), 1);
+    }
+
+    #[test]
+    fn test_secret_jwt_token() {
+        // Realistic JWT structure: header.payload.signature
+        let token = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c";
+        let spans = detect_secret(&format!("Authorization: Bearer {}", token));
+        assert_eq!(spans.len(), 1);
+    }
+
+    #[test]
+    fn test_secret_pem_private_key_header() {
+        let text =
+            "-----BEGIN RSA PRIVATE KEY-----\nMIIEpAIBAAKCAQEA...\n-----END RSA PRIVATE KEY-----";
+        let spans = detect_secret(text);
+        assert_eq!(spans.len(), 1);
+    }
+
+    #[test]
+    fn test_secret_openssh_key_header() {
+        let text = "-----BEGIN OPENSSH PRIVATE KEY-----\nb3BlbnNzaC1rZXktdjEAAAA...";
+        let spans = detect_secret(text);
+        assert_eq!(spans.len(), 1);
+    }
+
+    #[test]
+    fn test_secret_pkcs8_bare_private_key() {
+        // PKCS8 unencrypted: "BEGIN PRIVATE KEY" with no type prefix
+        let text = "-----BEGIN PRIVATE KEY-----\nMIIEvQIBADANBgkqhkiG9w0BAQEFAASC...";
+        let spans = detect_secret(text);
+        assert_eq!(spans.len(), 1, "bare PKCS8 private key must match");
+    }
+
+    #[test]
+    fn test_secret_dsa_private_key() {
+        let text = "-----BEGIN DSA PRIVATE KEY-----\nMIIBuwIBAAKBgQC...";
+        let spans = detect_secret(text);
+        assert_eq!(spans.len(), 1, "DSA private key must match");
+    }
+
+    #[test]
+    fn test_secret_gitlab_additional_types() {
+        for prefix in &["glcbt", "gldt", "glft", "glrt", "glptt", "gloas"] {
+            let token = format!("{}-{}", prefix, "a1b2c3d4".repeat(3));
+            let spans = detect_secret(&token);
+            assert_eq!(spans.len(), 1, "GitLab {} token should match", prefix);
+        }
+    }
+
+    #[test]
+    fn test_secret_aws_additional_prefixes() {
+        for prefix in &["ABIA", "ACCA"] {
+            let key = format!("{}1234567890ABCDEF", prefix);
+            let spans = detect_secret(&key);
+            assert_eq!(spans.len(), 1, "AWS prefix {} should match", prefix);
+        }
+    }
+
+    #[test]
+    fn test_secret_hashicorp_vault_service_token() {
+        let token = format!("hvs.{}", "A".repeat(90));
+        let spans = detect_secret(&token);
+        assert_eq!(spans.len(), 1);
+    }
+
+    #[test]
+    fn test_secret_hashicorp_vault_batch_token() {
+        let token = format!("hvb.{}", "A".repeat(95));
+        let spans = detect_secret(&token);
+        assert_eq!(spans.len(), 1);
+    }
+
+    #[test]
+    fn test_secret_linear_api_key() {
+        let key = format!("lin_api_{}", "a1b2c3d4".repeat(5)); // 40 chars
+        let spans = detect_secret(&key);
+        assert_eq!(spans.len(), 1);
+    }
+
+    #[test]
+    fn test_secret_huggingface_org_token() {
+        let key = format!("api_org_{}", "a".repeat(34));
+        let spans = detect_secret(&key);
+        assert_eq!(spans.len(), 1);
+    }
+
+    #[test]
+    fn test_secret_no_false_positive_short_string() {
+        // Short random string — should NOT match
+        let spans = detect_secret("abc123");
+        assert_eq!(spans.len(), 0);
+    }
+
+    #[test]
+    fn test_secret_no_false_positive_email() {
+        // Email should not match as Secret
+        let spans = detect_secret("user@example.com");
+        assert_eq!(spans.len(), 0);
+    }
+
+    #[test]
+    fn test_secret_priority_beats_other_entities() {
+        // AWS key starts with "AKIA" — should not be mistaken for another entity
+        let key = "AKIA1234567890ABCDEF";
+        let spans = detect_spans(key, &[EntityType::Secret, EntityType::Ip], &[]);
+        assert_eq!(spans.len(), 1);
+        assert_eq!(spans[0].entity_type, EntityType::Secret);
+    }
+
+    #[test]
+    fn test_secret_entity_priority_is_highest() {
+        use super::entity_priority;
+        let secret_prio = entity_priority(&EntityType::Secret);
+        for other in &[
+            EntityType::CreditCard,
+            EntityType::Iban,
+            EntityType::Email,
+            EntityType::Phone,
+            EntityType::Ssn,
+            EntityType::Ip,
+            EntityType::Person,
+            EntityType::Org,
+        ] {
+            assert!(
+                secret_prio < entity_priority(other),
+                "Secret priority ({}) must be lower number (higher priority) than {:?} ({})",
+                secret_prio,
+                other,
+                entity_priority(other)
+            );
+        }
     }
 }

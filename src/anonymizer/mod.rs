@@ -1,3 +1,4 @@
+pub mod entropy;
 #[cfg(feature = "ner")]
 pub mod ner;
 pub mod patterns;
@@ -158,6 +159,8 @@ impl AnonEngine {
                     .filter(|e| !matches!(e, EntityType::Person | EntityType::Org))
                     .cloned()
                     .collect();
+                // Note: Secret IS included in residual scan — if a secret somehow survived
+                // substitution (shouldn't happen), we want to catch it.
                 std::borrow::Cow::Owned(filtered)
             } else {
                 std::borrow::Cow::Borrowed(&self.config.entities)
@@ -165,10 +168,17 @@ impl AnonEngine {
         };
         let residual = detect_spans(&output, &residual_entities, &self.config.custom_patterns);
         if !residual.is_empty() {
-            return Err(PagerunnerError::Config(format!(
-                "ResidualPiiDetected: {} entity(s) survived anonymization",
-                residual.len()
-            )));
+            let mut residual_counts: HashMap<String, usize> = HashMap::new();
+            for span in &residual {
+                *residual_counts
+                    .entry(entity_type_label(&span.entity_type))
+                    .or_insert(0) += 1;
+            }
+            let count = residual.len();
+            return Err(PagerunnerError::ResidualPiiDetected {
+                entity_counts: residual_counts,
+                count,
+            });
         }
 
         Ok(AnonResult {
@@ -187,8 +197,9 @@ pub fn entity_type_label(entity_type: &EntityType) -> String {
         EntityType::Iban => "IBAN".to_string(),
         EntityType::Ssn => "SSN".to_string(),
         EntityType::Ip => "IP".to_string(),
-        EntityType::Person => "PERSON".to_string(), // NEW
-        EntityType::Org => "ORG".to_string(),       // NEW
+        EntityType::Person => "PERSON".to_string(),
+        EntityType::Org => "ORG".to_string(),
+        EntityType::Secret => "SECRET".to_string(),
         EntityType::Custom(name) => name.clone(),
     }
 }
@@ -787,6 +798,207 @@ mod tests {
             Some(&1),
             "should count 1 ORG entity, got: {:?}",
             r.entity_counts
+        );
+    }
+
+    // ── Gap detection: residual scan ──────────────────────────────────────────
+
+    /// Verify ResidualPiiDetected carries structured entity_counts.
+    /// We simulate a residual by using a custom pattern whose substitution
+    /// accidentally produces a new match for another custom pattern — an
+    /// artificially constructed scenario that would normally never happen
+    /// but verifies the error shape.
+    ///
+    /// Simpler approach: use a regex that matches the vault token format.
+    /// [EMAIL:xxxxxx] matches `\[EMAIL:` — but the residual scan uses the same
+    /// entities, so we just verify the error is returned and carries counts when
+    /// the output contains a surviving match.
+    ///
+    /// The cleanest way to trigger it: configure the engine to scan for a custom
+    /// pattern that matches the *replacement* output (the vault token itself).
+    #[test]
+    fn test_residual_scan_returns_structured_entity_counts() {
+        // Custom pattern that matches the vault token format [EMAIL:xxxxxx]
+        // — after the engine replaces the email with a token, this pattern
+        // matches the token itself, forcing the residual scan to fire.
+        let cp = patterns::CompiledCustomPattern {
+            name: "TOKEN_LEAK".to_string(),
+            regex: regex::Regex::new(r"\[EMAIL:[a-f0-9]{6}\]").unwrap(),
+        };
+        let db = make_db();
+        let vault = crate::anonymizer::vault::Vault::new(db);
+        let config = AnonConfig {
+            mode: AnonMode::Tokenize,
+            entities: vec![EntityType::Email],
+            custom_patterns: vec![cp],
+        };
+        let mut engine = AnonEngine::new(vault, config);
+        let result = engine.process("sess1", None, "Contact user@example.com please");
+        // Residual scan should fire because the custom pattern matches the token
+        match result {
+            Err(crate::error::PagerunnerError::ResidualPiiDetected {
+                entity_counts,
+                count,
+            }) => {
+                assert!(count > 0, "count must be non-zero");
+                assert!(
+                    entity_counts.contains_key("TOKEN_LEAK"),
+                    "entity_counts must name the surviving entity: {:?}",
+                    entity_counts
+                );
+                assert_eq!(
+                    entity_counts.get("TOKEN_LEAK"),
+                    Some(&1),
+                    "one TOKEN_LEAK survived"
+                );
+            }
+            Ok(_) => panic!("expected ResidualPiiDetected but got Ok"),
+            Err(e) => panic!("expected ResidualPiiDetected but got: {:?}", e),
+        }
+    }
+
+    #[test]
+    fn test_residual_scan_error_message_never_contains_value() {
+        // The error message must not leak the original PII value.
+        let cp = patterns::CompiledCustomPattern {
+            name: "TOKEN_LEAK".to_string(),
+            regex: regex::Regex::new(r"\[EMAIL:[a-f0-9]{6}\]").unwrap(),
+        };
+        let db = make_db();
+        let vault = crate::anonymizer::vault::Vault::new(db);
+        let config = AnonConfig {
+            mode: AnonMode::Tokenize,
+            entities: vec![EntityType::Email],
+            custom_patterns: vec![cp],
+        };
+        let mut engine = AnonEngine::new(vault, config);
+        let result = engine.process("sess1", None, "Contact supersecret@private.org please");
+        match result {
+            Err(e) => {
+                let msg = e.to_string();
+                assert!(
+                    !msg.contains("supersecret@private.org"),
+                    "error must not contain PII value: {}",
+                    msg
+                );
+            }
+            Ok(_) => panic!("expected error"),
+        }
+    }
+
+    #[test]
+    fn test_residual_scan_multiple_entity_types_counted_separately() {
+        // Two surviving custom patterns should appear as separate keys in entity_counts.
+        let cp_a = patterns::CompiledCustomPattern {
+            name: "PATTERN_A".to_string(),
+            regex: regex::Regex::new(r"\[EMAIL:[a-f0-9]{6}\]").unwrap(),
+        };
+        let cp_b = patterns::CompiledCustomPattern {
+            name: "PATTERN_B".to_string(),
+            regex: regex::Regex::new(r"\[PHONE:[a-f0-9]{6}\]").unwrap(),
+        };
+        let db = make_db();
+        let vault = crate::anonymizer::vault::Vault::new(db);
+        let config = AnonConfig {
+            mode: AnonMode::Tokenize,
+            entities: vec![EntityType::Email, EntityType::Phone],
+            custom_patterns: vec![cp_a, cp_b],
+        };
+        let mut engine = AnonEngine::new(vault, config);
+        let result = engine.process("sess1", None, "user@example.com and 555-867-5309");
+        match result {
+            Err(crate::error::PagerunnerError::ResidualPiiDetected { entity_counts, .. }) => {
+                assert!(
+                    entity_counts.contains_key("PATTERN_A")
+                        || entity_counts.contains_key("PATTERN_B"),
+                    "at least one pattern should survive: {:?}",
+                    entity_counts
+                );
+            }
+            Ok(_) => panic!("expected ResidualPiiDetected"),
+            Err(e) => panic!("unexpected error: {:?}", e),
+        }
+    }
+
+    // ── Gap detection: entropy heuristic ─────────────────────────────────────
+
+    #[test]
+    fn test_entropy_scan_catches_unknown_credential_in_output() {
+        // If a high-entropy token near a context word survived anonymization,
+        // entropy::entropy_scan should flag it.
+        // This simulates a credential format we don't have a pattern for.
+        let unknown_cred = "xK9mN2pQrLsT4vWyAzBcDeFgHiJkOuVwXy"; // 36 chars, high entropy
+        let text = format!("api_key: {}", unknown_cred);
+        let hits = crate::anonymizer::entropy::entropy_scan(&text);
+        assert_eq!(
+            hits.len(),
+            1,
+            "unknown credential near api_key must be flagged"
+        );
+        assert_eq!(hits[0].context_word, "key");
+        assert_eq!(&text[hits[0].start..hits[0].end], unknown_cred);
+    }
+
+    #[test]
+    fn test_entropy_scan_does_not_flag_vault_tokens() {
+        // After anonymization, output contains vault tokens like [EMAIL:a1b2c3].
+        // These must NOT be flagged — they're our own substitutions, not leakage.
+        let output = "Contact [EMAIL:a1b2c3] or call [PHONE:d4e5f6] for help";
+        let hits = crate::anonymizer::entropy::entropy_scan(output);
+        assert_eq!(
+            hits.len(),
+            0,
+            "vault tokens must not trigger entropy heuristic"
+        );
+    }
+
+    #[test]
+    fn test_entropy_scan_does_not_flag_redacted_output() {
+        // [EMAIL] and [PHONE] placeholders from redact mode must not trigger.
+        let output = "Contact [EMAIL] or call [PHONE] for help with secret: [SECRET]";
+        let hits = crate::anonymizer::entropy::entropy_scan(output);
+        assert_eq!(hits.len(), 0, "redact placeholders must not trigger");
+    }
+
+    #[test]
+    fn test_entropy_scan_after_engine_process_no_false_positives() {
+        // Run the engine on normal PII-free content and verify entropy scan
+        // on the output produces no false positives.
+        let mut engine = make_engine(AnonMode::Tokenize, vec![EntityType::Email]);
+        let result = engine
+            .process(
+                "sess1",
+                None,
+                "Hello world, no secrets here. Visit https://example.com for info.",
+            )
+            .unwrap();
+        let hits = crate::anonymizer::entropy::entropy_scan(&result.output);
+        assert_eq!(
+            hits.len(),
+            0,
+            "clean content should produce no entropy hits: {:?}",
+            hits
+        );
+    }
+
+    #[test]
+    fn test_entropy_scan_after_engine_process_catches_slip() {
+        // Verify that if something high-entropy near a context word appears in
+        // anonymized output, entropy_scan catches it.
+        // We don't scan entities, so the credential passes through the pipeline.
+        let mut engine = make_engine(AnonMode::Tokenize, vec![EntityType::Email]); // only emails scanned
+        let unknown_token = "xK9mN2pQrLsT4vWyAzBcDeFgHiJkOuVwXy";
+        let text = format!("user@example.com — secret: {}", unknown_token);
+        let result = engine.process("sess1", None, &text).unwrap();
+        // email was tokenized, but the unknown_token passed through
+        assert!(!result.output.contains("user@example.com"));
+        // entropy scan on output catches the unknown token
+        let hits = crate::anonymizer::entropy::entropy_scan(&result.output);
+        assert_eq!(
+            hits.len(),
+            1,
+            "high-entropy token near 'secret' must be flagged: {}",
+            result.output
         );
     }
 

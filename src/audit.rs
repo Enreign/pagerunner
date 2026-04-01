@@ -71,6 +71,40 @@ pub enum AuditEventKind {
         origin: String,
         adapter_name: String,
     },
+    /// A credential was auto-detected in page content and scrubbed before reaching the LLM.
+    /// The raw value is NEVER logged — only the secret name and match count.
+    SecretScrubbed {
+        session_id: String,
+        target_id: String,
+        /// Number of credential patterns found and replaced
+        count: usize,
+    },
+    /// A secret was explicitly extracted from a page or stored via store_as_secret.
+    /// Value is NEVER logged — only the name and source.
+    SecretStored {
+        /// Human-readable name the secret was stored under in the sealed KV
+        name: String,
+        /// "extract_secret" | "store_as_secret"
+        source: String,
+    },
+    /// A secret was consumed via the CLI use-secret command.
+    /// Value is NEVER logged — only the name and the command binary (not full args).
+    SecretUsed {
+        name: String,
+        /// First token of the command only (e.g. "gh") — never full args
+        command: String,
+    },
+    /// PII or credential was detected in page content AFTER anonymization ran —
+    /// meaning the anonymizer missed it. Content was blocked before reaching the LLM.
+    /// Values are NEVER logged — only entity types, counts, and detection method.
+    AnonymizationGap {
+        session_id: String,
+        target_id: String,
+        /// Entity labels that survived with their counts (e.g. {"SECRET": 1, "EMAIL": 2})
+        entity_counts: std::collections::HashMap<String, usize>,
+        /// How the gap was detected: "residual_scan" | "entropy_heuristic"
+        source: String,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

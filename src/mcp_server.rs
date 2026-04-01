@@ -7,6 +7,27 @@ use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::sync::Mutex;
 
+/// DB table for secrets sealed from LLM access. Readable only via CLI `use-secret`.
+pub const SEALED_SECRETS_TABLE: &str = "sealed_secrets";
+
+/// Validate a secret name: alphanumeric, hyphens, underscores only; 1–64 chars.
+fn validate_secret_name(name: &str) -> Result<()> {
+    if name.is_empty() || name.len() > 64 {
+        return Err(PagerunnerError::Config(
+            "secret name must be 1–64 characters".into(),
+        ));
+    }
+    if !name
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+    {
+        return Err(PagerunnerError::Config(
+            "secret name may only contain alphanumeric characters, hyphens, and underscores".into(),
+        ));
+    }
+    Ok(())
+}
+
 /// Response from a tool call, including the result and optional semantic metadata.
 #[derive(Debug, Clone)]
 pub struct ToolResponse {
@@ -67,7 +88,7 @@ pub fn all_tools() -> Vec<Value> {
                     "anonymization_entities": {
                         "type": "array",
                         "items": { "type": "string" },
-                        "description": "Entity types to detect inline, e.g. [\"EMAIL\", \"PHONE\", \"CREDIT_CARD\", \"IBAN\", \"SSN\", \"IP\"]. Mutually exclusive with anonymization_profile."
+                        "description": "Entity types to detect inline, e.g. [\"EMAIL\", \"PHONE\", \"CREDIT_CARD\", \"IBAN\", \"SSN\", \"IP\", \"SECRET\"]. SECRET scrubs API keys and tokens (npm, GitHub, Stripe, OpenAI, AWS, etc.) before content reaches the LLM. Mutually exclusive with anonymization_profile."
                     },
                     "anonymization_mode": {
                         "type": "string",
@@ -194,9 +215,33 @@ pub fn all_tools() -> Vec<Value> {
                 "properties": {
                     "session_id": { "type": "string" },
                     "target_id": { "type": "string" },
-                    "expression": { "type": "string", "description": "JavaScript expression to evaluate" }
+                    "expression": { "type": "string", "description": "JavaScript expression to evaluate" },
+                    "store_as_secret": {
+                        "type": "string",
+                        "description": "If set, the result is stored in the sealed secret store under this name and is NOT returned to the LLM. Use to capture credentials without them passing through the model. Retrieve later with: pagerunner use-secret <name> -- <command>"
+                    }
                 },
                 "required": ["session_id", "target_id", "expression"]
+            }
+        }),
+        json!({
+            "name": "extract_secret",
+            "description": "Evaluate a JavaScript expression or CSS selector in a tab, store the result as a named secret in the sealed store, and return only the name — the value never reaches the LLM. Use this when a page shows a credential (token, API key) and you need to capture it for use in a shell command. Retrieve with: pagerunner use-secret <name> -- <command>",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "session_id": { "type": "string" },
+                    "target_id": { "type": "string" },
+                    "expression": {
+                        "type": "string",
+                        "description": "JavaScript expression whose result is the secret value. Examples: document.querySelector('.token').textContent.trim() — or any JS expression that returns the credential string."
+                    },
+                    "name": {
+                        "type": "string",
+                        "description": "Name to store the secret under (alphanumeric + hyphens/underscores, e.g. 'npm_token', 'stripe_key'). Used later with: pagerunner use-secret <name> -- <command>"
+                    }
+                },
+                "required": ["session_id", "target_id", "expression", "name"]
             }
         }),
         json!({
@@ -579,6 +624,48 @@ pub fn all_tools() -> Vec<Value> {
                     }
                 },
                 "required": ["origin", "name"]
+            }
+        }),
+        json!({
+            "name": "use_secret",
+            "description": "Run a shell command with a sealed secret injected via stdin. The secret value is read from the daemon's sealed store and piped directly to the command's stdin — it never passes through the LLM or appears in any response. Use this after extract_secret or store_as_secret to forward a captured credential to a CLI tool (e.g. gh secret set, curl). Returns stdout, stderr, and the exit code.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "name": {
+                        "type": "string",
+                        "description": "Name of the sealed secret to use (as stored by extract_secret or store_as_secret)"
+                    },
+                    "command": {
+                        "type": "array",
+                        "items": { "type": "string" },
+                        "description": "Command to run, e.g. [\"gh\", \"secret\", \"set\", \"NPM_TOKEN\", \"--repos\", \"owner/repo\"]. The secret is written to the command's stdin."
+                    }
+                },
+                "required": ["name", "command"]
+            }
+        }),
+        json!({
+            "name": "list_secrets",
+            "description": "List the names of secrets currently stored in the sealed store. Values are never returned — only names. Use to verify that extract_secret or store_as_secret succeeded before calling use_secret.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {},
+                "required": []
+            }
+        }),
+        json!({
+            "name": "delete_secret",
+            "description": "Delete a named secret from the sealed store. Use after the secret has been consumed (e.g. after use_secret succeeded) to clean up credentials that are no longer needed.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "name": {
+                        "type": "string",
+                        "description": "Name of the secret to delete"
+                    }
+                },
+                "required": ["name"]
             }
         }),
         json!({
@@ -1301,6 +1388,7 @@ fn entity_type_from_config(
         ETC::Ip => ET::Ip,
         ETC::Person => ET::Person,
         ETC::Org => ET::Org,
+        ETC::Secret => ET::Secret,
     }
 }
 
@@ -1365,6 +1453,7 @@ fn parse_entity_type_str(s: &str) -> Result<crate::anonymizer::patterns::EntityT
                 ))
             }
         }
+        "SECRET" => Ok(ET::Secret),
         other => Err(crate::error::PagerunnerError::Config(format!(
             "unknown entity type: {}",
             other
@@ -2241,10 +2330,76 @@ async fn dispatch_tool_inner(
                     #[cfg(not(feature = "ner"))]
                     crate::anonymizer::AnonEngine::new(vault, anon_config.clone())
                 };
-                let anon_result = engine
-                    .process(sid, None, &decoded)
-                    .map_err(|e| crate::error::PagerunnerError::Config(e.to_string()))?;
+
+                // Handle residual PII detection with a structured audit event before blocking.
+                let anon_result = match engine.process(sid, None, &decoded) {
+                    Ok(r) => r,
+                    Err(crate::error::PagerunnerError::ResidualPiiDetected {
+                        ref entity_counts,
+                        count,
+                    }) => {
+                        tracing::warn!(
+                            session_id = %sid,
+                            target_id = %tid,
+                            count = count,
+                            entities = ?entity_counts,
+                            "ANONYMIZATION GAP (residual_scan): PII survived anonymization — blocked"
+                        );
+                        if let Some(a) = audit {
+                            a.record(crate::audit::AuditEvent::new(
+                                crate::audit::AuditEventKind::AnonymizationGap {
+                                    session_id: sid.to_string(),
+                                    target_id: tid.to_string(),
+                                    entity_counts: entity_counts.clone(),
+                                    source: "residual_scan".to_string(),
+                                },
+                            ))
+                            .await;
+                        }
+                        return Err(crate::error::PagerunnerError::Config(
+                            "Content blocked: PII survived anonymization (residual_scan). Check pagerunner audit for details.".into(),
+                        ));
+                    }
+                    Err(e) => return Err(e),
+                };
+
                 let mut output = anon_result.output;
+
+                // Entropy heuristic: scan for high-entropy strings near context keywords
+                // that the pattern-based pass may have missed (unknown credential formats).
+                let entropy_hits = crate::anonymizer::entropy::entropy_scan(&output);
+                if !entropy_hits.is_empty() {
+                    let count = entropy_hits.len();
+                    let mut gap_counts = std::collections::HashMap::new();
+                    for hit in &entropy_hits {
+                        *gap_counts
+                            .entry(format!("ENTROPY({})", hit.context_word))
+                            .or_insert(0usize) += 1;
+                    }
+                    tracing::warn!(
+                        session_id = %sid,
+                        target_id = %tid,
+                        count = count,
+                        entities = ?gap_counts,
+                        "ANONYMIZATION GAP (entropy_heuristic): high-entropy strings near credential keywords"
+                    );
+                    if let Some(a) = audit {
+                        a.record(crate::audit::AuditEvent::new(
+                            crate::audit::AuditEventKind::AnonymizationGap {
+                                session_id: sid.to_string(),
+                                target_id: tid.to_string(),
+                                entity_counts: gap_counts,
+                                source: "entropy_heuristic".to_string(),
+                            },
+                        ))
+                        .await;
+                    }
+                    // Entropy hits are warnings, not hard blocks — the content has already
+                    // passed the residual pattern scan. Log and continue so the LLM gets
+                    // content, but the audit trail records the gap.
+                    // If you want to fail-closed here, return Err(...) instead.
+                }
+
                 if output.len() > crate::sanitizer::MAX_CONTENT_LENGTH {
                     output
                         .truncate(output.floor_char_boundary(crate::sanitizer::MAX_CONTENT_LENGTH));
@@ -2257,6 +2412,17 @@ async fn dispatch_tool_inner(
                             crate::config::AnonMode::Tokenize => "tokenize",
                             crate::config::AnonMode::Redact => "redact",
                         };
+                        // Dedicated SecretScrubbed event when credentials were found
+                        if let Some(&secret_count) = anon_result.entity_counts.get("SECRET") {
+                            a.record(crate::audit::AuditEvent::new(
+                                crate::audit::AuditEventKind::SecretScrubbed {
+                                    session_id: sid.to_string(),
+                                    target_id: tid.to_string(),
+                                    count: secret_count,
+                                },
+                            ))
+                            .await;
+                        }
                         a.record(crate::audit::AuditEvent::new(
                             crate::audit::AuditEventKind::ContentAnonymized {
                                 session_id: sid.to_string(),
@@ -2359,6 +2525,7 @@ async fn dispatch_tool_inner(
             let expr = args["expression"].as_str().ok_or_else(|| {
                 crate::error::PagerunnerError::Config("Missing expression".into())
             })?;
+            let store_as_secret = args["store_as_secret"].as_str();
             let mut mgr = sessions.lock().await;
             let session = mgr.get_live(sid)?;
             // Clone buffer Arc before evaluate (which mutably borrows session)
@@ -2384,6 +2551,35 @@ async fn dispatch_tool_inner(
             };
             let raw = serde_json::to_string_pretty(&result)?;
 
+            // store_as_secret: seal the value in the secret store, return only the name.
+            // The raw value never reaches the LLM.
+            if let Some(secret_name) = store_as_secret {
+                validate_secret_name(secret_name)?;
+                // Extract plain string value from JSON result (strip surrounding quotes if any)
+                let secret_value = result
+                    .as_str()
+                    .map(|s| s.to_string())
+                    .unwrap_or_else(|| raw.trim().to_string());
+                db.put(SEALED_SECRETS_TABLE, secret_name, secret_value.as_bytes())
+                    .map_err(|e| crate::error::PagerunnerError::Config(e.to_string()))?;
+                if let Some(audit) = audit {
+                    audit
+                        .record(crate::audit::AuditEvent::new(
+                            crate::audit::AuditEventKind::SecretStored {
+                                name: secret_name.to_string(),
+                                source: "store_as_secret".to_string(),
+                            },
+                        ))
+                        .await;
+                }
+                return Ok(serde_json::json!({
+                    "ok": true,
+                    "stored_as": secret_name,
+                    "hint": format!("Retrieve with: pagerunner use-secret {} -- <command>", secret_name)
+                })
+                .to_string());
+            }
+
             // Anonymization path: entity decode → anonymize (no truncation for evaluate results).
             if let Some(anon_config) = session.anon_config.clone() {
                 let decoded = crate::sanitizer::html_entity_decode(&raw);
@@ -2393,16 +2589,106 @@ async fn dispatch_tool_inner(
                 let mut engine = {
                     #[cfg(feature = "ner")]
                     if ner_disabled {
-                        crate::anonymizer::AnonEngine::new_with_ner_disabled(vault, anon_config)
+                        crate::anonymizer::AnonEngine::new_with_ner_disabled(
+                            vault,
+                            anon_config.clone(),
+                        )
                     } else {
-                        crate::anonymizer::AnonEngine::new(vault, anon_config)
+                        crate::anonymizer::AnonEngine::new(vault, anon_config.clone())
                     }
                     #[cfg(not(feature = "ner"))]
-                    crate::anonymizer::AnonEngine::new(vault, anon_config)
+                    crate::anonymizer::AnonEngine::new(vault, anon_config.clone())
                 };
-                let anon_result = engine
-                    .process(sid, None, &decoded)
-                    .map_err(|e| crate::error::PagerunnerError::Config(e.to_string()))?;
+                let anon_result = match engine.process(sid, None, &decoded) {
+                    Ok(r) => r,
+                    Err(crate::error::PagerunnerError::ResidualPiiDetected {
+                        ref entity_counts,
+                        count,
+                    }) => {
+                        tracing::warn!(
+                            session_id = %sid,
+                            target_id = %tid,
+                            count = count,
+                            entities = ?entity_counts,
+                            "ANONYMIZATION GAP (residual_scan/evaluate): PII survived anonymization — blocked"
+                        );
+                        if let Some(a) = audit {
+                            a.record(crate::audit::AuditEvent::new(
+                                crate::audit::AuditEventKind::AnonymizationGap {
+                                    session_id: sid.to_string(),
+                                    target_id: tid.to_string(),
+                                    entity_counts: entity_counts.clone(),
+                                    source: "residual_scan".to_string(),
+                                },
+                            ))
+                            .await;
+                        }
+                        return Err(crate::error::PagerunnerError::Config(
+                            "Content blocked: PII survived anonymization (residual_scan). Check pagerunner audit for details.".into(),
+                        ));
+                    }
+                    Err(e) => return Err(e),
+                };
+
+                // Entropy heuristic on evaluate results
+                let entropy_hits = crate::anonymizer::entropy::entropy_scan(&anon_result.output);
+                if !entropy_hits.is_empty() {
+                    let count = entropy_hits.len();
+                    let mut gap_counts = std::collections::HashMap::new();
+                    for hit in &entropy_hits {
+                        *gap_counts
+                            .entry(format!("ENTROPY({})", hit.context_word))
+                            .or_insert(0usize) += 1;
+                    }
+                    tracing::warn!(
+                        session_id = %sid,
+                        target_id = %tid,
+                        count = count,
+                        entities = ?gap_counts,
+                        "ANONYMIZATION GAP (entropy_heuristic/evaluate): high-entropy strings near credential keywords"
+                    );
+                    if let Some(a) = audit {
+                        a.record(crate::audit::AuditEvent::new(
+                            crate::audit::AuditEventKind::AnonymizationGap {
+                                session_id: sid.to_string(),
+                                target_id: tid.to_string(),
+                                entity_counts: gap_counts,
+                                source: "entropy_heuristic".to_string(),
+                            },
+                        ))
+                        .await;
+                    }
+                }
+
+                // Emit ContentAnonymized audit for evaluate (previously missing)
+                if !anon_result.entity_counts.is_empty() {
+                    if let Some(a) = audit {
+                        let mode_str = match anon_config.mode {
+                            crate::config::AnonMode::Tokenize => "tokenize",
+                            crate::config::AnonMode::Redact => "redact",
+                        };
+                        if let Some(&secret_count) = anon_result.entity_counts.get("SECRET") {
+                            a.record(crate::audit::AuditEvent::new(
+                                crate::audit::AuditEventKind::SecretScrubbed {
+                                    session_id: sid.to_string(),
+                                    target_id: tid.to_string(),
+                                    count: secret_count,
+                                },
+                            ))
+                            .await;
+                        }
+                        a.record(crate::audit::AuditEvent::new(
+                            crate::audit::AuditEventKind::ContentAnonymized {
+                                session_id: sid.to_string(),
+                                target_id: tid.to_string(),
+                                mode: mode_str.to_string(),
+                                entity_counts: anon_result.entity_counts,
+                            },
+                        ))
+                        .await;
+                    }
+                }
+
                 let eval_val: serde_json::Value = serde_json::from_str(&anon_result.output)
                     .unwrap_or(serde_json::Value::String(anon_result.output));
                 return Ok(serde_json::json!({"ok": true, "result": eval_val}).to_string());
@@ -2955,6 +3241,136 @@ async fn dispatch_tool_inner(
             Ok(serde_json::json!({"ok": true}).to_string())
         }
 
+        "extract_secret" => {
+            let sid = args["session_id"].as_str().ok_or_else(|| {
+                crate::error::PagerunnerError::Config("Missing session_id".into())
+            })?;
+            let tid = args["target_id"]
+                .as_str()
+                .ok_or_else(|| crate::error::PagerunnerError::Config("Missing target_id".into()))?;
+            let expr = args["expression"].as_str().ok_or_else(|| {
+                crate::error::PagerunnerError::Config("Missing expression".into())
+            })?;
+            let name = args["name"]
+                .as_str()
+                .ok_or_else(|| crate::error::PagerunnerError::Config("Missing name".into()))?;
+            validate_secret_name(name)?;
+            let mut mgr = sessions.lock().await;
+            let session = mgr.get_live(sid)?;
+            let eval_result = browser::evaluate(session, tid, expr).await?;
+            // Extract string value; if result is a JSON string unwrap it, else serialize
+            let secret_value = eval_result
+                .as_str()
+                .map(|s| s.to_string())
+                .unwrap_or_else(|| eval_result.to_string());
+            if secret_value.trim().is_empty() {
+                return Err(crate::error::PagerunnerError::Config(
+                    "expression returned empty value — check the selector/expression".into(),
+                ));
+            }
+            db.put(SEALED_SECRETS_TABLE, name, secret_value.as_bytes())
+                .map_err(|e| crate::error::PagerunnerError::Config(e.to_string()))?;
+            if let Some(audit) = audit {
+                audit
+                    .record(crate::audit::AuditEvent::new(
+                        crate::audit::AuditEventKind::SecretStored {
+                            name: name.to_string(),
+                            source: "extract_secret".to_string(),
+                        },
+                    ))
+                    .await;
+            }
+            // Value is deliberately not returned — only the name
+            Ok(serde_json::json!({
+                "ok": true,
+                "stored_as": name,
+                "hint": format!("Retrieve with: pagerunner use-secret {} -- <command>", name)
+            })
+            .to_string())
+        }
+
+        "use_secret" => {
+            let name = args["name"]
+                .as_str()
+                .ok_or_else(|| crate::error::PagerunnerError::Config("Missing name".into()))?;
+            validate_secret_name(name)?;
+            let command_arr = args["command"]
+                .as_array()
+                .ok_or_else(|| crate::error::PagerunnerError::Config("Missing command".into()))?;
+            if command_arr.is_empty() {
+                return Err(crate::error::PagerunnerError::Config(
+                    "command must be a non-empty array".into(),
+                ));
+            }
+            let secret_bytes = db
+                .get(SEALED_SECRETS_TABLE, name)
+                .map_err(|e| crate::error::PagerunnerError::Config(e.to_string()))?
+                .ok_or_else(|| {
+                    crate::error::PagerunnerError::Config(format!(
+                        "no secret named '{}' — use extract_secret or store_as_secret first",
+                        name
+                    ))
+                })?;
+            let program = command_arr[0].as_str().ok_or_else(|| {
+                crate::error::PagerunnerError::Config("command[0] must be a string".into())
+            })?;
+            let cmd_args: Vec<&str> = command_arr[1..].iter().filter_map(|v| v.as_str()).collect();
+            // Record audit BEFORE spawn — command binary only, never full args
+            if let Some(audit) = audit {
+                audit
+                    .record(crate::audit::AuditEvent::new(
+                        crate::audit::AuditEventKind::SecretUsed {
+                            name: name.to_string(),
+                            command: program.to_string(),
+                        },
+                    ))
+                    .await;
+            }
+            // Spawn with stdin piped; write secret; never capture it back
+            let mut child = std::process::Command::new(program)
+                .args(&cmd_args)
+                .stdin(std::process::Stdio::piped())
+                .stdout(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::piped())
+                .spawn()
+                .map_err(|e| {
+                    crate::error::PagerunnerError::Config(format!("failed to spawn command: {}", e))
+                })?;
+            if let Some(mut stdin) = child.stdin.take() {
+                use std::io::Write;
+                let _ = stdin.write_all(&secret_bytes);
+                // stdin dropped here → command's stdin is closed
+            }
+            let output = child.wait_with_output().map_err(|e| {
+                crate::error::PagerunnerError::Config(format!("command wait failed: {}", e))
+            })?;
+            Ok(serde_json::json!({
+                "ok": output.status.success(),
+                "exit_code": output.status.code().unwrap_or(-1),
+                "stdout": String::from_utf8_lossy(&output.stdout).to_string(),
+                "stderr": String::from_utf8_lossy(&output.stderr).to_string(),
+            })
+            .to_string())
+        }
+
+        "list_secrets" => {
+            let entries = db
+                .scan_prefix(SEALED_SECRETS_TABLE, "")
+                .map_err(|e| crate::error::PagerunnerError::Config(e.to_string()))?;
+            let names: Vec<&str> = entries.iter().map(|(k, _)| k.as_str()).collect();
+            Ok(serde_json::json!({"ok": true, "secrets": names}).to_string())
+        }
+
+        "delete_secret" => {
+            let name = args["name"]
+                .as_str()
+                .ok_or_else(|| crate::error::PagerunnerError::Config("Missing name".into()))?;
+            validate_secret_name(name)?;
+            db.delete(SEALED_SECRETS_TABLE, name)
+                .map_err(|e| crate::error::PagerunnerError::Config(e.to_string()))?;
+            Ok(serde_json::json!({"ok": true, "deleted": name}).to_string())
+        }
+
         "kv_set" => {
             let ns = args["namespace"]
                 .as_str()
@@ -2962,6 +3378,11 @@ async fn dispatch_tool_inner(
             if ns.contains('/') {
                 return Err(crate::error::PagerunnerError::Config(
                     "namespace must not contain '/'".into(),
+                ));
+            }
+            if ns == "sealed_secrets" {
+                return Err(crate::error::PagerunnerError::Config(
+                    "namespace 'sealed_secrets' is reserved for the secret store — use extract_secret or store_as_secret".into(),
                 ));
             }
             let key = args["key"]
@@ -2983,6 +3404,9 @@ async fn dispatch_tool_inner(
                 return Err(crate::error::PagerunnerError::Config(
                     "namespace must not contain '/'".into(),
                 ));
+            }
+            if ns == "sealed_secrets" {
+                return Ok(serde_json::json!({"ok": false, "sealed": true, "hint": "Secret values are sealed — retrieve with: pagerunner use-secret <name> -- <command>"}).to_string());
             }
             let key = args["key"]
                 .as_str()
@@ -5032,5 +5456,149 @@ mod register_adapter_tests {
             permitted.is_err(),
             "call_site_api should be blocked by tool permission policy"
         );
+    }
+}
+
+#[cfg(test)]
+mod secret_tests {
+    use super::*;
+    use crate::config::EntityTypeConfig;
+
+    // ── Secret entity type config mapping ─────────────────────────────────
+
+    #[test]
+    fn test_entity_type_from_config_secret() {
+        let et = entity_type_from_config(&EntityTypeConfig::Secret);
+        assert_eq!(et, crate::anonymizer::patterns::EntityType::Secret);
+    }
+
+    #[test]
+    fn test_parse_entity_type_str_secret() {
+        let et = parse_entity_type_str("SECRET");
+        assert!(et.is_ok());
+        assert_eq!(et.unwrap(), crate::anonymizer::patterns::EntityType::Secret);
+    }
+
+    // ── Sealed KV — validate_secret_name ──────────────────────────────────
+
+    #[test]
+    fn test_validate_secret_name_valid() {
+        assert!(validate_secret_name("npm_token").is_ok());
+        assert!(validate_secret_name("stripe-key").is_ok());
+        assert!(validate_secret_name("abc123").is_ok());
+        assert!(validate_secret_name("a").is_ok());
+    }
+
+    #[test]
+    fn test_validate_secret_name_empty() {
+        assert!(validate_secret_name("").is_err());
+    }
+
+    #[test]
+    fn test_validate_secret_name_too_long() {
+        assert!(validate_secret_name(&"a".repeat(65)).is_err());
+    }
+
+    #[test]
+    fn test_validate_secret_name_invalid_chars() {
+        assert!(validate_secret_name("my/secret").is_err());
+        assert!(validate_secret_name("my secret").is_err());
+        assert!(validate_secret_name("my@secret").is_err());
+    }
+
+    // ── extract_secret tool listed in all_tools ────────────────────────────
+
+    #[test]
+    fn test_extract_secret_tool_listed() {
+        let tools = all_tools();
+        assert!(
+            tools.iter().any(|t| t["name"] == "extract_secret"),
+            "extract_secret must be in all_tools()"
+        );
+    }
+
+    #[test]
+    fn test_extract_secret_tool_has_required_fields() {
+        let tools = all_tools();
+        let tool = tools
+            .iter()
+            .find(|t| t["name"] == "extract_secret")
+            .unwrap();
+        let required = tool["inputSchema"]["required"].as_array().unwrap();
+        let req_names: Vec<&str> = required.iter().map(|v| v.as_str().unwrap()).collect();
+        assert!(req_names.contains(&"session_id"));
+        assert!(req_names.contains(&"target_id"));
+        assert!(req_names.contains(&"expression"));
+        assert!(req_names.contains(&"name"));
+    }
+
+    #[test]
+    fn test_evaluate_tool_has_store_as_secret_param() {
+        let tools = all_tools();
+        let tool = tools.iter().find(|t| t["name"] == "evaluate").unwrap();
+        assert!(
+            tool["inputSchema"]["properties"]["store_as_secret"].is_object(),
+            "evaluate must have store_as_secret property"
+        );
+        // store_as_secret is optional — not in required
+        let required = tool["inputSchema"]["required"].as_array().unwrap();
+        let req_names: Vec<&str> = required.iter().map(|v| v.as_str().unwrap()).collect();
+        assert!(
+            !req_names.contains(&"store_as_secret"),
+            "store_as_secret must not be required"
+        );
+    }
+
+    // ── use_secret / list_secrets / delete_secret listed in all_tools ─────
+
+    #[test]
+    fn test_use_secret_tool_listed() {
+        let tools = all_tools();
+        assert!(
+            tools.iter().any(|t| t["name"] == "use_secret"),
+            "use_secret must be in all_tools()"
+        );
+    }
+
+    #[test]
+    fn test_use_secret_tool_requires_name_and_command() {
+        let tools = all_tools();
+        let tool = tools.iter().find(|t| t["name"] == "use_secret").unwrap();
+        let required = tool["inputSchema"]["required"].as_array().unwrap();
+        let req_names: Vec<&str> = required.iter().map(|v| v.as_str().unwrap()).collect();
+        assert!(req_names.contains(&"name"));
+        assert!(req_names.contains(&"command"));
+        // command must be an array type
+        assert_eq!(
+            tool["inputSchema"]["properties"]["command"]["type"],
+            "array"
+        );
+    }
+
+    #[test]
+    fn test_list_secrets_tool_listed() {
+        let tools = all_tools();
+        assert!(
+            tools.iter().any(|t| t["name"] == "list_secrets"),
+            "list_secrets must be in all_tools()"
+        );
+    }
+
+    #[test]
+    fn test_delete_secret_tool_listed() {
+        let tools = all_tools();
+        assert!(
+            tools.iter().any(|t| t["name"] == "delete_secret"),
+            "delete_secret must be in all_tools()"
+        );
+    }
+
+    #[test]
+    fn test_delete_secret_requires_name() {
+        let tools = all_tools();
+        let tool = tools.iter().find(|t| t["name"] == "delete_secret").unwrap();
+        let required = tool["inputSchema"]["required"].as_array().unwrap();
+        let req_names: Vec<&str> = required.iter().map(|v| v.as_str().unwrap()).collect();
+        assert!(req_names.contains(&"name"));
     }
 }

@@ -303,6 +303,23 @@ enum Commands {
     },
     /// Delete all keys in a namespace
     KvClear { namespace: String },
+    /// Run a command with a sealed secret injected via stdin.
+    /// The secret value is NEVER printed — it flows directly to the command's stdin.
+    /// Example: pagerunner use-secret npm_token -- gh secret set NPM_TOKEN --repos owner/repo
+    #[command(name = "use-secret")]
+    UseSecret {
+        /// Name of the secret (as stored via extract_secret or store_as_secret)
+        name: String,
+        /// Command and arguments to run. The secret value is piped to its stdin.
+        #[arg(last = true)]
+        command: Vec<String>,
+    },
+    /// List secret names stored in the sealed store (names only — values are never shown).
+    #[command(name = "list-secrets")]
+    ListSecrets,
+    /// Delete a named secret from the sealed store.
+    #[command(name = "delete-secret")]
+    DeleteSecret { name: String },
     /// Query network requests captured during a session
     #[command(name = "get-network-log")]
     GetNetworkLog {
@@ -381,8 +398,48 @@ enum Commands {
         #[arg(long)]
         description: Option<String>,
     },
+    /// Evaluate a JavaScript expression in a tab and store the result as a named secret
+    /// in the sealed store. The value never appears in stdout or logs.
+    /// Example: pagerunner extract-secret <session> <target> "document.querySelector('.token').textContent.trim()" npm_token
+    #[command(name = "extract-secret")]
+    ExtractSecret {
+        session_id: String,
+        target_id: String,
+        /// JavaScript expression whose result is the secret value
+        expression: String,
+        /// Name to store the secret under (e.g. npm_token, stripe_key)
+        name: String,
+    },
+    /// Send a macOS notification via the Pagerunner menu bar.
+    #[command(name = "notify")]
+    Notify {
+        /// Notification title
+        title: String,
+        /// Optional body text
+        #[arg(long)]
+        body: Option<String>,
+        /// Severity level: info (default), warning, or error
+        #[arg(long, default_value = "info")]
+        level: String,
+        /// Associate with a session ID (used for menu bar deep-link)
+        #[arg(long)]
+        session_id: Option<String>,
+    },
     /// Download the NER model for PERSON/ORG name detection (requires --features ner build)
     DownloadModel,
+}
+
+/// Resolve the state DB path: PAGERUNNER_DB_PATH env var takes precedence,
+/// otherwise defaults to ~/.pagerunner/state.db.
+/// All CLI commands that open the DB directly must use this so that test
+/// isolation (PAGERUNNER_DB_PATH=/tmp/...) works correctly.
+fn resolve_db_path() -> crate::error::Result<std::path::PathBuf> {
+    if let Ok(p) = std::env::var("PAGERUNNER_DB_PATH") {
+        return Ok(std::path::PathBuf::from(p));
+    }
+    let home = dirs::home_dir()
+        .ok_or_else(|| crate::error::PagerunnerError::Config("Cannot find home dir".into()))?;
+    Ok(home.join(".pagerunner/state.db"))
 }
 
 #[cfg(feature = "ner")]
@@ -587,6 +644,51 @@ fn format_audit_event(event: &crate::audit::AuditEvent) -> String {
             format!(
                 "[{}] SITE_API_CALLED origin={} adapter={}",
                 ts, origin, adapter_name
+            )
+        }
+        crate::audit::AuditEventKind::SecretScrubbed {
+            session_id,
+            target_id,
+            count,
+        } => {
+            let sid = if session_id.len() >= 8 {
+                &session_id[..8]
+            } else {
+                session_id
+            };
+            format!(
+                "[{}] SECRET_SCRUBBED  session={} target={} count={}",
+                ts, sid, target_id, count
+            )
+        }
+        crate::audit::AuditEventKind::SecretStored { name, source } => {
+            format!("[{}] SECRET_STORED   name={} source={}", ts, name, source)
+        }
+        crate::audit::AuditEventKind::SecretUsed { name, command } => {
+            format!("[{}] SECRET_USED     name={} command={}", ts, name, command)
+        }
+        crate::audit::AuditEventKind::AnonymizationGap {
+            session_id,
+            target_id,
+            entity_counts,
+            source,
+        } => {
+            let sid = if session_id.len() >= 8 {
+                &session_id[..8]
+            } else {
+                session_id
+            };
+            let entities: Vec<String> = entity_counts
+                .iter()
+                .map(|(k, v)| format!("{}:{}", k, v))
+                .collect();
+            format!(
+                "[{}] ANONYMIZATION_GAP  session={} target={} source={} entities=[{}]",
+                ts,
+                sid,
+                target_id,
+                source,
+                entities.join(", ")
             )
         }
     }
@@ -1241,6 +1343,141 @@ async fn run() -> anyhow::Result<()> {
             )
             .await?;
         }
+
+        Commands::UseSecret { name, command } => {
+            if command.is_empty() {
+                eprintln!("Usage: pagerunner use-secret <name> -- <command> [args...]");
+                eprintln!("Example: pagerunner use-secret npm_token -- gh secret set NPM_TOKEN --repos owner/repo");
+                std::process::exit(1);
+            }
+            let db_path = resolve_db_path()?;
+            if !db_path.exists() {
+                eprintln!("No secrets found (database not yet created).");
+                std::process::exit(1);
+            }
+            let db_path_str = db_path
+                .to_str()
+                .ok_or_else(|| crate::error::PagerunnerError::Config("Non-UTF-8 db path".into()))?;
+            let db = crate::db::Db::open(db_path_str)?;
+            let secret_bytes = db
+                .get(crate::mcp_server::SEALED_SECRETS_TABLE, &name)?
+                .ok_or_else(|| {
+                    crate::error::PagerunnerError::Config(format!(
+                        "Secret '{}' not found. List available secrets with: pagerunner list-secrets",
+                        name
+                    ))
+                })?;
+            let secret_value = String::from_utf8(secret_bytes).map_err(|e| {
+                crate::error::PagerunnerError::Config(format!("Secret is not valid UTF-8: {}", e))
+            })?;
+
+            // Emit audit event — command binary only, never the full args
+            let audit_path = dirs::home_dir()
+                .expect("No home dir")
+                .join(".pagerunner/audit.log");
+            let audit = crate::audit::AuditLog::new(audit_path, std::sync::Arc::new(db));
+            audit
+                .record(crate::audit::AuditEvent::new(
+                    crate::audit::AuditEventKind::SecretUsed {
+                        name: name.clone(),
+                        command: command[0].clone(),
+                    },
+                ))
+                .await;
+
+            // Pipe secret to command stdin — value never touches stdout/stderr
+            use std::io::Write;
+            use std::process::{Command, Stdio};
+            let mut child = Command::new(&command[0])
+                .args(&command[1..])
+                .stdin(Stdio::piped())
+                .spawn()
+                .map_err(|e| {
+                    crate::error::PagerunnerError::Config(format!(
+                        "Failed to spawn '{}': {}",
+                        command[0], e
+                    ))
+                })?;
+            if let Some(mut stdin) = child.stdin.take() {
+                stdin.write_all(secret_value.as_bytes()).ok();
+            }
+            let status = child.wait().map_err(|e| {
+                crate::error::PagerunnerError::Config(format!("Command wait failed: {}", e))
+            })?;
+            if !status.success() {
+                std::process::exit(status.code().unwrap_or(1));
+            }
+        }
+
+        Commands::ListSecrets => {
+            let db_path = resolve_db_path()?;
+            if !db_path.exists() {
+                println!("{{\"secrets\":[]}}");
+                return Ok(());
+            }
+            let db_path_str = db_path
+                .to_str()
+                .ok_or_else(|| crate::error::PagerunnerError::Config("Non-UTF-8 db path".into()))?;
+            let db = crate::db::Db::open(db_path_str)?;
+            let entries = db.scan_prefix(crate::mcp_server::SEALED_SECRETS_TABLE, "")?;
+            let names: Vec<&str> = entries.iter().map(|(k, _)| k.as_str()).collect();
+            println!("{}", serde_json::json!({"secrets": names}));
+        }
+
+        Commands::DeleteSecret { name } => {
+            let db_path = resolve_db_path()?;
+            let db_path_str = db_path
+                .to_str()
+                .ok_or_else(|| crate::error::PagerunnerError::Config("Non-UTF-8 db path".into()))?;
+            let db = crate::db::Db::open(db_path_str)?;
+            db.delete(crate::mcp_server::SEALED_SECRETS_TABLE, &name)?;
+            println!("{}", serde_json::json!({"ok": true, "deleted": name}));
+        }
+
+        Commands::ExtractSecret {
+            session_id,
+            target_id,
+            expression,
+            name,
+        } => {
+            let config = config::PagerunnerConfig::load()?;
+            crate::cli_tools::run_tool(
+                "extract_secret",
+                serde_json::json!({
+                    "session_id": session_id,
+                    "target_id": target_id,
+                    "expression": expression,
+                    "name": name,
+                }),
+                crate::cli_tools::ScreenshotMode::File,
+                &config,
+            )
+            .await?;
+        }
+
+        Commands::Notify {
+            title,
+            body,
+            level,
+            session_id,
+        } => {
+            let config = config::PagerunnerConfig::load()?;
+            let mut args = serde_json::json!({"title": title, "level": level});
+            if let Some(b) = body {
+                args["body"] = serde_json::json!(b);
+            }
+            if let Some(sid) = session_id {
+                args["session_id"] = serde_json::json!(sid);
+            }
+            crate::cli_tools::run_tool(
+                "notify",
+                args,
+                crate::cli_tools::ScreenshotMode::File,
+                &config,
+            )
+            .await?;
+        }
+
         Commands::GetNetworkLog {
             session_id,
             target_id,
@@ -1372,15 +1609,14 @@ async fn run() -> anyhow::Result<()> {
                 None
             };
 
-            let home = dirs::home_dir().expect("No home dir");
-            let db_path = home.join(".pagerunner/state.db");
+            let db_path = resolve_db_path()?;
             if !db_path.exists() {
                 eprintln!("No audit records found (database not yet created).");
                 return Ok(());
             }
-            let db_path_str = db_path.to_str().ok_or_else(|| {
-                crate::error::PagerunnerError::Config("Non-UTF-8 home path".into())
-            })?;
+            let db_path_str = db_path
+                .to_str()
+                .ok_or_else(|| crate::error::PagerunnerError::Config("Non-UTF-8 db path".into()))?;
             let db = crate::db::Db::open(db_path_str)?;
             let entries = db.scan_prefix("audit", "")?;
 
@@ -1409,7 +1645,15 @@ async fn run() -> anyhow::Result<()> {
                         }
                         crate::audit::AuditEventKind::AdapterRegistered { .. }
                         | crate::audit::AuditEventKind::AuthTokenDetected { .. }
-                        | crate::audit::AuditEventKind::SiteApiCalled { .. } => None,
+                        | crate::audit::AuditEventKind::SiteApiCalled { .. }
+                        | crate::audit::AuditEventKind::SecretStored { .. }
+                        | crate::audit::AuditEventKind::SecretUsed { .. } => None,
+                        crate::audit::AuditEventKind::SecretScrubbed { session_id, .. } => {
+                            Some(session_id.as_str())
+                        }
+                        crate::audit::AuditEventKind::AnonymizationGap { session_id, .. } => {
+                            Some(session_id.as_str())
+                        }
                     };
                     event_sid == Some(sid.as_str())
                 });

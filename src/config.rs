@@ -63,8 +63,12 @@ pub enum EntityTypeConfig {
     Iban,
     Ssn,
     Ip,
-    Person, // NEW
-    Org,    // NEW
+    Person,
+    Org,
+    /// Scrub API keys, tokens, and credentials before content reaches the LLM.
+    /// Covers ~18 Tier 1 service patterns (npm, GitHub, Stripe, OpenAI, AWS, etc.)
+    /// plus JWT tokens and PEM private key headers.
+    Secret,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -191,9 +195,13 @@ pub struct PagerunnerConfig {
 
 impl PagerunnerConfig {
     pub fn load() -> Result<Self> {
-        let path = dirs::home_dir()
-            .ok_or_else(|| PagerunnerError::Config("Cannot find home dir".into()))?
-            .join(".pagerunner/config.toml");
+        let path = if let Ok(p) = std::env::var("PAGERUNNER_CONFIG_PATH") {
+            std::path::PathBuf::from(p)
+        } else {
+            dirs::home_dir()
+                .ok_or_else(|| PagerunnerError::Config("Cannot find home dir".into()))?
+                .join(".pagerunner/config.toml")
+        };
 
         if !path.exists() {
             return Ok(Self::default());
