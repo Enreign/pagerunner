@@ -605,11 +605,7 @@ fn test_list_secrets_empty_returns_json() {
     let s = stdout(&out);
     let v: serde_json::Value =
         serde_json::from_str(&s).unwrap_or_else(|_| panic!("expected JSON, got: {}", s));
-    assert!(
-        v["secrets"].is_array(),
-        "expected secrets array in: {}",
-        s
-    );
+    assert!(v["secrets"].is_array(), "expected secrets array in: {}", s);
 }
 
 #[test]
@@ -704,10 +700,7 @@ fn test_kv_set_to_sealed_secrets_namespace_is_blocked() {
 fn test_notify_requires_title() {
     // notify without a title must fail
     let out = run(&["notify"]);
-    assert!(
-        !out.status.success(),
-        "notify without title must fail"
-    );
+    assert!(!out.status.success(), "notify without title must fail");
 }
 
 #[test]

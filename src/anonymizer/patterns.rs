@@ -188,9 +188,7 @@ pub fn detect_spans(
             ),
             EntityType::Ssn => collect_matches(text, re_ssn(), ssn_valid, EntityType::Ssn),
             EntityType::Ip => collect_matches(text, re_ipv4(), ipv4_valid, EntityType::Ip),
-            EntityType::Secret => {
-                collect_matches(text, re_secret(), |_| true, EntityType::Secret)
-            }
+            EntityType::Secret => collect_matches(text, re_secret(), |_| true, EntityType::Secret),
             EntityType::Person | EntityType::Org => vec![], // NER detection happens in AnonEngine::process
             EntityType::Custom(_) => vec![],                // custom handled below
         };
@@ -672,7 +670,7 @@ mod tests {
 
     #[test]
     fn test_secret_github_fine_grained() {
-        let token = format!("github_pat_{}_{}",  "a".repeat(22), "b".repeat(59));
+        let token = format!("github_pat_{}_{}", "a".repeat(22), "b".repeat(59));
         let spans = detect_secret(&token);
         assert_eq!(spans.len(), 1);
     }
@@ -783,7 +781,8 @@ mod tests {
 
     #[test]
     fn test_secret_pem_private_key_header() {
-        let text = "-----BEGIN RSA PRIVATE KEY-----\nMIIEpAIBAAKCAQEA...\n-----END RSA PRIVATE KEY-----";
+        let text =
+            "-----BEGIN RSA PRIVATE KEY-----\nMIIEpAIBAAKCAQEA...\n-----END RSA PRIVATE KEY-----";
         let spans = detect_secret(text);
         assert_eq!(spans.len(), 1);
     }

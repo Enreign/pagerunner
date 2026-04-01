@@ -2589,7 +2589,10 @@ async fn dispatch_tool_inner(
                 let mut engine = {
                     #[cfg(feature = "ner")]
                     if ner_disabled {
-                        crate::anonymizer::AnonEngine::new_with_ner_disabled(vault, anon_config.clone())
+                        crate::anonymizer::AnonEngine::new_with_ner_disabled(
+                            vault,
+                            anon_config.clone(),
+                        )
                     } else {
                         crate::anonymizer::AnonEngine::new(vault, anon_config.clone())
                     }
@@ -3308,13 +3311,10 @@ async fn dispatch_tool_inner(
                         name
                     ))
                 })?;
-            let program = command_arr[0]
-                .as_str()
-                .ok_or_else(|| crate::error::PagerunnerError::Config("command[0] must be a string".into()))?;
-            let cmd_args: Vec<&str> = command_arr[1..]
-                .iter()
-                .filter_map(|v| v.as_str())
-                .collect();
+            let program = command_arr[0].as_str().ok_or_else(|| {
+                crate::error::PagerunnerError::Config("command[0] must be a string".into())
+            })?;
+            let cmd_args: Vec<&str> = command_arr[1..].iter().filter_map(|v| v.as_str()).collect();
             // Record audit BEFORE spawn — command binary only, never full args
             if let Some(audit) = audit {
                 audit
@@ -5457,7 +5457,6 @@ mod register_adapter_tests {
             "call_site_api should be blocked by tool permission policy"
         );
     }
-
 }
 
 #[cfg(test)]
@@ -5521,7 +5520,10 @@ mod secret_tests {
     #[test]
     fn test_extract_secret_tool_has_required_fields() {
         let tools = all_tools();
-        let tool = tools.iter().find(|t| t["name"] == "extract_secret").unwrap();
+        let tool = tools
+            .iter()
+            .find(|t| t["name"] == "extract_secret")
+            .unwrap();
         let required = tool["inputSchema"]["required"].as_array().unwrap();
         let req_names: Vec<&str> = required.iter().map(|v| v.as_str().unwrap()).collect();
         assert!(req_names.contains(&"session_id"));
@@ -5567,7 +5569,10 @@ mod secret_tests {
         assert!(req_names.contains(&"name"));
         assert!(req_names.contains(&"command"));
         // command must be an array type
-        assert_eq!(tool["inputSchema"]["properties"]["command"]["type"], "array");
+        assert_eq!(
+            tool["inputSchema"]["properties"]["command"]["type"],
+            "array"
+        );
     }
 
     #[test]

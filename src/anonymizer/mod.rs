@@ -1,6 +1,6 @@
+pub mod entropy;
 #[cfg(feature = "ner")]
 pub mod ner;
-pub mod entropy;
 pub mod patterns;
 pub mod vault;
 
@@ -905,15 +905,12 @@ mod tests {
             custom_patterns: vec![cp_a, cp_b],
         };
         let mut engine = AnonEngine::new(vault, config);
-        let result = engine.process(
-            "sess1",
-            None,
-            "user@example.com and 555-867-5309",
-        );
+        let result = engine.process("sess1", None, "user@example.com and 555-867-5309");
         match result {
             Err(crate::error::PagerunnerError::ResidualPiiDetected { entity_counts, .. }) => {
                 assert!(
-                    entity_counts.contains_key("PATTERN_A") || entity_counts.contains_key("PATTERN_B"),
+                    entity_counts.contains_key("PATTERN_A")
+                        || entity_counts.contains_key("PATTERN_B"),
                     "at least one pattern should survive: {:?}",
                     entity_counts
                 );
@@ -933,7 +930,11 @@ mod tests {
         let unknown_cred = "xK9mN2pQrLsT4vWyAzBcDeFgHiJkOuVwXy"; // 36 chars, high entropy
         let text = format!("api_key: {}", unknown_cred);
         let hits = crate::anonymizer::entropy::entropy_scan(&text);
-        assert_eq!(hits.len(), 1, "unknown credential near api_key must be flagged");
+        assert_eq!(
+            hits.len(),
+            1,
+            "unknown credential near api_key must be flagged"
+        );
         assert_eq!(hits[0].context_word, "key");
         assert_eq!(&text[hits[0].start..hits[0].end], unknown_cred);
     }
@@ -965,7 +966,11 @@ mod tests {
         // on the output produces no false positives.
         let mut engine = make_engine(AnonMode::Tokenize, vec![EntityType::Email]);
         let result = engine
-            .process("sess1", None, "Hello world, no secrets here. Visit https://example.com for info.")
+            .process(
+                "sess1",
+                None,
+                "Hello world, no secrets here. Visit https://example.com for info.",
+            )
             .unwrap();
         let hits = crate::anonymizer::entropy::entropy_scan(&result.output);
         assert_eq!(

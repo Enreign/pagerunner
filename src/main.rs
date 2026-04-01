@@ -319,9 +319,7 @@ enum Commands {
     ListSecrets,
     /// Delete a named secret from the sealed store.
     #[command(name = "delete-secret")]
-    DeleteSecret {
-        name: String,
-    },
+    DeleteSecret { name: String },
     /// Query network requests captured during a session
     #[command(name = "get-network-log")]
     GetNetworkLog {
@@ -1357,9 +1355,9 @@ async fn run() -> anyhow::Result<()> {
                 eprintln!("No secrets found (database not yet created).");
                 std::process::exit(1);
             }
-            let db_path_str = db_path.to_str().ok_or_else(|| {
-                crate::error::PagerunnerError::Config("Non-UTF-8 db path".into())
-            })?;
+            let db_path_str = db_path
+                .to_str()
+                .ok_or_else(|| crate::error::PagerunnerError::Config("Non-UTF-8 db path".into()))?;
             let db = crate::db::Db::open(db_path_str)?;
             let secret_bytes = db
                 .get(crate::mcp_server::SEALED_SECRETS_TABLE, &name)?
@@ -1417,9 +1415,9 @@ async fn run() -> anyhow::Result<()> {
                 println!("{{\"secrets\":[]}}");
                 return Ok(());
             }
-            let db_path_str = db_path.to_str().ok_or_else(|| {
-                crate::error::PagerunnerError::Config("Non-UTF-8 db path".into())
-            })?;
+            let db_path_str = db_path
+                .to_str()
+                .ok_or_else(|| crate::error::PagerunnerError::Config("Non-UTF-8 db path".into()))?;
             let db = crate::db::Db::open(db_path_str)?;
             let entries = db.scan_prefix(crate::mcp_server::SEALED_SECRETS_TABLE, "")?;
             let names: Vec<&str> = entries.iter().map(|(k, _)| k.as_str()).collect();
@@ -1428,9 +1426,9 @@ async fn run() -> anyhow::Result<()> {
 
         Commands::DeleteSecret { name } => {
             let db_path = resolve_db_path()?;
-            let db_path_str = db_path.to_str().ok_or_else(|| {
-                crate::error::PagerunnerError::Config("Non-UTF-8 db path".into())
-            })?;
+            let db_path_str = db_path
+                .to_str()
+                .ok_or_else(|| crate::error::PagerunnerError::Config("Non-UTF-8 db path".into()))?;
             let db = crate::db::Db::open(db_path_str)?;
             db.delete(crate::mcp_server::SEALED_SECRETS_TABLE, &name)?;
             println!("{}", serde_json::json!({"ok": true, "deleted": name}));
@@ -1616,9 +1614,9 @@ async fn run() -> anyhow::Result<()> {
                 eprintln!("No audit records found (database not yet created).");
                 return Ok(());
             }
-            let db_path_str = db_path.to_str().ok_or_else(|| {
-                crate::error::PagerunnerError::Config("Non-UTF-8 db path".into())
-            })?;
+            let db_path_str = db_path
+                .to_str()
+                .ok_or_else(|| crate::error::PagerunnerError::Config("Non-UTF-8 db path".into()))?;
             let db = crate::db::Db::open(db_path_str)?;
             let entries = db.scan_prefix("audit", "")?;
 

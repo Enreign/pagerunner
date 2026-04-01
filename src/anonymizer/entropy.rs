@@ -62,8 +62,8 @@ pub fn entropy_scan(text: &str) -> Vec<EntropyHit> {
     // that are long enough to be suspicious.
     let mut token_start: Option<usize> = None;
     for (i, ch) in text.char_indices() {
-        let is_cred_char = ch.is_ascii_alphanumeric()
-            || matches!(ch, '-' | '_' | '+' | '/' | '=' | '.' | '~');
+        let is_cred_char =
+            ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '+' | '/' | '=' | '.' | '~');
         if is_cred_char {
             if token_start.is_none() {
                 token_start = Some(i);
@@ -222,7 +222,11 @@ mod tests {
         // (they're deterministic short hex nonces, low entropy)
         let text = "email: [EMAIL:a1b2c3] and secret: [SECRET:d4e5f6]";
         let hits = entropy_scan(text);
-        assert_eq!(hits.len(), 0, "vault tokens are not high-entropy credentials");
+        assert_eq!(
+            hits.len(),
+            0,
+            "vault tokens are not high-entropy credentials"
+        );
     }
 
     #[test]
@@ -261,10 +265,6 @@ mod tests {
         let token = "aB3xQzPkNmTy7RwSuVoLqHiGfEdCbAjWe";
         let text = format!("{}{}", prefix, token);
         let hits = entropy_scan(&text);
-        assert_eq!(
-            hits.len(),
-            0,
-            "context word too far away must not trigger"
-        );
+        assert_eq!(hits.len(), 0, "context word too far away must not trigger");
     }
 }
