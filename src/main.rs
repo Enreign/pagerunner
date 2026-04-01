@@ -400,6 +400,33 @@ enum Commands {
         #[arg(long)]
         description: Option<String>,
     },
+    /// Evaluate a JavaScript expression in a tab and store the result as a named secret
+    /// in the sealed store. The value never appears in stdout or logs.
+    /// Example: pagerunner extract-secret <session> <target> "document.querySelector('.token').textContent.trim()" npm_token
+    #[command(name = "extract-secret")]
+    ExtractSecret {
+        session_id: String,
+        target_id: String,
+        /// JavaScript expression whose result is the secret value
+        expression: String,
+        /// Name to store the secret under (e.g. npm_token, stripe_key)
+        name: String,
+    },
+    /// Send a macOS notification via the Pagerunner menu bar.
+    #[command(name = "notify")]
+    Notify {
+        /// Notification title
+        title: String,
+        /// Optional body text
+        #[arg(long)]
+        body: Option<String>,
+        /// Severity level: info (default), warning, or error
+        #[arg(long, default_value = "info")]
+        level: String,
+        /// Associate with a session ID (used for menu bar deep-link)
+        #[arg(long)]
+        session_id: Option<String>,
+    },
     /// Download the NER model for PERSON/ORG name detection (requires --features ner build)
     DownloadModel,
 }
@@ -1395,6 +1422,50 @@ async fn run() -> anyhow::Result<()> {
             let db = crate::db::Db::open(db_path_str)?;
             db.delete(crate::mcp_server::SEALED_SECRETS_TABLE, &name)?;
             println!("{}", serde_json::json!({"ok": true, "deleted": name}));
+        }
+
+        Commands::ExtractSecret {
+            session_id,
+            target_id,
+            expression,
+            name,
+        } => {
+            let config = config::PagerunnerConfig::load()?;
+            crate::cli_tools::run_tool(
+                "extract_secret",
+                serde_json::json!({
+                    "session_id": session_id,
+                    "target_id": target_id,
+                    "expression": expression,
+                    "name": name,
+                }),
+                crate::cli_tools::ScreenshotMode::File,
+                &config,
+            )
+            .await?;
+        }
+
+        Commands::Notify {
+            title,
+            body,
+            level,
+            session_id,
+        } => {
+            let config = config::PagerunnerConfig::load()?;
+            let mut args = serde_json::json!({"title": title, "level": level});
+            if let Some(b) = body {
+                args["body"] = serde_json::json!(b);
+            }
+            if let Some(sid) = session_id {
+                args["session_id"] = serde_json::json!(sid);
+            }
+            crate::cli_tools::run_tool(
+                "notify",
+                args,
+                crate::cli_tools::ScreenshotMode::File,
+                &config,
+            )
+            .await?;
         }
 
         Commands::GetNetworkLog {
