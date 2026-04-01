@@ -91,32 +91,40 @@ fn re_secret() -> &'static Regex {
             # GitHub fine-grained PATs
             \bgithub_pat_[A-Za-z0-9]{22}_[A-Za-z0-9]{59}\b
             |
-            # GitLab PATs
-            \bglpat-[A-Za-z0-9\-]{20}\b
+            # GitLab tokens (PAT glpat-, CI job glcbt-, deploy gldt-, feed glft-,
+            #                runner auth glrt-, pipeline trigger glptt-, OAuth gloas-)
+            \bgl(?:pat|cbt|dt|ft|rt|ptt|oas)-[A-Za-z0-9\-_]{20,}\b
             |
-            # Stripe keys (sk_live_, sk_test_, pk_live_, pk_test_, rk_live_)
-            \b(?:sk|pk|rk)_(?:live|test)_[0-9A-Za-z]{24}\b
+            # Stripe keys — sk_/pk_/rk_ with live/test/prod; length varies (10-99)
+            \b(?:sk|pk|rk)_(?:live|test|prod)_[0-9A-Za-z]{10,99}\b
             |
-            # Anthropic API keys
+            # Anthropic API keys (sk-ant-api03-* and sk-ant-admin01-* and future prefixes)
             \bsk-ant-[A-Za-z0-9\-_]{95}\b
             |
-            # OpenAI API keys (classic sk- and project sk-proj-)
-            \bsk-(?:proj-)?[A-Za-z0-9]{48}\b
+            # OpenAI classic keys — embed T3BlbkFJ anchor (base64 of OpenAI) to avoid
+            # false positives on arbitrary 48-char alphanumeric strings
+            \bsk-[A-Za-z0-9]{20}T3BlbkFJ[A-Za-z0-9]{20}\b
             |
-            # Hugging Face tokens
-            \bhf_[A-Za-z0-9]{37}\b
+            # OpenAI project / service-account / admin keys (longer structured format)
+            \bsk-(?:proj|svcacct|admin)-[A-Za-z0-9_\-]{50,}\b
+            |
+            # Hugging Face user access tokens (hf_) and org API tokens (api_org_)
+            \bhf_[A-Za-z0-9]{34,40}\b
+            |
+            \bapi_org_[A-Za-z0-9]{34}\b
             |
             # Google API keys
             \bAIza[0-9A-Za-z\-_]{35}\b
             |
-            # AWS IAM access key IDs (long-term)
-            \bAKIA[0-9A-Z]{16}\b
+            # AWS access key IDs: long-term (AKIA), STS (ASIA), assumed-role (ABIA),
+            #                     cross-account (ACCA)
+            \b(?:AKIA|ASIA|ABIA|ACCA)[0-9A-Z]{16}\b
             |
-            # AWS STS temporary access key IDs
-            \bASIA[0-9A-Z]{16}\b
-            |
-            # Slack bot/user/app tokens
+            # Slack bot/user/workspace/legacy tokens
             \bxox[bpars]-[0-9A-Za-z\-]+\b
+            |
+            # Slack app-level tokens (xapp-1-AXXXXXX-timestamp-hex)
+            \bxapp-\d-[A-Z0-9]+-\d+-[a-z0-9]+\b
             |
             # SendGrid API keys (SG. prefix, 66 more chars)
             \bSG\.[A-Za-z0-9\-_]{22}\.[A-Za-z0-9\-_]{43}\b
@@ -127,8 +135,15 @@ fn re_secret() -> &'static Regex {
             # Firebase legacy server keys
             \bAAAA[A-Za-z0-9_\-]{7}:[A-Za-z0-9_\-]{140}\b
             |
-            # PEM private key headers (catches RSA, EC, OPENSSH, PKCS8)
-            -----BEGIN\s(?:RSA\s|EC\s|OPENSSH\s|ENCRYPTED\s)?PRIVATE\sKEY-----
+            # HashiCorp Vault service tokens (hvs.) and batch tokens (hvb.)
+            \bhv[sb]\.[A-Za-z0-9_\-]{90,}\b
+            |
+            # Linear API keys
+            \blin_api_[A-Za-z0-9]{40}\b
+            |
+            # PEM private key headers — any type prefix or bare PKCS8
+            # Covers: RSA, EC, DSA, OPENSSH, ENCRYPTED, and bare PKCS8 (no type prefix)
+            -----BEGIN\s(?:[A-Z0-9]+\s)*PRIVATE\sKEY(?:\sBLOCK)?-----
             |
             # JWT tokens (three base64url segments separated by dots)
             \beyJ[A-Za-z0-9\-_]+\.[A-Za-z0-9\-_]+\.[A-Za-z0-9\-_]+
@@ -670,10 +685,41 @@ mod tests {
     }
 
     #[test]
-    fn test_secret_openai_key() {
-        let key = format!("sk-{}", "a1b2".repeat(12)); // 48 chars
+    fn test_secret_stripe_prod_key() {
+        let key = format!("sk_prod_{}", "a1".repeat(12));
+        let spans = detect_secret(&format!("Stripe prod key: {}", key));
+        assert_eq!(spans.len(), 1);
+    }
+
+    #[test]
+    fn test_secret_stripe_long_key() {
+        // Stripe key lengths vary — should match lengths beyond 24
+        let key = format!("sk_live_{}", "a".repeat(50));
+        let spans = detect_secret(&key);
+        assert_eq!(spans.len(), 1);
+    }
+
+    #[test]
+    fn test_secret_openai_classic_key() {
+        // Classic OpenAI key: sk- + 20 chars + T3BlbkFJ + 20 chars = 48 chars total
+        let key = format!("sk-{}T3BlbkFJ{}", "a".repeat(20), "b".repeat(20));
         let spans = detect_secret(&format!("openai key: {}", key));
         assert_eq!(spans.len(), 1);
+    }
+
+    #[test]
+    fn test_secret_openai_project_key() {
+        let key = format!("sk-proj-{}", "a".repeat(60));
+        let spans = detect_secret(&format!("openai key: {}", key));
+        assert_eq!(spans.len(), 1);
+    }
+
+    #[test]
+    fn test_secret_openai_no_false_positive() {
+        // sk- with 48 random chars but NO T3BlbkFJ anchor — must NOT match
+        let key = format!("sk-{}", "a".repeat(48));
+        let spans = detect_secret(&key);
+        assert_eq!(spans.len(), 0, "sk- without T3BlbkFJ anchor must not match");
     }
 
     #[test]
@@ -721,6 +767,13 @@ mod tests {
     }
 
     #[test]
+    fn test_secret_slack_app_token() {
+        let token = "xapp-1-A012BC3DE4F-1234567890123-abcdef1234567890abcdef1234567890abcdef";
+        let spans = detect_secret(token);
+        assert_eq!(spans.len(), 1);
+    }
+
+    #[test]
     fn test_secret_jwt_token() {
         // Realistic JWT structure: header.payload.signature
         let token = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c";
@@ -739,6 +792,67 @@ mod tests {
     fn test_secret_openssh_key_header() {
         let text = "-----BEGIN OPENSSH PRIVATE KEY-----\nb3BlbnNzaC1rZXktdjEAAAA...";
         let spans = detect_secret(text);
+        assert_eq!(spans.len(), 1);
+    }
+
+    #[test]
+    fn test_secret_pkcs8_bare_private_key() {
+        // PKCS8 unencrypted: "BEGIN PRIVATE KEY" with no type prefix
+        let text = "-----BEGIN PRIVATE KEY-----\nMIIEvQIBADANBgkqhkiG9w0BAQEFAASC...";
+        let spans = detect_secret(text);
+        assert_eq!(spans.len(), 1, "bare PKCS8 private key must match");
+    }
+
+    #[test]
+    fn test_secret_dsa_private_key() {
+        let text = "-----BEGIN DSA PRIVATE KEY-----\nMIIBuwIBAAKBgQC...";
+        let spans = detect_secret(text);
+        assert_eq!(spans.len(), 1, "DSA private key must match");
+    }
+
+    #[test]
+    fn test_secret_gitlab_additional_types() {
+        for prefix in &["glcbt", "gldt", "glft", "glrt", "glptt", "gloas"] {
+            let token = format!("{}-{}", prefix, "a1b2c3d4".repeat(3));
+            let spans = detect_secret(&token);
+            assert_eq!(spans.len(), 1, "GitLab {} token should match", prefix);
+        }
+    }
+
+    #[test]
+    fn test_secret_aws_additional_prefixes() {
+        for prefix in &["ABIA", "ACCA"] {
+            let key = format!("{}1234567890ABCDEF", prefix);
+            let spans = detect_secret(&key);
+            assert_eq!(spans.len(), 1, "AWS prefix {} should match", prefix);
+        }
+    }
+
+    #[test]
+    fn test_secret_hashicorp_vault_service_token() {
+        let token = format!("hvs.{}", "A".repeat(90));
+        let spans = detect_secret(&token);
+        assert_eq!(spans.len(), 1);
+    }
+
+    #[test]
+    fn test_secret_hashicorp_vault_batch_token() {
+        let token = format!("hvb.{}", "A".repeat(95));
+        let spans = detect_secret(&token);
+        assert_eq!(spans.len(), 1);
+    }
+
+    #[test]
+    fn test_secret_linear_api_key() {
+        let key = format!("lin_api_{}", "a1b2c3d4".repeat(5)); // 40 chars
+        let spans = detect_secret(&key);
+        assert_eq!(spans.len(), 1);
+    }
+
+    #[test]
+    fn test_secret_huggingface_org_token() {
+        let key = format!("api_org_{}", "a".repeat(34));
+        let spans = detect_secret(&key);
         assert_eq!(spans.len(), 1);
     }
 
