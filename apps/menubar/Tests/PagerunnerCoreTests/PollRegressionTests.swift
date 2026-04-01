@@ -310,6 +310,31 @@ struct PollRegressionTests {
         #expect(state.sessions.count == 1) // preserved
     }
 
+    // MARK: Sleep/wake: profilesBeforeSleep tracks alive profiles pre-sleep
+
+    @Test("profilesBeforeSleep captures alive profiles and skips already-alive on wake")
+    func sleepWakeProfileCapture() {
+        // Before sleep: work + personal alive, agent crashed
+        let beforeSleep = AppState()
+        beforeSleep.sessions = [
+            Session(id: "s1", profile: "work", displayName: "Work", stealth: false, status: .alive),
+            Session(id: "s2", profile: "personal", displayName: "Personal", stealth: false, status: .alive),
+            Session(id: "s3", profile: "agent", displayName: "Agent", stealth: false, status: .crashed),
+        ]
+        let captured = Set(beforeSleep.sessions.filter { $0.status == .alive }.map { $0.profile })
+        #expect(captured == ["work", "personal"], "only alive profiles captured before sleep")
+        #expect(!captured.contains("agent"), "crashed sessions must not be captured")
+
+        // After wake: Chrome died — all sessions crashed; "personal" reconnected on its own
+        let afterWake = AppState()
+        afterWake.sessions = [
+            Session(id: "s2", profile: "personal", displayName: "Personal", stealth: false, status: .alive),
+        ]
+        let aliveAfterWake = Set(afterWake.sessions.filter { $0.status == .alive }.map { $0.profile })
+        let toReopen = captured.filter { !aliveAfterWake.contains($0) }
+        #expect(toReopen == ["work"], "only profiles still missing should be reopened")
+    }
+
     // MARK: Gap A regression — previousSessionStates must not be reset during preservation
 
     /// Regression for: when updateSessions preserves (empty daemon response), previousSessionStates

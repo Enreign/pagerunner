@@ -27,6 +27,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     // Checkpoint tracking for checkpoint-saved notifications
     private var knownCheckpointIds: Set<String> = []
     private var profilesWithCheckpointsSeeded: Set<String> = []
+    // Sleep/wake: profiles that had alive sessions before sleep, used to auto-reopen on wake
+    private var profilesBeforeSleep: Set<String> = []
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         // Keepalive window: 1×1 NSWindow, orderOut immediately.
@@ -63,8 +65,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         notificationService?.configure(appState: appState, controller: statusItemController)
         pollingService.start()
 
-        // On wake from sleep, restart the polling loop immediately so the daemon
-        // and any surviving Chrome sessions are re-detected without waiting up to 10s.
+        // Before sleep: snapshot which profiles have alive sessions so we can restore them on wake.
+        NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.willSleepNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                self.profilesBeforeSleep = Set(
+                    self.appState.sessions
+                        .filter { $0.status == .alive }
+                        .map { $0.profile }
+                )
+            }
+        }
+
+        // On wake: restart polling immediately, then reopen any sessions that were alive before sleep.
         NSWorkspace.shared.notificationCenter.addObserver(
             forName: NSWorkspace.didWakeNotification,
             object: nil,
@@ -72,7 +89,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         ) { [weak self] _ in
             Task { @MainActor [weak self] in
                 self?.pollingService.panelDidOpen()  // switches to 2s interval, polls immediately
+                await self?.reopenSessionsAfterWake()
             }
+        }
+    }
+
+    /// Reopen sessions for profiles that were alive before sleep but have no alive session now.
+    /// Waits for the daemon to be ready (up to 5s), then issues open_session for each missing profile.
+    private func reopenSessionsAfterWake() async {
+        guard !profilesBeforeSleep.isEmpty else { return }
+        let toReopen = profilesBeforeSleep
+        profilesBeforeSleep = []
+
+        let client = DaemonClient()
+        // Wait for the daemon socket to accept connections (up to 5s, 1s intervals)
+        for _ in 0..<5 {
+            if (try? await client.call(tool: "list_profiles")) != nil { break }
+            try? await Task.sleep(for: .seconds(1))
+        }
+
+        // Only reopen profiles that still have no alive session
+        let aliveProfiles = Set(appState.sessions.filter { $0.status == .alive }.map { $0.profile })
+        for profile in toReopen where !aliveProfiles.contains(profile) {
+            _ = try? await client.call(tool: "open_session", args: ["profile": profile])
         }
     }
 
