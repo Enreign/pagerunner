@@ -1958,16 +1958,20 @@ async fn dispatch_tool_inner(
                 session_id
             };
 
+            let (sess_debug_port, sess_ws_url) = {
+                let mgr = sessions.lock().await;
+                match mgr.get(&id) {
+                    Some(s) => (s.debug_port, s.ws_url.clone()),
+                    None => (0, None),
+                }
+            };
             let entry = crate::session_registry::SessionRegistryEntry {
                 session_id: id.clone(),
                 profile_name: profile.name.clone(),
                 display_name: profile.display_name.clone(),
                 stealth,
-                debug_port: {
-                    let mgr = sessions.lock().await;
-                    mgr.get(&id).map(|s| s.debug_port).unwrap_or(0)
-                },
-                ws_url: None,
+                debug_port: sess_debug_port,
+                ws_url: sess_ws_url,
                 opened_at: std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
                     .unwrap_or_default()
