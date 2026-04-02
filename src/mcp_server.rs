@@ -2083,7 +2083,8 @@ async fn dispatch_tool_inner(
                         "profile": s.profile_name,
                         "display_name": s.profile_display_name,
                         "stealth": s.stealth,
-                        "status": if s.alive { "alive" } else { "crashed" },
+                        "alive": s.alive,
+                        "status": s.status,
                     })
                 })
                 .collect();

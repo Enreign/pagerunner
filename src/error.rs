@@ -6,6 +6,8 @@ pub enum PagerunnerError {
     SessionNotFound(String),
     #[error("Session {0} has crashed (Chrome process is no longer running)")]
     SessionDead(String),
+    #[error("Session {0} is reconnecting — retry in a moment")]
+    SessionReconnecting(String),
     #[error("Chrome error: {0}")]
     Chrome(String),
     #[error("CDP error: {0}")]
@@ -66,6 +68,7 @@ impl PagerunnerError {
             Self::Io(_) => "io_error",
             Self::Json(_) => "internal_error",
             Self::SessionDead(_) => "session_dead",
+            Self::SessionReconnecting(_) => "session_reconnecting",
             Self::ResidualPiiDetected { .. } => "anonymization_gap",
         }
     }
@@ -80,6 +83,7 @@ impl PagerunnerError {
             "validation_error" => "Check that all required parameters are provided and have valid values.",
             "io_error" => "A filesystem error occurred. Check disk space and permissions.",
             "cdp_error" => "A Chrome DevTools Protocol error occurred. Use screenshot to inspect current page state.",
+            "session_reconnecting" => "The session is reconnecting to Chrome after a brief interruption. Retry the same tool call in 2-3 seconds.",
             _ => "An unexpected error occurred. Run pagerunner status to diagnose.",
         }
     }
@@ -156,6 +160,17 @@ mod tests {
         let json_err = serde_json::from_str::<serde_json::Value>("not json").unwrap_err();
         let e = PagerunnerError::Json(json_err);
         assert_eq!(e.error_type(), "internal_error");
+    }
+
+    #[test]
+    fn session_reconnecting_error() {
+        let e = PagerunnerError::SessionReconnecting("sess-123".into());
+        assert_eq!(e.error_type(), "session_reconnecting");
+        assert_eq!(
+            e.to_string(),
+            "Session sess-123 is reconnecting — retry in a moment"
+        );
+        assert!(e.recovery_hint().contains("2-3 seconds"));
     }
 
     #[test]

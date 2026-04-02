@@ -26,6 +26,7 @@ mod sanitizer;
 mod schema_inference;
 mod security;
 mod session;
+pub mod session_health;
 pub mod session_registry;
 mod site_knowledge;
 mod snapshot;
