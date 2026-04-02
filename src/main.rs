@@ -5,6 +5,7 @@ mod audit;
 mod auth_token_detector;
 mod browser;
 mod cdp;
+mod cdp_reconnect;
 mod checkpoint;
 mod chrome;
 mod chrome_detect;

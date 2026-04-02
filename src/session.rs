@@ -550,14 +550,13 @@ impl SessionManager {
             if session.health == SessionHealth::Dead {
                 continue;
             }
-            let crashed = if session.owns_process {
-                !session.is_chrome_running()
-            } else {
-                // Attached/secondary: detect via CDP reader task completing
-                // (reader exits when the WebSocket connection drops).
-                session._reader_task.is_finished()
-            };
-            if crashed {
+            // Detect disconnection: either the Chrome process is gone (for owned processes)
+            // or the WebSocket reader task has finished (for all session types).
+            let ws_dropped = session._reader_task.is_finished();
+            let chrome_dead = session.owns_process && !session.is_chrome_running();
+
+            if chrome_dead {
+                // Chrome process truly gone → Dead
                 session.health = SessionHealth::Dead;
                 session._reader_task.abort();
                 if let Some(ref h) = session._network_processor {
@@ -569,6 +568,9 @@ impl SessionManager {
                 if let Some(ref h) = session._frame_nav_processor {
                     h.abort();
                 }
+            } else if ws_dropped && session.health == SessionHealth::Alive {
+                // WebSocket dropped but Chrome may still be running → Reconnecting
+                session.health = SessionHealth::Reconnecting;
             }
         }
         // Secondary sessions whose primary is dead also become dead.
@@ -598,6 +600,72 @@ impl SessionManager {
                 status: s.health.status_str().to_string(),
             })
             .collect()
+    }
+
+    /// Attempt to reconnect a session that is in the `Reconnecting` state.
+    /// On success: replaces the reader task, sets health back to Alive, clears CDP session cache.
+    /// On failure: sets health to Dead and aborts all background tasks.
+    pub async fn attempt_reconnect(&mut self, id: &str) -> Result<()> {
+        let session = match self.sessions.get(id) {
+            Some(s) => s,
+            None => return Err(PagerunnerError::SessionNotFound(id.into())),
+        };
+
+        // Only reconnect sessions in Reconnecting state
+        if session.health != SessionHealth::Reconnecting {
+            return Ok(());
+        }
+
+        let debug_port = session.debug_port;
+        if debug_port == 0 {
+            // Secondary session with no port — cannot reconnect independently
+            let session = self.sessions.get_mut(id).unwrap();
+            session.health = SessionHealth::Dead;
+            session._reader_task.abort();
+            if let Some(ref h) = session._network_processor {
+                h.abort();
+            }
+            if let Some(ref h) = session._console_processor {
+                h.abort();
+            }
+            if let Some(ref h) = session._frame_nav_processor {
+                h.abort();
+            }
+            return Err(PagerunnerError::Cdp(
+                "Cannot reconnect session with no debug port".into(),
+            ));
+        }
+
+        let cdp = session.cdp.clone();
+
+        // Attempt reconnection (this may take up to RECONNECT_TIMEOUT)
+        match crate::cdp_reconnect::reconnect_cdp(debug_port, &cdp).await {
+            Ok(new_reader_handle) => {
+                let session = self.sessions.get_mut(id).unwrap();
+                session._reader_task.abort();
+                session._reader_task = new_reader_handle;
+                session.health = SessionHealth::Alive;
+                session.cdp_sessions.clear();
+                tracing::info!(session_id = id, "Session reconnected successfully");
+                Ok(())
+            }
+            Err(e) => {
+                let session = self.sessions.get_mut(id).unwrap();
+                session.health = SessionHealth::Dead;
+                session._reader_task.abort();
+                if let Some(ref h) = session._network_processor {
+                    h.abort();
+                }
+                if let Some(ref h) = session._console_processor {
+                    h.abort();
+                }
+                if let Some(ref h) = session._frame_nav_processor {
+                    h.abort();
+                }
+                tracing::warn!(session_id = id, error = %e, "Session reconnection failed, marked dead");
+                Err(e)
+            }
+        }
     }
 
     /// Look up a session and verify it's alive.
