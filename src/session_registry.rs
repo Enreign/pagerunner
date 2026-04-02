@@ -9,6 +9,7 @@ pub struct SessionRegistryEntry {
     pub display_name: String,
     pub stealth: bool,
     pub debug_port: u16,
+    pub ws_url: Option<String>,
     pub opened_at: u64, // Unix seconds
     /// JSON-serialized SecurityPolicy params for restore (allowed_domains, max_navigations, etc.)
     /// Stored as a serde_json::Value so we don't have a hard dep on SecurityPolicy here.
@@ -147,6 +148,7 @@ mod tests {
             display_name: "Stas (personal)".to_string(),
             stealth: false,
             debug_port: port,
+            ws_url: None,
             opened_at: 1711500000,
             security_params: serde_json::json!({"allowed_domains": [], "max_navigations": null}),
         }

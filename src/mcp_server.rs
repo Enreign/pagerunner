@@ -1080,7 +1080,9 @@ fn build_tool_metadata(tool: &str, args: &Value, result: &str) -> Option<Value> 
                 "_schema": {
                     "id": "session_id — pass as session_id to all tools",
                     "profile": "Chrome profile name",
-                    "stealth": "bool"
+                    "stealth": "bool",
+                    "alive": "bool — true if session is usable or reconnecting (backward compat)",
+                    "status": "alive | reconnecting | crashed | recovering"
                 }
             }))
         }
@@ -1965,6 +1967,7 @@ async fn dispatch_tool_inner(
                     let mgr = sessions.lock().await;
                     mgr.get(&id).map(|s| s.debug_port).unwrap_or(0)
                 },
+                ws_url: None,
                 opened_at: std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
                     .unwrap_or_default()
@@ -5100,6 +5103,8 @@ mod metadata_tests {
         let meta = build_tool_metadata("list_sessions", &json!({}), result).unwrap();
         assert_eq!(meta["_total"], 1);
         assert!(meta["_schema"]["id"].is_string());
+        assert!(meta["_schema"]["alive"].is_string());
+        assert!(meta["_schema"]["status"].is_string());
     }
 
     #[test]
