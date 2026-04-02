@@ -87,7 +87,7 @@ pub async fn run() -> Result<()> {
                             return None;
                         }
                         if s.debug_port == 0 {
-                            return None; // will be handled by attempt_reconnect
+                            return None; // secondary session, skip
                         }
                         Some((s.debug_port, s.cdp.clone()))
                     })
@@ -146,7 +146,7 @@ pub async fn run() -> Result<()> {
     let _power_task = tokio::spawn(async move {
         while let Some(event) = power_rx.recv().await {
             match event {
-                crate::sleep_watcher::PowerEvent::WillSleep => {
+                crate::sleep_watcher::PowerEvent::WillSleep { done } => {
                     tracing::info!("System going to sleep — checkpointing all sessions");
                     let session_ids: Vec<String> = {
                         let mut sm = sm_power.lock().await;
@@ -168,6 +168,8 @@ pub async fn run() -> Result<()> {
                             .await;
                         }
                     }
+                    // Signal sleep_watcher to call IOAllowPowerChange
+                    let _ = done.send(());
                 }
                 crate::sleep_watcher::PowerEvent::DidWake => {
                     tracing::info!("System woke — triggering session reconnection");
