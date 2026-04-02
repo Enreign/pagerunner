@@ -170,6 +170,34 @@ pub async fn run() -> Result<()> {
         }
     }
 
+    // Checkpoint all alive sessions before shutdown
+    {
+        let session_ids: Vec<String> = {
+            let mut sm = sessions.lock().await;
+            sm.list()
+                .into_iter()
+                .filter(|s| s.alive)
+                .map(|s| s.id)
+                .collect()
+        };
+        let count = session_ids.len();
+        for sid in &session_ids {
+            let mut sm = sessions.lock().await;
+            if let Ok(session) = sm.get_live(sid) {
+                let _ = crate::checkpoint::save_session_checkpoint(
+                    session,
+                    Some("Autosave · shutdown"),
+                    &db,
+                    config.retention.max_snapshot_versions,
+                )
+                .await;
+            }
+        }
+        if count > 0 {
+            tracing::info!("Saved shutdown checkpoints for {} session(s)", count);
+        }
+    }
+
     // Clean up socket
     let _ = std::fs::remove_file(&socket_path);
     Ok(())
