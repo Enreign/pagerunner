@@ -84,14 +84,14 @@ mod macos {
         match message_type {
             KIO_MESSAGE_CAN_SYSTEM_SLEEP => {
                 // We don't want to block sleep — just allow it.
-                let root_port = unsafe { ROOT_PORT };
+                let root_port = ROOT_PORT.load(Ordering::Acquire);
                 unsafe { IOAllowPowerChange(root_port, notification_id) };
             }
             KIO_MESSAGE_SYSTEM_WILL_SLEEP => {
                 tracing::debug!("IOKit: SystemWillSleep");
                 // blocking_send is fine — we're on a std thread, not async.
                 let _ = tx.blocking_send(PowerEvent::WillSleep);
-                let root_port = unsafe { ROOT_PORT };
+                let root_port = ROOT_PORT.load(Ordering::Acquire);
                 unsafe { IOAllowPowerChange(root_port, notification_id) };
             }
             KIO_MESSAGE_SYSTEM_HAS_POWERED_ON => {
@@ -104,7 +104,8 @@ mod macos {
 
     /// Global root-port handle used by the callback. Set once in `run_loop`
     /// before the CFRunLoop starts.
-    static mut ROOT_PORT: u32 = 0;
+    use std::sync::atomic::{AtomicU32, Ordering};
+    static ROOT_PORT: AtomicU32 = AtomicU32::new(0);
 
     pub(super) fn run_loop(tx: Sender<PowerEvent>) {
         let tx_box = Box::new(tx);
@@ -129,7 +130,7 @@ mod macos {
             return;
         }
 
-        unsafe { ROOT_PORT = root_port };
+        ROOT_PORT.store(root_port, Ordering::Release);
 
         let rl_source = unsafe { IONotificationPortGetRunLoopSource(notify_port) };
         unsafe {

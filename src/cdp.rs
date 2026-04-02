@@ -181,6 +181,18 @@ impl CdpConn {
             *write_tx = new_write_tx;
         }
 
+        // Drain any in-flight requests from the old connection — their responses
+        // will never arrive since the old reader is dead.
+        {
+            let mut pending = self.inner.pending.lock()
+                .map_err(|_| PagerunnerError::Cdp("Pending lock poisoned".into()))?;
+            for (_, tx) in pending.drain() {
+                let _ = tx.send(Err(PagerunnerError::Cdp(
+                    "Connection replaced during reconnection".into(),
+                )));
+            }
+        }
+
         // Reset the closed flag so new requests are accepted.
         self.inner.closed.store(false, Ordering::Release);
 
