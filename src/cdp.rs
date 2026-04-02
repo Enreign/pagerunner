@@ -549,4 +549,44 @@ mod tests {
         conn.reset_closed();
         assert!(!conn.is_closed());
     }
+
+    #[tokio::test]
+    async fn test_pending_requests_drained_on_replace_transport() {
+        // Verify that in-flight requests receive an error when the transport is replaced.
+        // We can't do a real WebSocket replace in a unit test, but we can verify the
+        // drain behavior by:
+        // 1. Send a request (it will hang — no response writer)
+        // 2. Close the pipe (simulates disconnect)
+        // 3. Verify the pending request gets an error containing "closed" or "replaced"
+
+        let (_cmd_read, cmd_write) = make_pipe_pair();
+        let (evt_read, evt_write) = make_pipe_pair();
+        let (conn, handle) = CdpConn::new(cmd_write, evt_read);
+
+        // Send a request that will never get a response
+        let conn2 = conn.clone();
+        let pending_task = tokio::spawn(async move {
+            conn2.send("Test.pending", serde_json::json!({})).await
+        });
+
+        // Give the send time to insert into pending map
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+        // Close the pipe — reader task will drain pending with "Chrome connection closed"
+        drop(evt_write);
+        let _ = handle.await;
+
+        // The pending request should have received an error
+        let result = tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            pending_task
+        ).await.unwrap().unwrap();
+
+        assert!(result.is_err());
+        let err_msg = result.unwrap_err().to_string();
+        assert!(
+            err_msg.contains("closed") || err_msg.contains("replaced"),
+            "Expected closed/replaced error, got: {}", err_msg
+        );
+    }
 }

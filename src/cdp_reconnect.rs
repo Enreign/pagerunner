@@ -120,4 +120,14 @@ mod tests {
             assert!(BACKOFF_SCHEDULE[i] >= BACKOFF_SCHEDULE[i - 1]);
         }
     }
+
+    #[test]
+    fn backoff_never_decreases() {
+        let mut prev = Duration::ZERO;
+        for i in 0..20 {
+            let d = backoff_duration(i);
+            assert!(d >= prev, "backoff_duration({}) = {:?} < prev {:?}", i, d, prev);
+            prev = d;
+        }
+    }
 }

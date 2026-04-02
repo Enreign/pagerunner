@@ -178,4 +178,14 @@ mod tests {
         let e = PagerunnerError::Cdp("Protocol error occurred".into());
         assert_eq!(e.error_type(), "cdp_error");
     }
+
+    #[test]
+    fn session_reconnecting_has_retry_hint() {
+        let e = PagerunnerError::SessionReconnecting("abc".into());
+        assert_eq!(e.error_type(), "session_reconnecting");
+        assert!(e.recovery_hint().contains("retry") || e.recovery_hint().contains("Retry"));
+        // Verify it's distinct from session_dead
+        let dead = PagerunnerError::SessionDead("abc".into());
+        assert_ne!(e.error_type(), dead.error_type());
+    }
 }
