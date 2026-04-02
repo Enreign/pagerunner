@@ -30,6 +30,7 @@ mod session;
 pub mod session_health;
 pub mod session_registry;
 mod site_knowledge;
+mod sleep_watcher;
 mod snapshot;
 mod stealth;
 

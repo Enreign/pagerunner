@@ -138,6 +138,47 @@ pub async fn run() -> Result<()> {
         }
     });
 
+    // Sleep/wake handler: checkpoint before sleep, trigger reconnection after wake.
+    let mut power_rx = crate::sleep_watcher::start();
+    let sm_power = Arc::clone(&sessions);
+    let db_power = Arc::clone(&db);
+    let config_power = config.clone();
+    let _power_task = tokio::spawn(async move {
+        while let Some(event) = power_rx.recv().await {
+            match event {
+                crate::sleep_watcher::PowerEvent::WillSleep => {
+                    tracing::info!("System going to sleep — checkpointing all sessions");
+                    let session_ids: Vec<String> = {
+                        let mut sm = sm_power.lock().await;
+                        sm.list()
+                            .into_iter()
+                            .filter(|s| s.alive)
+                            .map(|s| s.id)
+                            .collect()
+                    };
+                    for sid in &session_ids {
+                        let mut sm = sm_power.lock().await;
+                        if let Ok(session) = sm.get_live(sid) {
+                            let _ = crate::checkpoint::save_session_checkpoint(
+                                session,
+                                Some("Autosave · pre-sleep"),
+                                &db_power,
+                                config_power.retention.max_snapshot_versions,
+                            )
+                            .await;
+                        }
+                    }
+                }
+                crate::sleep_watcher::PowerEvent::DidWake => {
+                    tracing::info!("System woke — triggering session reconnection");
+                    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                    let mut sm = sm_power.lock().await;
+                    let _ = sm.list(); // triggers Alive → Reconnecting transitions
+                }
+            }
+        }
+    });
+
     // Accept loop with graceful shutdown on SIGTERM/SIGINT.
     // On shutdown, Chrome processes are intentionally LEFT ALIVE — that's the whole
     // point of TCP-only transport. The daemon will reattach to them on next startup
