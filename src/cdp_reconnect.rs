@@ -55,8 +55,7 @@ pub async fn reconnect_cdp(debug_port: u16, cdp: &CdpConn) -> Result<JoinHandle<
             )));
         }
 
-        tokio::time::sleep(backoff_duration(attempt)).await;
-
+        // Try reconnection first, sleep after failure
         if let Some(ws_url) = fetch_ws_url(&version_url).await {
             match cdp.replace_ws_transport(&ws_url).await {
                 Ok(handle) => {
@@ -85,6 +84,7 @@ pub async fn reconnect_cdp(debug_port: u16, cdp: &CdpConn) -> Result<JoinHandle<
             );
         }
 
+        tokio::time::sleep(backoff_duration(attempt)).await;
         attempt += 1;
     }
 }

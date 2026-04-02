@@ -131,9 +131,8 @@ pub async fn run() -> Result<()> {
                         }
                     }
                 } else {
-                    // No port or state changed — fall back to attempt_reconnect for edge cases
-                    let mut mgr = reconnect_sessions.lock().await;
-                    let _ = mgr.attempt_reconnect(&id).await;
+                    // No port or state changed — skip; next tick will retry
+                    tracing::debug!(session_id = id, "Skipping reconnect: no port or state changed");
                 }
             }
         }
