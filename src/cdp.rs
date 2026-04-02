@@ -191,6 +191,35 @@ impl CdpConn {
         Ok(reader_handle)
     }
 
+    /// Like `send_on_session` but with a caller-specified timeout.
+    pub async fn send_on_session_with_timeout(
+        &self,
+        method: &str,
+        params: Value,
+        session_id: Option<String>,
+        timeout: std::time::Duration,
+    ) -> Result<Value> {
+        match tokio::time::timeout(timeout, self.send_on_session(method, params, session_id)).await {
+            Ok(result) => result,
+            Err(_) => Err(PagerunnerError::Cdp(format!(
+                "{} timed out after {}ms",
+                method,
+                timeout.as_millis()
+            ))),
+        }
+    }
+
+    /// Convenience: send with timeout, no session.
+    pub async fn send_with_timeout(
+        &self,
+        method: &str,
+        params: Value,
+        timeout: std::time::Duration,
+    ) -> Result<Value> {
+        self.send_on_session_with_timeout(method, params, None, timeout)
+            .await
+    }
+
     /// Subscribe to all CDP events. Filter by `event["method"]` on the receiver side.
     pub fn subscribe_events(&self) -> broadcast::Receiver<Value> {
         self.inner.event_tx.subscribe()
@@ -470,6 +499,27 @@ mod tests {
         let _ = handle.await;
 
         assert!(conn.is_closed());
+    }
+
+    #[tokio::test]
+    async fn test_send_times_out_when_no_response() {
+        let (_cmd_read, cmd_write) = make_pipe_pair();
+        let (evt_read, _evt_write) = make_pipe_pair();
+        let (conn, _handle) = CdpConn::new(cmd_write, evt_read);
+        let result = conn
+            .send_with_timeout(
+                "Test.method",
+                serde_json::json!({}),
+                std::time::Duration::from_millis(100),
+            )
+            .await;
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("timed out"),
+            "Expected timeout error, got: {}",
+            err
+        );
     }
 
     #[tokio::test]
