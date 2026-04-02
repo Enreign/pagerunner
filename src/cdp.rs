@@ -39,7 +39,7 @@ struct CdpInner {
     pending: Mutex<HashMap<u64, oneshot::Sender<Result<Value>>>>,
     event_tx: broadcast::Sender<Value>,
     next_id: AtomicU64,
-    write_tx: mpsc::Sender<Vec<u8>>,
+    write_tx: Mutex<mpsc::Sender<Vec<u8>>>,
     /// Set to true by the reader task when Chrome's connection closes.
     /// send_on_session checks this to reject new requests immediately.
     closed: AtomicBool,
@@ -63,7 +63,7 @@ impl CdpConn {
             pending: Mutex::new(HashMap::new()),
             event_tx,
             next_id: AtomicU64::new(1),
-            write_tx,
+            write_tx: Mutex::new(write_tx),
             closed: AtomicBool::new(false),
         });
 
@@ -89,7 +89,7 @@ impl CdpConn {
             pending: Mutex::new(HashMap::new()),
             event_tx,
             next_id: AtomicU64::new(1),
-            write_tx,
+            write_tx: Mutex::new(write_tx),
             closed: AtomicBool::new(false),
         });
 
@@ -135,13 +135,60 @@ impl CdpConn {
             session_id,
         };
         let framed = frame(&msg)?;
-        self.inner
+        let write_tx = self
+            .inner
             .write_tx
+            .lock()
+            .map_err(|_| PagerunnerError::Cdp("Write lock poisoned".into()))?
+            .clone();
+        write_tx
             .send(framed)
             .await
             .map_err(|_| PagerunnerError::Cdp("Write channel closed".into()))?;
         rx.await
             .map_err(|_| PagerunnerError::Cdp("Response channel closed (Chrome exited?)".into()))?
+    }
+
+    /// Returns true if the underlying connection has been closed.
+    pub fn is_closed(&self) -> bool {
+        self.inner.closed.load(Ordering::Acquire)
+    }
+
+    /// Reset the closed flag back to false.
+    /// Called before replacing the transport so that new requests are accepted.
+    pub fn reset_closed(&self) {
+        self.inner.closed.store(false, Ordering::Release);
+    }
+
+    /// Replace the WebSocket transport with a new connection to `ws_url`.
+    /// This connects a new WebSocket, swaps the write channel, resets the closed
+    /// flag, and spawns new reader/writer tasks. Returns the new reader JoinHandle.
+    pub async fn replace_ws_transport(&self, ws_url: &str) -> Result<JoinHandle<()>> {
+        let (ws_stream, _) = tokio_tungstenite::connect_async(ws_url)
+            .await
+            .map_err(|e| PagerunnerError::Cdp(format!("WebSocket connect failed: {}", e)))?;
+        let (ws_sink, ws_recv) = ws_stream.split();
+
+        let (new_write_tx, write_rx) = mpsc::channel::<Vec<u8>>(256);
+
+        // Swap the write channel — old sender is dropped, closing old writer task.
+        {
+            let mut write_tx = self
+                .inner
+                .write_tx
+                .lock()
+                .map_err(|_| PagerunnerError::Cdp("Write lock poisoned".into()))?;
+            *write_tx = new_write_tx;
+        }
+
+        // Reset the closed flag so new requests are accepted.
+        self.inner.closed.store(false, Ordering::Release);
+
+        tokio::spawn(ws_writer_task(ws_sink, write_rx));
+        let reader_inner = self.inner.clone();
+        let reader_handle = tokio::spawn(ws_reader_task(ws_recv, reader_inner));
+
+        Ok(reader_handle)
     }
 
     /// Subscribe to all CDP events. Filter by `event["method"]` on the receiver side.
@@ -402,5 +449,42 @@ mod tests {
         let raw = br#"{"id":1,"result":{"targetInfos":[]}}"#;
         let resp: serde_json::Value = serde_json::from_slice(raw).unwrap();
         assert_eq!(resp["id"], 1);
+    }
+
+    #[tokio::test]
+    async fn test_is_closed_initially_false() {
+        let (_cmd_read, cmd_write) = make_pipe_pair();
+        let (evt_read, _evt_write) = make_pipe_pair();
+        let (conn, _handle) = CdpConn::new(cmd_write, evt_read);
+        assert!(!conn.is_closed());
+    }
+
+    #[tokio::test]
+    async fn test_is_closed_after_pipe_closes() {
+        let (_cmd_read, cmd_write) = make_pipe_pair();
+        let (evt_read, evt_write) = make_pipe_pair();
+        let (conn, handle) = CdpConn::new(cmd_write, evt_read);
+
+        // Drop the write end to close the pipe, causing the reader to mark closed.
+        drop(evt_write);
+        let _ = handle.await;
+
+        assert!(conn.is_closed());
+    }
+
+    #[tokio::test]
+    async fn test_reset_closed() {
+        let (_cmd_read, cmd_write) = make_pipe_pair();
+        let (evt_read, evt_write) = make_pipe_pair();
+        let (conn, handle) = CdpConn::new(cmd_write, evt_read);
+
+        // Close the pipe so is_closed becomes true.
+        drop(evt_write);
+        let _ = handle.await;
+        assert!(conn.is_closed());
+
+        // Reset and verify.
+        conn.reset_closed();
+        assert!(!conn.is_closed());
     }
 }
