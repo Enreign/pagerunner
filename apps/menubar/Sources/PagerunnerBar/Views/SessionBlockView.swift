@@ -17,7 +17,7 @@ struct SessionBlockView: View {
         appState.checkpointsFor(profile: session.profile)
     }
 
-    private var isAlive: Bool { session.status == .alive }
+    private var isAlive: Bool { session.status == .alive || session.status == .reconnecting }
 
     private var closeButton: some View {
         Button {
@@ -52,13 +52,23 @@ struct SessionBlockView: View {
                         .font(.system(size: 11, weight: .semibold))
                         .foregroundColor(Color(red: 0.114, green: 0.114, blue: 0.122))
 
-                    Text("Active")
-                        .font(.system(size: 10, weight: .medium))
-                        .foregroundColor(Color(red: 0.086, green: 0.396, blue: 0.204))
-                        .padding(.horizontal, 6)
-                        .padding(.vertical, 2)
-                        .background(Color(red: 0.133, green: 0.773, blue: 0.369).opacity(0.13))
-                        .cornerRadius(4)
+                    if session.status == .reconnecting {
+                        Text("Reconnecting")
+                            .font(.system(size: 10, weight: .medium))
+                            .foregroundColor(.orange)
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 2)
+                            .background(Color.orange.opacity(0.13))
+                            .cornerRadius(4)
+                    } else {
+                        Text("Active")
+                            .font(.system(size: 10, weight: .medium))
+                            .foregroundColor(Color(red: 0.086, green: 0.396, blue: 0.204))
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 2)
+                            .background(Color(red: 0.133, green: 0.773, blue: 0.369).opacity(0.13))
+                            .cornerRadius(4)
+                    }
 
                     if session.stealth {
                         Text("stealth")

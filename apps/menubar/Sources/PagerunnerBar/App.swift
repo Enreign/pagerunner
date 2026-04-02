@@ -75,7 +75,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 guard let self else { return }
                 self.profilesBeforeSleep = Set(
                     self.appState.sessions
-                        .filter { $0.status == .alive }
+                        .filter { $0.status == .alive || $0.status == .reconnecting }
                         .map { $0.profile }
                 )
             }
@@ -109,7 +109,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         // Only reopen profiles that still have no alive session
-        let aliveProfiles = Set(appState.sessions.filter { $0.status == .alive }.map { $0.profile })
+        let aliveProfiles = Set(appState.sessions.filter { $0.status == .alive || $0.status == .reconnecting }.map { $0.profile })
         for profile in toReopen where !aliveProfiles.contains(profile) {
             _ = try? await client.call(tool: "open_session", args: ["profile": profile])
         }
@@ -169,8 +169,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 return session
             }
             let sessionsApplied = appState.updateSessions(sessions)
-            // Track which sessions have ever been alive
-            for s in sessions where s.status == .alive {
+            // Track which sessions have ever been alive (reconnecting was previously alive)
+            for s in sessions where s.status == .alive || s.status == .reconnecting {
                 appState.everAliveSessions.insert(s.id)
             }
 
@@ -194,8 +194,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
             appState.recordSuccess()
 
-            // 2. list_tabs for each alive session (serial, best-effort)
-            for session in sessions where session.status == SessionStatus.alive {
+            // 2. list_tabs for each alive/reconnecting session (serial, best-effort)
+            for session in sessions where session.status == .alive || session.status == .reconnecting {
                 if let tabsRaw = try? await client.call(tool: "list_tabs", args: ["session_id": session.id]),
                    let tabData = tabsRaw["data"]?.arrayValue {
                     let fetched = tabData.compactMap { t -> PagerunnerCore.Tab? in
@@ -217,7 +217,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
             // Idle detection for agent sessions
             let now = Date()
-            for session in appState.sessions where session.status == .alive {
+            for session in appState.sessions where session.status == .alive || session.status == .reconnecting {
                 guard let profile = appState.profiles.first(where: { $0.name == session.profile }),
                       profile.kind == "agent" else { continue }
                 guard NotificationSettings.notifyOnIdle(profile: session.profile) else { continue }
@@ -248,7 +248,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
             // Clean up tracker entries for sessions that are no longer alive.
             // Crashed/gone sessions will never trigger idle, so drop their entries immediately.
-            let aliveIds = Set(appState.sessions.filter { $0.status == .alive }.map { $0.id })
+            let aliveIds = Set(appState.sessions.filter { $0.status == .alive || $0.status == .reconnecting }.map { $0.id })
             sessionIdleTracker = sessionIdleTracker.filter { aliveIds.contains($0.key) }
             idleNotifiedSessions = idleNotifiedSessions.filter { aliveIds.contains($0) }
 
