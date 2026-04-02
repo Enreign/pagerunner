@@ -59,6 +59,8 @@ pub async fn run() -> Result<()> {
     // state and attempts to reconnect them. Acquires and releases the lock around
     // each step to avoid blocking tool calls.
     let reconnect_sessions = Arc::clone(&sessions);
+    let db_for_reconnect = Arc::clone(&db);
+    let config_for_reconnect = config.clone();
     let _reconnect_task = tokio::spawn(async move {
         let mut interval = tokio::time::interval(std::time::Duration::from_secs(2));
         interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
@@ -133,6 +135,84 @@ pub async fn run() -> Result<()> {
                 } else {
                     // No port or state changed — skip; next tick will retry
                     tracing::debug!(session_id = id, "Skipping reconnect: no port or state changed");
+                }
+            }
+
+            // Step 3: handle Recovering sessions (Chrome crashed, need new process)
+            let recovering_ids: Vec<String> = {
+                let mut mgr = reconnect_sessions.lock().await;
+                let sessions = mgr.list();
+                sessions
+                    .into_iter()
+                    .filter(|s| s.status == "recovering")
+                    .map(|s| s.id)
+                    .collect()
+            };
+
+            for id in recovering_ids {
+                let should_recover = {
+                    let mgr = reconnect_sessions.lock().await;
+                    mgr.get(&id)
+                        .map(|s| {
+                            s.health == crate::session_health::SessionHealth::Recovering
+                                && s.owns_process
+                        })
+                        .unwrap_or(false)
+                };
+
+                if should_recover {
+                    let mut mgr = reconnect_sessions.lock().await;
+                    let result = mgr
+                        .recover_session(
+                            &id,
+                            Arc::clone(&db_for_reconnect),
+                            &config_for_reconnect,
+                            &config_for_reconnect.network,
+                            None, // site_store: not needed for basic recovery
+                        )
+                        .await;
+
+                    match result {
+                        Ok(()) => {
+                            // Try to restore latest checkpoint
+                            let restore_info = mgr.get(&id).map(|s| s.profile_name.clone());
+                            if let Some(profile) = restore_info {
+                                let checkpoints = crate::checkpoint::list_checkpoints(
+                                    &db_for_reconnect,
+                                    &profile,
+                                )
+                                .unwrap_or_default();
+                                if let Some(latest) = checkpoints.first() {
+                                    if let Ok(session) = mgr.get_live(&id) {
+                                        let _ = crate::checkpoint::restore_session_checkpoint(
+                                            session,
+                                            &latest.checkpoint_id,
+                                            &db_for_reconnect,
+                                        )
+                                        .await;
+                                    }
+                                    tracing::info!(
+                                        session_id = %id,
+                                        profile = %profile,
+                                        "Session recovered from Chrome crash"
+                                    );
+                                } else {
+                                    tracing::info!(
+                                        session_id = %id,
+                                        profile = %profile,
+                                        "Session recovered (no checkpoint to restore)"
+                                    );
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            tracing::warn!(
+                                session_id = %id,
+                                error = %e,
+                                "Session recovery failed, marked dead"
+                            );
+                        }
+                    }
                 }
             }
         }

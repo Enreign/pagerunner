@@ -17,7 +17,7 @@ struct SessionBlockView: View {
         appState.checkpointsFor(profile: session.profile)
     }
 
-    private var isAlive: Bool { session.status == .alive || session.status == .reconnecting }
+    private var isAlive: Bool { session.status == .alive || session.status == .reconnecting || session.status == .recovering }
 
     private var closeButton: some View {
         Button {
@@ -54,6 +54,14 @@ struct SessionBlockView: View {
 
                     if session.status == .reconnecting {
                         Text("Reconnecting")
+                            .font(.system(size: 10, weight: .medium))
+                            .foregroundColor(.orange)
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 2)
+                            .background(Color.orange.opacity(0.13))
+                            .cornerRadius(4)
+                    } else if session.status == .recovering {
+                        Text("Recovering")
                             .font(.system(size: 10, weight: .medium))
                             .foregroundColor(.orange)
                             .padding(.horizontal, 6)

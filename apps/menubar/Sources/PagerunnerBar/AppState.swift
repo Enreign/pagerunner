@@ -65,9 +65,9 @@ final class AppState {
     private let discoveryService = DiscoveryService()
 
     // MARK: - Computed
-    var sessionCount: Int { sessions.filter { $0.status == .alive || $0.status == .reconnecting }.count }
+    var sessionCount: Int { sessions.filter { $0.status == .alive || $0.status == .reconnecting || $0.status == .recovering }.count }
     var tabCount: Int {
-        let aliveIds = Set(sessions.filter { $0.status == .alive || $0.status == .reconnecting }.map { $0.id })
+        let aliveIds = Set(sessions.filter { $0.status == .alive || $0.status == .reconnecting || $0.status == .recovering }.map { $0.id })
         return tabs.filter { aliveIds.contains($0.key) }.values.reduce(0) { $0 + $1.count }
     }
 
@@ -96,7 +96,7 @@ final class AppState {
             sessions = newSessions
             // Keep tabs only for sessions that still exist AND are alive.
             // Crashed/gone sessions have no live tabs — clearing them prevents stale counts.
-            let aliveIds = Set(newSessions.filter { $0.status == .alive || $0.status == .reconnecting }.map { $0.id })
+            let aliveIds = Set(newSessions.filter { $0.status == .alive || $0.status == .reconnecting || $0.status == .recovering }.map { $0.id })
             tabs = tabs.filter { aliveIds.contains($0.key) }
             return true
         }

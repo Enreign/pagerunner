@@ -8,6 +8,8 @@ pub enum PagerunnerError {
     SessionDead(String),
     #[error("Session {0} is reconnecting — retry in a moment")]
     SessionReconnecting(String),
+    #[error("Session {0} is recovering from Chrome crash — retry in a moment")]
+    SessionRecovering(String),
     #[error("Chrome error: {0}")]
     Chrome(String),
     #[error("CDP error: {0}")]
@@ -69,6 +71,7 @@ impl PagerunnerError {
             Self::Json(_) => "internal_error",
             Self::SessionDead(_) => "session_dead",
             Self::SessionReconnecting(_) => "session_reconnecting",
+            Self::SessionRecovering(_) => "session_recovering",
             Self::ResidualPiiDetected { .. } => "anonymization_gap",
         }
     }
@@ -84,6 +87,7 @@ impl PagerunnerError {
             "io_error" => "A filesystem error occurred. Check disk space and permissions.",
             "cdp_error" => "A Chrome DevTools Protocol error occurred. Use screenshot to inspect current page state.",
             "session_reconnecting" => "The session is reconnecting to Chrome after a brief interruption. Retry the same tool call in 2-3 seconds.",
+            "session_recovering" => "Chrome crashed and is being restarted automatically. Retry the same tool call in 5-10 seconds.",
             _ => "An unexpected error occurred. Run pagerunner status to diagnose.",
         }
     }
@@ -171,6 +175,22 @@ mod tests {
             "Session sess-123 is reconnecting — retry in a moment"
         );
         assert!(e.recovery_hint().contains("2-3 seconds"));
+    }
+
+    #[test]
+    fn session_recovering_error() {
+        let e = PagerunnerError::SessionRecovering("sess-456".into());
+        assert_eq!(e.error_type(), "session_recovering");
+        assert_eq!(
+            e.to_string(),
+            "Session sess-456 is recovering from Chrome crash — retry in a moment"
+        );
+        assert!(e.recovery_hint().contains("5-10 seconds"));
+        // Verify it's distinct from session_dead and session_reconnecting
+        let dead = PagerunnerError::SessionDead("sess-456".into());
+        let reconnecting = PagerunnerError::SessionReconnecting("sess-456".into());
+        assert_ne!(e.error_type(), dead.error_type());
+        assert_ne!(e.error_type(), reconnecting.error_type());
     }
 
     #[test]

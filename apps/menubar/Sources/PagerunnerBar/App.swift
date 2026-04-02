@@ -75,7 +75,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 guard let self else { return }
                 self.profilesBeforeSleep = Set(
                     self.appState.sessions
-                        .filter { $0.status == .alive || $0.status == .reconnecting }
+                        .filter { $0.status == .alive || $0.status == .reconnecting || $0.status == .recovering }
                         .map { $0.profile }
                 )
             }
@@ -109,7 +109,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         // Only reopen profiles that still have no alive session
-        let aliveProfiles = Set(appState.sessions.filter { $0.status == .alive || $0.status == .reconnecting }.map { $0.profile })
+        let aliveProfiles = Set(appState.sessions.filter { $0.status == .alive || $0.status == .reconnecting || $0.status == .recovering }.map { $0.profile })
         for profile in toReopen where !aliveProfiles.contains(profile) {
             _ = try? await client.call(tool: "open_session", args: ["profile": profile])
         }
@@ -248,7 +248,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
             // Clean up tracker entries for sessions that are no longer alive.
             // Crashed/gone sessions will never trigger idle, so drop their entries immediately.
-            let aliveIds = Set(appState.sessions.filter { $0.status == .alive || $0.status == .reconnecting }.map { $0.id })
+            let aliveIds = Set(appState.sessions.filter { $0.status == .alive || $0.status == .reconnecting || $0.status == .recovering }.map { $0.id })
             sessionIdleTracker = sessionIdleTracker.filter { aliveIds.contains($0.key) }
             idleNotifiedSessions = idleNotifiedSessions.filter { aliveIds.contains($0) }
 
