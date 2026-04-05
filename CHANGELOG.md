@@ -7,6 +7,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.0] — Daemon Hardening: Crash Recovery, Sleep/Wake, Session Health
+
+### Added
+
+**CDP Reconnection & Crash Recovery**
+- Sessions auto-recover from Chrome crashes: daemon spawns a new Chrome process, restores the latest checkpoint, and preserves the session ID
+- CDP reconnection with exponential backoff when the WebSocket connection drops
+- `send_with_timeout` on CDP commands prevents indefinite hangs on frozen Chrome
+- Swappable WebSocket transport in CdpConn enables reconnection without recreating sessions
+
+**Sleep/Wake Resilience (macOS)**
+- IOKit-based sleep/wake detection via `IORegisterForSystemPower`
+- Pre-sleep: all sessions are checkpointed before macOS is allowed to sleep (`IOAllowPowerChange` deferred until checkpoints complete)
+- Post-wake: session reconnection triggered automatically after wake
+
+**Session Health State Machine**
+- Sessions track health as `Alive`, `Reconnecting`, `Recovering`, or `Dead` (replaces boolean `alive` flag)
+- `list_sessions` exposes `status` field for menu bar and Raycast integration
+- Tool calls on non-alive sessions return specific errors (`SessionReconnecting`, `SessionRecovering`, `SessionDead`)
+
+**Daemon Improvements**
+- Graceful shutdown: all sessions checkpointed on SIGTERM/SIGINT before daemon exits
+- Daemon tracing now tees to both stderr and `~/.pagerunner/daemon.log` for persistent logging
+- Default log filter `pagerunner=info` when `RUST_LOG` is not set
+- Session registry stores `ws_url` for faster post-sleep reconnection
+
+### Fixed
+
+- **Session not found in standalone CLI mode**: each CLI invocation now reconciles the session registry, reattaching to surviving Chrome processes from previous invocations
+- **Chrome port timeout**: profile lock detection before spawn (checks `SingletonLock` symlink for live PID), early exit detection after spawn (`try_wait` within 100ms instead of 5s timeout)
+- **Dangling symlink check**: `check_profile_lock` uses `symlink_metadata()` instead of `exists()` (which follows symlinks and returns false for Chrome's dangling `SingletonLock`)
+- Pending CDP requests are drained on transport replacement, preventing leaked oneshot channels
+
 ## [0.6.1] — macOS Menu Bar Reliability & Onboarding Fixes
 
 ### Fixed

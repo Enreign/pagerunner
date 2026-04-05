@@ -3199,3 +3199,65 @@ fn test_session_reattach_after_daemon_restart() {
         run_live(&["close-session", sid]);
     }
 }
+
+#[test]
+#[cfg_attr(not(target_os = "macos"), ignore)]
+#[serial]
+fn test_list_sessions_includes_status_field() {
+    // Open a live session, then verify list-sessions returns both `alive` and `status` fields
+    // and that the session is functional.
+    let _daemon = start_test_daemon();
+
+    // Open session
+    let open = run_live(&["open-session", TEST_PROFILE_NAME]);
+    assert!(
+        open.status.success(),
+        "open-session failed: {}",
+        stderr(&open)
+    );
+    let v: serde_json::Value = serde_json::from_str(&stdout(&open)).unwrap();
+    let sid = v["session_id"].as_str().unwrap().to_string();
+
+    // List sessions and verify status field
+    let list = run_live(&["list-sessions"]);
+    assert!(
+        list.status.success(),
+        "list-sessions failed: {}",
+        stderr(&list)
+    );
+    let lv: serde_json::Value = serde_json::from_str(&stdout(&list)).unwrap();
+    let data = lv["data"]
+        .as_array()
+        .or_else(|| lv["result"]["data"].as_array())
+        .expect("expected data array in list-sessions output");
+    assert!(!data.is_empty(), "should have at least one session");
+
+    let our_session = data
+        .iter()
+        .find(|s| s["id"].as_str() == Some(&sid))
+        .expect("our session should be in the list");
+
+    // Verify both alive (backward compat) and status (new) are present
+    assert_eq!(
+        our_session["alive"].as_bool(),
+        Some(true),
+        "alive should be true for a live session"
+    );
+    assert_eq!(
+        our_session["status"].as_str(),
+        Some("alive"),
+        "status should be 'alive' for a live session"
+    );
+
+    // Verify session is functional by listing tabs
+    let tabs = run_live(&["list-tabs", &sid]);
+    assert!(tabs.status.success(), "list-tabs failed: {}", stderr(&tabs));
+    let tv: serde_json::Value = serde_json::from_str(&stdout(&tabs)).unwrap();
+    assert!(
+        tv["data"].as_array().unwrap().len() > 0,
+        "live session should have at least one tab"
+    );
+
+    // Cleanup
+    let _ = run_live(&["close-session", &sid]);
+}

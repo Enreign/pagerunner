@@ -2,6 +2,7 @@ use crate::cdp::CdpConn;
 use crate::chrome::ChromeProcess;
 use crate::config::ChromeProfile;
 use crate::error::{PagerunnerError, Result};
+use crate::session_health::SessionHealth;
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 use tokio::sync::broadcast;
@@ -16,9 +17,11 @@ pub struct Session {
     pub profile_name: String,
     pub profile_display_name: String,
     pub stealth: bool,
-    pub alive: bool,
+    pub health: SessionHealth,
     // TCP port Chrome listens on for reattach
     pub debug_port: u16,
+    /// WebSocket URL used to connect to Chrome. Stored for faster reconnection.
+    pub ws_url: Option<String>,
     chrome: Option<ChromeProcess>,
     /// True if this session owns the Chrome process (primary). False for secondary sessions.
     pub owns_process: bool,
@@ -69,6 +72,7 @@ pub struct SessionInfo {
     pub profile_display_name: String,
     pub stealth: bool,
     pub alive: bool,
+    pub status: String,
 }
 
 /// Poll Chrome's TCP debug endpoint until it's ready, then return the WebSocket URL.
@@ -128,7 +132,7 @@ impl SessionManager {
         // If an alive primary session exists for this profile, open a new window in it
         if let Some(primary_id) = self.profile_primary.get(&profile.name).cloned() {
             if let Some(primary) = self.sessions.get(&primary_id) {
-                if primary.alive {
+                if primary.health == SessionHealth::Alive {
                     let cdp = primary.cdp.clone();
                     let db_for_processor = db.clone();
                     let network_config_capacity = network_config.buffer_capacity;
@@ -199,8 +203,9 @@ impl SessionManager {
                             profile_name: profile.name.clone(),
                             profile_display_name: profile.display_name.clone(),
                             stealth,
-                            alive: true,
+                            health: SessionHealth::Alive,
                             debug_port: 0,
+                            ws_url: None,
                             chrome: None,
                             owns_process: false,
                             is_attached: false,
@@ -284,8 +289,9 @@ impl SessionManager {
                 profile_name: profile.name.clone(),
                 profile_display_name: profile.display_name.clone(),
                 stealth,
-                alive: true,
+                health: SessionHealth::Alive,
                 debug_port: result.debug_port,
+                ws_url: Some(ws_url),
                 chrome: Some(result.process),
                 owns_process: true,
                 is_attached: false,
@@ -438,8 +444,9 @@ impl SessionManager {
                 profile_name,
                 profile_display_name: display_name,
                 stealth: false,
-                alive: true,
+                health: SessionHealth::Alive,
                 debug_port: 0,
+                ws_url: Some(ws_url),
                 chrome: None,
                 owns_process: false,
                 is_attached: true,
@@ -498,7 +505,7 @@ impl SessionManager {
             self.profile_primary.remove(&profile);
 
             // If Chrome has already crashed, skip the Browser.close CDP call (pipe is dead).
-            if session.alive && session.is_chrome_running() {
+            if session.health == SessionHealth::Alive && session.is_chrome_running() {
                 // Graceful shutdown: Browser.close lets Chrome write session state cleanly.
                 // Fall back to kill if it doesn't exit within 3 seconds.
                 let _ = session
@@ -545,18 +552,17 @@ impl SessionManager {
         // Abort background tasks for newly-detected crashed sessions so their
         // event-loop awaits (events.recv()) are cancelled immediately.
         for session in self.sessions.values_mut() {
-            if !session.alive {
+            if session.health == SessionHealth::Dead {
                 continue;
             }
-            let crashed = if session.owns_process {
-                !session.is_chrome_running()
-            } else {
-                // Attached/secondary: detect via CDP reader task completing
-                // (reader exits when the WebSocket connection drops).
-                session._reader_task.is_finished()
-            };
-            if crashed {
-                session.alive = false;
+            // Detect disconnection: either the Chrome process is gone (for owned processes)
+            // or the WebSocket reader task has finished (for all session types).
+            let ws_dropped = session._reader_task.is_finished();
+            let chrome_dead = session.owns_process && !session.is_chrome_running();
+
+            if chrome_dead {
+                // Chrome process gone — enter Recovering so daemon can spawn new Chrome
+                session.health = SessionHealth::Recovering;
                 session._reader_task.abort();
                 if let Some(ref h) = session._network_processor {
                     h.abort();
@@ -567,20 +573,29 @@ impl SessionManager {
                 if let Some(ref h) = session._frame_nav_processor {
                     h.abort();
                 }
+            } else if ws_dropped && session.health == SessionHealth::Alive {
+                // WebSocket dropped but Chrome may still be running → Reconnecting
+                session.health = SessionHealth::Reconnecting;
             }
         }
-        // Secondary sessions whose primary is dead also become dead.
-        let dead_primaries: std::collections::HashSet<String> = self
+        // Secondary sessions whose primary is dead or recovering also become dead.
+        // Recovering primaries will spawn a new Chrome process with a new CDP connection,
+        // but secondaries hold the old CdpConn and can't be recovered — they must be
+        // re-opened by the user after the primary recovers.
+        let unavailable_primaries: std::collections::HashSet<String> = self
             .sessions
             .values()
-            .filter(|s| !s.alive && s.owns_process)
+            .filter(|s| {
+                (s.health == SessionHealth::Dead || s.health == SessionHealth::Recovering)
+                    && s.owns_process
+            })
             .map(|s| s.id.clone())
             .collect();
         for session in self.sessions.values_mut() {
-            if session.alive && !session.owns_process {
+            if session.health != SessionHealth::Dead && !session.owns_process {
                 if let Some(ref pid) = session.primary_session_id {
-                    if dead_primaries.contains(pid) {
-                        session.alive = false;
+                    if unavailable_primaries.contains(pid) {
+                        session.health = SessionHealth::Dead;
                     }
                 }
             }
@@ -592,7 +607,8 @@ impl SessionManager {
                 profile_name: s.profile_name.clone(),
                 profile_display_name: s.profile_display_name.clone(),
                 stealth: s.stealth,
-                alive: s.alive,
+                alive: s.health.is_alive_or_reconnecting(),
+                status: s.health.status_str().to_string(),
             })
             .collect()
     }
@@ -609,9 +625,22 @@ impl SessionManager {
 
         let session = self.sessions.get(id).unwrap();
 
-        // Already marked dead
-        if !session.alive {
-            return Err(crate::error::PagerunnerError::SessionDead(id.into()));
+        // Check health state
+        match session.health {
+            SessionHealth::Dead => {
+                return Err(crate::error::PagerunnerError::SessionDead(id.into()));
+            }
+            SessionHealth::Reconnecting => {
+                return Err(crate::error::PagerunnerError::SessionReconnecting(
+                    id.into(),
+                ));
+            }
+            SessionHealth::Recovering => {
+                return Err(crate::error::PagerunnerError::SessionRecovering(id.into()));
+            }
+            SessionHealth::Alive => {
+                // proceed
+            }
         }
 
         // Attached sessions have no owned process and no primary — they stay alive
@@ -626,10 +655,10 @@ impl SessionManager {
                 .primary_session_id
                 .as_ref()
                 .and_then(|pid| self.sessions.get(pid))
-                .map(|p| p.alive)
+                .map(|p| p.health.is_alive_or_reconnecting())
                 .unwrap_or(false);
             if !primary_alive {
-                self.sessions.get_mut(id).unwrap().alive = false;
+                self.sessions.get_mut(id).unwrap().health = SessionHealth::Dead;
                 return Err(crate::error::PagerunnerError::SessionDead(id.into()));
             }
             return Ok(self.sessions.get_mut(id).unwrap());
@@ -638,11 +667,158 @@ impl SessionManager {
         // For primary sessions, lazy check: is Chrome still running?
         let chrome_running = self.sessions.get_mut(id).unwrap().is_chrome_running();
         if !chrome_running {
-            self.sessions.get_mut(id).unwrap().alive = false;
+            self.sessions.get_mut(id).unwrap().health = SessionHealth::Dead;
             return Err(crate::error::PagerunnerError::SessionDead(id.into()));
         }
 
         Ok(self.sessions.get_mut(id).unwrap())
+    }
+
+    /// Recover a session by spawning a new Chrome process and restoring state.
+    /// The session_id stays the same — callers don't need to update their references.
+    ///
+    /// Returns Ok(()) on success (session is now Alive) or Err on failure (session is Dead).
+    pub async fn recover_session(
+        &mut self,
+        id: &str,
+        db: std::sync::Arc<crate::db::Db>,
+        config: &crate::config::PagerunnerConfig,
+        network_config: &crate::config::NetworkConfig,
+        site_store: Option<std::sync::Arc<crate::site_knowledge::SiteKnowledgeStore>>,
+    ) -> Result<()> {
+        let session = self
+            .sessions
+            .get(id)
+            .ok_or_else(|| PagerunnerError::SessionNotFound(id.into()))?;
+
+        if session.health != SessionHealth::Recovering {
+            return Ok(()); // nothing to do
+        }
+
+        // Can only recover process-owning sessions with a known profile
+        if !session.owns_process {
+            self.sessions.get_mut(id).unwrap().health = SessionHealth::Dead;
+            return Err(PagerunnerError::SessionDead(id.into()));
+        }
+
+        let profile_name = session.profile_name.clone();
+        let stealth = session.stealth;
+        let security_policy = session.security_policy.clone();
+        let anon_config = session.anon_config.clone();
+        let session_id = session.id.clone();
+
+        // Look up profile config to get user_data_dir
+        let profile = config
+            .profiles
+            .iter()
+            .find(|p| p.name == profile_name)
+            .ok_or_else(|| {
+                PagerunnerError::Config(format!(
+                    "Profile '{}' not found in config for recovery",
+                    profile_name
+                ))
+            })?;
+
+        let user_data_dir = profile.user_data_dir.as_deref().ok_or_else(|| {
+            PagerunnerError::Config("Profile has no user_data_dir for recovery".into())
+        })?;
+
+        // Spawn new Chrome
+        let spawn_result = match crate::chrome::ChromeProcess::spawn(user_data_dir, stealth).await {
+            Ok(r) => r,
+            Err(e) => {
+                self.sessions.get_mut(id).unwrap().health = SessionHealth::Dead;
+                return Err(e);
+            }
+        };
+
+        // Wait for WebSocket URL
+        let ws_url = match wait_for_chrome_ws_url(spawn_result.debug_port).await {
+            Ok(url) => url,
+            Err(e) => {
+                self.sessions.get_mut(id).unwrap().health = SessionHealth::Dead;
+                return Err(e);
+            }
+        };
+
+        // Connect new CdpConn
+        let (cdp, reader_task) = match crate::cdp::CdpConn::connect_ws(&ws_url).await {
+            Ok(pair) => pair,
+            Err(e) => {
+                self.sessions.get_mut(id).unwrap().health = SessionHealth::Dead;
+                return Err(e);
+            }
+        };
+
+        // Set up event processors (same pattern as open())
+        let cdp_sessions_rev = std::sync::Arc::new(std::sync::RwLock::new(HashMap::new()));
+
+        let events_rx = cdp.subscribe_events();
+        let cdp_for_processor = cdp.clone();
+        let session_id_for_processor = session_id.clone();
+        let db_for_processor = db;
+        let rev_map = cdp_sessions_rev.clone();
+        let capacity = network_config.buffer_capacity;
+
+        let processor_handle = tokio::spawn(crate::network_log::network_event_processor(
+            events_rx,
+            cdp_for_processor,
+            session_id_for_processor,
+            db_for_processor,
+            rev_map,
+            capacity,
+            site_store,
+        ));
+
+        let events_rx2 = cdp.subscribe_events();
+        let console_buffer = crate::console_log::new_buffer();
+        let console_buffer_for_proc = console_buffer.clone();
+        let rev_map2 = cdp_sessions_rev.clone();
+
+        let console_processor_handle = tokio::spawn(crate::console_log::console_event_processor(
+            events_rx2,
+            console_buffer_for_proc,
+            rev_map2,
+        ));
+
+        let tab_urls: TabUrlMap = Arc::new(RwLock::new(HashMap::new()));
+        let events_rx3 = cdp.subscribe_events();
+        let rev_map3 = cdp_sessions_rev.clone();
+        let tab_urls_for_proc = tab_urls.clone();
+
+        let frame_nav_processor_handle =
+            tokio::spawn(frame_nav_processor(events_rx3, rev_map3, tab_urls_for_proc));
+
+        // Collect initial tabs
+        let initial_tabs = crate::browser::list_tabs(&cdp).await.unwrap_or_default();
+        let owned_targets: std::collections::HashSet<String> =
+            initial_tabs.iter().map(|t| t.target_id.clone()).collect();
+
+        // Replace session internals
+        let session = self.sessions.get_mut(id).unwrap();
+        session.chrome = Some(spawn_result.process);
+        session.debug_port = spawn_result.debug_port;
+        session.ws_url = Some(ws_url);
+        session.cdp = cdp;
+        session._reader_task = reader_task;
+        session.cdp_sessions.clear();
+        session.cdp_sessions_rev = cdp_sessions_rev;
+        session.owned_targets = owned_targets;
+        session.tab_urls = tab_urls;
+        session.network_enabled = false;
+        session.health = SessionHealth::Alive;
+        session.security_policy = security_policy;
+        session.anon_config = anon_config;
+        session.console_buffer = console_buffer;
+        session._network_processor = Some(processor_handle);
+        session._console_processor = Some(console_processor_handle);
+        session._frame_nav_processor = Some(frame_nav_processor_handle);
+
+        // Update profile_primary mapping
+        self.profile_primary
+            .insert(profile_name, session_id.clone());
+
+        Ok(())
     }
 
     /// Insert a stub session (no real browser) for use in unit tests.
@@ -679,8 +855,9 @@ impl SessionManager {
                 profile_name: "stub".into(),
                 profile_display_name: "Stub".into(),
                 stealth: false,
-                alive: true,
+                health: SessionHealth::Alive,
                 debug_port: 0,
+                ws_url: None,
                 chrome: Some(chrome),
                 owns_process: true,
                 is_attached: false,

@@ -68,6 +68,8 @@ public struct Session: Codable, Identifiable, Sendable {
 public enum SessionStatus: String, Codable, Sendable {
     case alive
     case crashed
+    case reconnecting
+    case recovering
 }
 
 public struct Tab: Codable, Identifiable, Sendable {

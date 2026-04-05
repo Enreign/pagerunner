@@ -55,6 +55,218 @@ pub async fn run() -> Result<()> {
         );
     }
 
+    // Background reconnection task: periodically checks for sessions in Reconnecting
+    // state and attempts to reconnect them. Acquires and releases the lock around
+    // each step to avoid blocking tool calls.
+    let reconnect_sessions = Arc::clone(&sessions);
+    let db_for_reconnect = Arc::clone(&db);
+    let config_for_reconnect = config.clone();
+    let _reconnect_task = tokio::spawn(async move {
+        let mut interval = tokio::time::interval(std::time::Duration::from_secs(2));
+        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        loop {
+            interval.tick().await;
+
+            // Step 1: lock, call list() to detect disconnections, collect reconnecting IDs
+            let reconnecting_ids: Vec<String> = {
+                let mut mgr = reconnect_sessions.lock().await;
+                let sessions = mgr.list();
+                sessions
+                    .into_iter()
+                    .filter(|s| s.status == "reconnecting")
+                    .map(|s| s.id)
+                    .collect()
+            };
+
+            // Step 2: for each reconnecting session, extract info under lock,
+            // do the actual reconnection outside the lock, then update state under lock.
+            for id in reconnecting_ids {
+                // Extract what we need under lock
+                let reconnect_info = {
+                    let mgr = reconnect_sessions.lock().await;
+                    mgr.get(&id).and_then(|s| {
+                        if s.health != crate::session_health::SessionHealth::Reconnecting {
+                            return None;
+                        }
+                        if s.debug_port == 0 {
+                            return None; // secondary session, skip
+                        }
+                        Some((s.debug_port, s.cdp.clone()))
+                    })
+                };
+                // Lock released here
+
+                if let Some((debug_port, cdp)) = reconnect_info {
+                    // Do the actual reconnection WITHOUT holding the lock.
+                    // This can take up to 30s but won't block tool calls.
+                    let result = crate::cdp_reconnect::reconnect_cdp(debug_port, &cdp).await;
+
+                    // Re-acquire lock to update session state
+                    let mut mgr = reconnect_sessions.lock().await;
+                    if let Some(session) = mgr.get_mut(&id) {
+                        if session.health != crate::session_health::SessionHealth::Reconnecting {
+                            // State changed while we were reconnecting; skip
+                            continue;
+                        }
+                        match result {
+                            Ok(new_reader_handle) => {
+                                session._reader_task.abort();
+                                session._reader_task = new_reader_handle;
+                                session.health = crate::session_health::SessionHealth::Alive;
+                                session.cdp_sessions.clear();
+                                tracing::info!(
+                                    session_id = id,
+                                    "Session reconnected successfully (daemon)"
+                                );
+                            }
+                            Err(e) => {
+                                session.health = crate::session_health::SessionHealth::Dead;
+                                session._reader_task.abort();
+                                if let Some(ref h) = session._network_processor {
+                                    h.abort();
+                                }
+                                if let Some(ref h) = session._console_processor {
+                                    h.abort();
+                                }
+                                if let Some(ref h) = session._frame_nav_processor {
+                                    h.abort();
+                                }
+                                tracing::warn!(session_id = id, error = %e, "Session reconnection failed (daemon), marked dead");
+                            }
+                        }
+                    }
+                } else {
+                    // No port or state changed — skip; next tick will retry
+                    tracing::debug!(
+                        session_id = id,
+                        "Skipping reconnect: no port or state changed"
+                    );
+                }
+            }
+
+            // Step 3: handle Recovering sessions (Chrome crashed, need new process)
+            let recovering_ids: Vec<String> = {
+                let mut mgr = reconnect_sessions.lock().await;
+                let sessions = mgr.list();
+                sessions
+                    .into_iter()
+                    .filter(|s| s.status == "recovering")
+                    .map(|s| s.id)
+                    .collect()
+            };
+
+            for id in recovering_ids {
+                let should_recover = {
+                    let mgr = reconnect_sessions.lock().await;
+                    mgr.get(&id)
+                        .map(|s| {
+                            s.health == crate::session_health::SessionHealth::Recovering
+                                && s.owns_process
+                        })
+                        .unwrap_or(false)
+                };
+
+                if should_recover {
+                    let mut mgr = reconnect_sessions.lock().await;
+                    let result = mgr
+                        .recover_session(
+                            &id,
+                            Arc::clone(&db_for_reconnect),
+                            &config_for_reconnect,
+                            &config_for_reconnect.network,
+                            None, // site_store: not needed for basic recovery
+                        )
+                        .await;
+
+                    match result {
+                        Ok(()) => {
+                            // Try to restore latest checkpoint
+                            let restore_info = mgr.get(&id).map(|s| s.profile_name.clone());
+                            if let Some(profile) = restore_info {
+                                let checkpoints = crate::checkpoint::list_checkpoints(
+                                    &db_for_reconnect,
+                                    &profile,
+                                )
+                                .unwrap_or_default();
+                                if let Some(latest) = checkpoints.first() {
+                                    if let Ok(session) = mgr.get_live(&id) {
+                                        let _ = crate::checkpoint::restore_session_checkpoint(
+                                            session,
+                                            &latest.checkpoint_id,
+                                            &db_for_reconnect,
+                                        )
+                                        .await;
+                                    }
+                                    tracing::info!(
+                                        session_id = %id,
+                                        profile = %profile,
+                                        "Session recovered from Chrome crash"
+                                    );
+                                } else {
+                                    tracing::info!(
+                                        session_id = %id,
+                                        profile = %profile,
+                                        "Session recovered (no checkpoint to restore)"
+                                    );
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            tracing::warn!(
+                                session_id = %id,
+                                error = %e,
+                                "Session recovery failed, marked dead"
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    });
+
+    // Sleep/wake handler: checkpoint before sleep, trigger reconnection after wake.
+    let mut power_rx = crate::sleep_watcher::start();
+    let sm_power = Arc::clone(&sessions);
+    let db_power = Arc::clone(&db);
+    let config_power = config.clone();
+    let _power_task = tokio::spawn(async move {
+        while let Some(event) = power_rx.recv().await {
+            match event {
+                crate::sleep_watcher::PowerEvent::WillSleep { done } => {
+                    tracing::info!("System going to sleep — checkpointing all sessions");
+                    let session_ids: Vec<String> = {
+                        let mut sm = sm_power.lock().await;
+                        sm.list()
+                            .into_iter()
+                            .filter(|s| s.alive)
+                            .map(|s| s.id)
+                            .collect()
+                    };
+                    for sid in &session_ids {
+                        let mut sm = sm_power.lock().await;
+                        if let Ok(session) = sm.get_live(sid) {
+                            let _ = crate::checkpoint::save_session_checkpoint(
+                                session,
+                                Some("Autosave · pre-sleep"),
+                                &db_power,
+                                config_power.retention.max_snapshot_versions,
+                            )
+                            .await;
+                        }
+                    }
+                    // Signal sleep_watcher to call IOAllowPowerChange
+                    let _ = done.send(());
+                }
+                crate::sleep_watcher::PowerEvent::DidWake => {
+                    tracing::info!("System woke — triggering session reconnection");
+                    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                    let mut sm = sm_power.lock().await;
+                    let _ = sm.list(); // triggers Alive → Reconnecting transitions
+                }
+            }
+        }
+    });
+
     // Accept loop with graceful shutdown on SIGTERM/SIGINT.
     // On shutdown, Chrome processes are intentionally LEFT ALIVE — that's the whole
     // point of TCP-only transport. The daemon will reattach to them on next startup
@@ -84,6 +296,34 @@ pub async fn run() -> Result<()> {
                 tracing::info!("Daemon shutting down (SIGINT) — Chrome processes left alive for reattach");
                 break;
             }
+        }
+    }
+
+    // Checkpoint all alive sessions before shutdown
+    {
+        let session_ids: Vec<String> = {
+            let mut sm = sessions.lock().await;
+            sm.list()
+                .into_iter()
+                .filter(|s| s.alive)
+                .map(|s| s.id)
+                .collect()
+        };
+        let count = session_ids.len();
+        for sid in &session_ids {
+            let mut sm = sessions.lock().await;
+            if let Ok(session) = sm.get_live(sid) {
+                let _ = crate::checkpoint::save_session_checkpoint(
+                    session,
+                    Some("Autosave · shutdown"),
+                    &db,
+                    config.retention.max_snapshot_versions,
+                )
+                .await;
+            }
+        }
+        if count > 0 {
+            tracing::info!("Saved shutdown checkpoints for {} session(s)", count);
         }
     }
 

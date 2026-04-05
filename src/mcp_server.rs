@@ -1080,7 +1080,9 @@ fn build_tool_metadata(tool: &str, args: &Value, result: &str) -> Option<Value> 
                 "_schema": {
                     "id": "session_id — pass as session_id to all tools",
                     "profile": "Chrome profile name",
-                    "stealth": "bool"
+                    "stealth": "bool",
+                    "alive": "bool — true if session is usable or reconnecting (backward compat)",
+                    "status": "alive | reconnecting | crashed | recovering"
                 }
             }))
         }
@@ -1370,6 +1372,20 @@ pub(crate) async fn call_tool(
     let audit_path = std::path::Path::new(&db_path_str).with_extension("audit.log");
     let audit = Arc::new(crate::audit::AuditLog::new(audit_path, Arc::clone(&db)));
     let sessions = Arc::new(Mutex::new(SessionManager::new()));
+
+    // Standalone CLI mode: reconcile session registry so that sessions opened
+    // by previous CLI invocations (or a previous daemon) are reattached.
+    // Without this, each CLI invocation starts with an empty SessionManager
+    // and session-dependent tools (list_tabs, navigate, etc.) fail.
+    let reattached =
+        crate::session_registry::reconcile_sessions(&db, &sessions, config, None).await;
+    if !reattached.is_empty() {
+        tracing::debug!(
+            "Standalone CLI: reattached {} session(s) from registry",
+            reattached.len()
+        );
+    }
+
     dispatch_tool(tool, &args, config, sessions, db, Some(audit)).await
 }
 
@@ -1956,15 +1972,20 @@ async fn dispatch_tool_inner(
                 session_id
             };
 
+            let (sess_debug_port, sess_ws_url) = {
+                let mgr = sessions.lock().await;
+                match mgr.get(&id) {
+                    Some(s) => (s.debug_port, s.ws_url.clone()),
+                    None => (0, None),
+                }
+            };
             let entry = crate::session_registry::SessionRegistryEntry {
                 session_id: id.clone(),
                 profile_name: profile.name.clone(),
                 display_name: profile.display_name.clone(),
                 stealth,
-                debug_port: {
-                    let mgr = sessions.lock().await;
-                    mgr.get(&id).map(|s| s.debug_port).unwrap_or(0)
-                },
+                debug_port: sess_debug_port,
+                ws_url: sess_ws_url,
                 opened_at: std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
                     .unwrap_or_default()
@@ -2083,7 +2104,8 @@ async fn dispatch_tool_inner(
                         "profile": s.profile_name,
                         "display_name": s.profile_display_name,
                         "stealth": s.stealth,
-                        "status": if s.alive { "alive" } else { "crashed" },
+                        "alive": s.alive,
+                        "status": s.status,
                     })
                 })
                 .collect();
@@ -5099,6 +5121,8 @@ mod metadata_tests {
         let meta = build_tool_metadata("list_sessions", &json!({}), result).unwrap();
         assert_eq!(meta["_total"], 1);
         assert!(meta["_schema"]["id"].is_string());
+        assert!(meta["_schema"]["alive"].is_string());
+        assert!(meta["_schema"]["status"].is_string());
     }
 
     #[test]
