@@ -1372,6 +1372,22 @@ pub(crate) async fn call_tool(
     let audit_path = std::path::Path::new(&db_path_str).with_extension("audit.log");
     let audit = Arc::new(crate::audit::AuditLog::new(audit_path, Arc::clone(&db)));
     let sessions = Arc::new(Mutex::new(SessionManager::new()));
+
+    // Standalone CLI mode: reconcile session registry so that sessions opened
+    // by previous CLI invocations (or a previous daemon) are reattached.
+    // Without this, each CLI invocation starts with an empty SessionManager
+    // and session-dependent tools (list_tabs, navigate, etc.) fail.
+    let reattached = crate::session_registry::reconcile_sessions(
+        &db, &sessions, config, None,
+    )
+    .await;
+    if !reattached.is_empty() {
+        tracing::debug!(
+            "Standalone CLI: reattached {} session(s) from registry",
+            reattached.len()
+        );
+    }
+
     dispatch_tool(tool, &args, config, sessions, db, Some(audit)).await
 }
 
