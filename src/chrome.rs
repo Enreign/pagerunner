@@ -209,8 +209,7 @@ mod tests {
         // Use our own PID — definitely alive
         let pid = std::process::id();
         let target = format!("hostname-{}", pid);
-        std::os::unix::fs::symlink(&target, &lock_path)
-            .expect("symlink creation should succeed");
+        std::os::unix::fs::symlink(&target, &lock_path).expect("symlink creation should succeed");
         // Verify symlink was created correctly
         let read_target = std::fs::read_link(&lock_path).expect("read_link should succeed");
         assert_eq!(read_target.to_str().unwrap(), target);

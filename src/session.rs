@@ -631,7 +631,9 @@ impl SessionManager {
                 return Err(crate::error::PagerunnerError::SessionDead(id.into()));
             }
             SessionHealth::Reconnecting => {
-                return Err(crate::error::PagerunnerError::SessionReconnecting(id.into()));
+                return Err(crate::error::PagerunnerError::SessionReconnecting(
+                    id.into(),
+                ));
             }
             SessionHealth::Recovering => {
                 return Err(crate::error::PagerunnerError::SessionRecovering(id.into()));
@@ -722,14 +724,13 @@ impl SessionManager {
         })?;
 
         // Spawn new Chrome
-        let spawn_result =
-            match crate::chrome::ChromeProcess::spawn(user_data_dir, stealth).await {
-                Ok(r) => r,
-                Err(e) => {
-                    self.sessions.get_mut(id).unwrap().health = SessionHealth::Dead;
-                    return Err(e);
-                }
-            };
+        let spawn_result = match crate::chrome::ChromeProcess::spawn(user_data_dir, stealth).await {
+            Ok(r) => r,
+            Err(e) => {
+                self.sessions.get_mut(id).unwrap().health = SessionHealth::Dead;
+                return Err(e);
+            }
+        };
 
         // Wait for WebSocket URL
         let ws_url = match wait_for_chrome_ws_url(spawn_result.debug_port).await {

@@ -10,7 +10,6 @@ pub struct SessionRegistryEntry {
     pub stealth: bool,
     pub debug_port: u16,
     /// WebSocket URL for faster reconnection (skip HTTP discovery).
-    /// TODO: populate this when saving registry entries in mcp_server.rs
     pub ws_url: Option<String>,
     pub opened_at: u64, // Unix seconds
     /// JSON-serialized SecurityPolicy params for restore (allowed_domains, max_navigations, etc.)

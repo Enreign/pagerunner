@@ -114,7 +114,10 @@ pub async fn run() -> Result<()> {
                                 session._reader_task = new_reader_handle;
                                 session.health = crate::session_health::SessionHealth::Alive;
                                 session.cdp_sessions.clear();
-                                tracing::info!(session_id = id, "Session reconnected successfully (daemon)");
+                                tracing::info!(
+                                    session_id = id,
+                                    "Session reconnected successfully (daemon)"
+                                );
                             }
                             Err(e) => {
                                 session.health = crate::session_health::SessionHealth::Dead;
@@ -134,7 +137,10 @@ pub async fn run() -> Result<()> {
                     }
                 } else {
                     // No port or state changed — skip; next tick will retry
-                    tracing::debug!(session_id = id, "Skipping reconnect: no port or state changed");
+                    tracing::debug!(
+                        session_id = id,
+                        "Skipping reconnect: no port or state changed"
+                    );
                 }
             }
 

@@ -4,9 +4,14 @@
 //! forwards them through a tokio channel so the daemon can checkpoint before
 //! sleep and trigger reconnection after wake.
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug)]
 pub enum PowerEvent {
-    WillSleep,
+    /// System is about to sleep. Send `()` on the responder when pre-sleep
+    /// work (e.g. checkpoints) is done so the sleep-watcher thread can call
+    /// `IOAllowPowerChange`.
+    WillSleep {
+        done: tokio::sync::oneshot::Sender<()>,
+    },
     DidWake,
 }
 
@@ -89,8 +94,13 @@ mod macos {
             }
             KIO_MESSAGE_SYSTEM_WILL_SLEEP => {
                 tracing::debug!("IOKit: SystemWillSleep");
+                let (done_tx, done_rx) = tokio::sync::oneshot::channel();
                 // blocking_send is fine — we're on a std thread, not async.
-                let _ = tx.blocking_send(PowerEvent::WillSleep);
+                let _ = tx.blocking_send(PowerEvent::WillSleep { done: done_tx });
+                // Wait for daemon to finish checkpoints before allowing sleep.
+                // blocking_recv returns Err if sender is dropped (e.g. daemon panic),
+                // which is fine — we allow sleep anyway.
+                let _ = done_rx.blocking_recv();
                 let root_port = ROOT_PORT.load(Ordering::Acquire);
                 unsafe { IOAllowPowerChange(root_port, notification_id) };
             }
@@ -115,12 +125,7 @@ mod macos {
         let mut notifier: u32 = 0;
 
         let root_port = unsafe {
-            IORegisterForSystemPower(
-                refcon,
-                &mut notify_port,
-                power_callback,
-                &mut notifier,
-            )
+            IORegisterForSystemPower(refcon, &mut notify_port, power_callback, &mut notifier)
         };
 
         if root_port == 0 {
@@ -150,10 +155,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_power_event_eq() {
-        assert_eq!(PowerEvent::WillSleep, PowerEvent::WillSleep);
-        assert_eq!(PowerEvent::DidWake, PowerEvent::DidWake);
-        assert_ne!(PowerEvent::WillSleep, PowerEvent::DidWake);
+    fn test_power_event_variant_names() {
+        // WillSleep carries a oneshot::Sender so we can't derive PartialEq.
+        // Just verify both variants construct without issue.
+        let (tx, _rx) = tokio::sync::oneshot::channel();
+        let _sleep = PowerEvent::WillSleep { done: tx };
+        let _wake = PowerEvent::DidWake;
     }
 
     #[test]

@@ -1377,10 +1377,8 @@ pub(crate) async fn call_tool(
     // by previous CLI invocations (or a previous daemon) are reattached.
     // Without this, each CLI invocation starts with an empty SessionManager
     // and session-dependent tools (list_tabs, navigate, etc.) fail.
-    let reattached = crate::session_registry::reconcile_sessions(
-        &db, &sessions, config, None,
-    )
-    .await;
+    let reattached =
+        crate::session_registry::reconcile_sessions(&db, &sessions, config, None).await;
     if !reattached.is_empty() {
         tracing::debug!(
             "Standalone CLI: reattached {} session(s) from registry",

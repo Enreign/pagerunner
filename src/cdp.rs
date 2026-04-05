@@ -184,7 +184,10 @@ impl CdpConn {
         // Drain any in-flight requests from the old connection — their responses
         // will never arrive since the old reader is dead.
         {
-            let mut pending = self.inner.pending.lock()
+            let mut pending = self
+                .inner
+                .pending
+                .lock()
                 .map_err(|_| PagerunnerError::Cdp("Pending lock poisoned".into()))?;
             for (_, tx) in pending.drain() {
                 let _ = tx.send(Err(PagerunnerError::Cdp(
@@ -211,7 +214,8 @@ impl CdpConn {
         session_id: Option<String>,
         timeout: std::time::Duration,
     ) -> Result<Value> {
-        match tokio::time::timeout(timeout, self.send_on_session(method, params, session_id)).await {
+        match tokio::time::timeout(timeout, self.send_on_session(method, params, session_id)).await
+        {
             Ok(result) => result,
             Err(_) => Err(PagerunnerError::Cdp(format!(
                 "{} timed out after {}ms",
@@ -565,9 +569,8 @@ mod tests {
 
         // Send a request that will never get a response
         let conn2 = conn.clone();
-        let pending_task = tokio::spawn(async move {
-            conn2.send("Test.pending", serde_json::json!({})).await
-        });
+        let pending_task =
+            tokio::spawn(async move { conn2.send("Test.pending", serde_json::json!({})).await });
 
         // Give the send time to insert into pending map
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
@@ -577,16 +580,17 @@ mod tests {
         let _ = handle.await;
 
         // The pending request should have received an error
-        let result = tokio::time::timeout(
-            std::time::Duration::from_secs(2),
-            pending_task
-        ).await.unwrap().unwrap();
+        let result = tokio::time::timeout(std::time::Duration::from_secs(2), pending_task)
+            .await
+            .unwrap()
+            .unwrap();
 
         assert!(result.is_err());
         let err_msg = result.unwrap_err().to_string();
         assert!(
             err_msg.contains("closed") || err_msg.contains("replaced"),
-            "Expected closed/replaced error, got: {}", err_msg
+            "Expected closed/replaced error, got: {}",
+            err_msg
         );
     }
 }

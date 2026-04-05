@@ -3251,11 +3251,7 @@ fn test_list_sessions_includes_status_field() {
 
     // Verify session is functional by listing tabs
     let tabs = run_live(&["list-tabs", &sid]);
-    assert!(
-        tabs.status.success(),
-        "list-tabs failed: {}",
-        stderr(&tabs)
-    );
+    assert!(tabs.status.success(), "list-tabs failed: {}", stderr(&tabs));
     let tv: serde_json::Value = serde_json::from_str(&stdout(&tabs)).unwrap();
     assert!(
         tv["data"].as_array().unwrap().len() > 0,

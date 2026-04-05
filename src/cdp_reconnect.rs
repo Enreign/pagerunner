@@ -126,7 +126,13 @@ mod tests {
         let mut prev = Duration::ZERO;
         for i in 0..20 {
             let d = backoff_duration(i);
-            assert!(d >= prev, "backoff_duration({}) = {:?} < prev {:?}", i, d, prev);
+            assert!(
+                d >= prev,
+                "backoff_duration({}) = {:?} < prev {:?}",
+                i,
+                d,
+                prev
+            );
             prev = d;
         }
     }
