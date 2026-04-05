@@ -408,3 +408,7 @@ data belonging to other people.
 
 See [DISCLAIMER.md](DISCLAIMER.md) for the full legal disclaimer, limitation of liability,
 and responsible use obligations.
+
+---
+
+If this project helps you, [star the repo](https://github.com/Enreign/pagerunner) — it helps others find it.
