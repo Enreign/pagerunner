@@ -711,13 +711,75 @@ async fn main() {
     }
 }
 
-async fn run() -> anyhow::Result<()> {
-    tracing_subscriber::fmt()
-        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
-        .with_writer(std::io::stderr)
-        .init();
+/// MakeWriter that tees each write to both stderr and a log file.
+#[derive(Clone)]
+struct TeeWriterFactory {
+    file: std::sync::Arc<std::sync::Mutex<std::fs::File>>,
+}
 
+struct TeeWriterInstance {
+    file: std::sync::Arc<std::sync::Mutex<std::fs::File>>,
+}
+
+impl std::io::Write for TeeWriterInstance {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        let _ = std::io::Write::write(&mut std::io::stderr(), buf);
+        if let Ok(mut f) = self.file.lock() {
+            let _ = std::io::Write::write(&mut *f, buf);
+        }
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        let _ = std::io::Write::flush(&mut std::io::stderr());
+        if let Ok(mut f) = self.file.lock() {
+            let _ = std::io::Write::flush(&mut *f);
+        }
+        Ok(())
+    }
+}
+
+impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for TeeWriterFactory {
+    type Writer = TeeWriterInstance;
+
+    fn make_writer(&'a self) -> Self::Writer {
+        TeeWriterInstance {
+            file: std::sync::Arc::clone(&self.file),
+        }
+    }
+}
+
+async fn run() -> anyhow::Result<()> {
     let cli = Cli::parse();
+    let is_daemon = matches!(cli.command, Commands::Daemon);
+
+    if is_daemon {
+        // Daemon: tee tracing output to both stderr and ~/.pagerunner/daemon.log
+        let home = dirs::home_dir().unwrap_or_default();
+        let log_dir = home.join(".pagerunner");
+        let _ = std::fs::create_dir_all(&log_dir);
+        let log_file = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(log_dir.join("daemon.log"))
+            .expect("failed to open daemon.log");
+        let tee = TeeWriterFactory {
+            file: std::sync::Arc::new(std::sync::Mutex::new(log_file)),
+        };
+        let env_filter = tracing_subscriber::EnvFilter::try_from_default_env()
+            .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("pagerunner=info"));
+        tracing_subscriber::fmt()
+            .with_env_filter(env_filter)
+            .with_writer(tee)
+            .with_ansi(false)
+            .init();
+    } else {
+        tracing_subscriber::fmt()
+            .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
+            .with_writer(std::io::stderr)
+            .init();
+    }
+
     match cli.command {
         Commands::Mcp => mcp_server::run().await?,
         Commands::Profiles => {
