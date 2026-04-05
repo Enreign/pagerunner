@@ -2577,9 +2577,12 @@ async fn dispatch_tool_inner(
             // The raw value never reaches the LLM.
             if let Some(secret_name) = store_as_secret {
                 validate_secret_name(secret_name)?;
-                // Extract plain string value from JSON result (strip surrounding quotes if any)
-                let secret_value = result
+                // Extract plain string value from CDP result.
+                // CDP Runtime.evaluate returns {"type":"string","value":"..."} for strings,
+                // so try result["value"] first, then result.as_str(), then the raw JSON.
+                let secret_value = result["value"]
                     .as_str()
+                    .or_else(|| result.as_str())
                     .map(|s| s.to_string())
                     .unwrap_or_else(|| raw.trim().to_string());
                 db.put(SEALED_SECRETS_TABLE, secret_name, secret_value.as_bytes())

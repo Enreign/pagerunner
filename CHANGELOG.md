@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.1] — Secret Store Fix
+
+### Fixed
+
+- **store_as_secret stored JSON wrapper instead of plain value**: CDP `Runtime.evaluate` returns `{"type":"string","value":"..."}` for string results. `store_as_secret` was storing the entire JSON object, causing `use_secret` to pipe JSON instead of the raw token value to commands like `gh secret set`. Now correctly extracts the plain string via `result["value"]`.
+
 ## [0.7.0] — Daemon Hardening: Crash Recovery, Sleep/Wake, Session Health
 
 ### Added
