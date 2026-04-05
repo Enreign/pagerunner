@@ -45,6 +45,10 @@ perf.data.old
 # npm wrapper build artifacts
 npm/bin/
 
+# Raycast extension build artifacts
+extensions/raycast/node_modules/
+extensions/raycast/dist/
+
 # MCPB bundle output
 mcpb/dist/
 

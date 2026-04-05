@@ -1,0 +1,40 @@
+{
+  "$schema": "https://www.raycast.com/schemas/extension.json",
+  "name": "pagerunner",
+  "title": "Pagerunner",
+  "description": "Manage Chrome browser sessions, tabs, KV store, and secrets from Raycast",
+  "icon": "icon.png",
+  "author": "enreign",
+  "platforms": ["macOS"],
+  "categories": ["Developer Tools"],
+  "license": "Apache-2.0",
+  "commands": [
+    { "name": "sessions", "title": "Sessions", "description": "List and manage open browser sessions", "mode": "view" },
+    { "name": "new-session", "title": "New Session", "description": "Open a new browser session from a profile", "mode": "view" },
+    { "name": "tabs", "title": "Tabs", "description": "Browse and manage tabs in a session", "mode": "view" },
+    { "name": "kv-browser", "title": "KV Browser", "description": "Browse, search, and edit key-value store entries", "mode": "view" },
+    { "name": "secrets", "title": "Secrets", "description": "List and manage stored secrets", "mode": "view" },
+    { "name": "site-knowledge", "title": "Site Knowledge", "description": "View site knowledge for an origin", "mode": "view" },
+    { "name": "checkpoints", "title": "Checkpoints", "description": "List and restore session checkpoints", "mode": "view" }
+  ],
+  "preferences": [
+    { "name": "pagerunnerPath", "title": "Pagerunner Binary", "description": "Path to pagerunner binary (leave blank to auto-detect)", "type": "textfield", "required": false, "placeholder": "/usr/local/bin/pagerunner" },
+    { "name": "daemonAutoStart", "title": "Auto-start Daemon", "description": "Start daemon automatically if not running", "type": "checkbox", "label": "Auto-start daemon", "required": false, "default": true }
+  ],
+  "dependencies": {
+    "@raycast/api": "^1.93.0",
+    "@raycast/utils": "^1.19.0"
+  },
+  "devDependencies": {
+    "@raycast/eslint-config": "^1.0.11",
+    "@types/node": "^22.13.14",
+    "@types/react": "^19.0.12",
+    "eslint": "^9.23.0",
+    "typescript": "^5.8.2"
+  },
+  "scripts": {
+    "build": "ray build",
+    "dev": "ray develop",
+    "lint": "ray lint"
+  }
+}
