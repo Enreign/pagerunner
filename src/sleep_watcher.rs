@@ -5,6 +5,7 @@
 //! sleep and trigger reconnection after wake.
 
 #[derive(Debug)]
+#[allow(dead_code)] // Variants constructed only on macOS (IOKit)
 pub enum PowerEvent {
     /// System is about to sleep. Send `()` on the responder when pre-sleep
     /// work (e.g. checkpoints) is done so the sleep-watcher thread can call
