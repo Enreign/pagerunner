@@ -39,7 +39,10 @@ fn alloc_free_port() -> crate::error::Result<u16> {
 /// Returns Ok(()) if the profile is free, Err with a descriptive message if locked.
 fn check_profile_lock(user_data_dir: &str) -> Result<()> {
     let lock_path = std::path::Path::new(user_data_dir).join("SingletonLock");
-    if !lock_path.exists() {
+    // Use symlink_metadata (not exists()) because SingletonLock is a symlink
+    // whose target is "hostname-PID" — a non-existent path. exists() follows
+    // symlinks and returns false for dangling symlinks.
+    if lock_path.symlink_metadata().is_err() {
         return Ok(());
     }
     // SingletonLock is a symlink whose target encodes the PID: "hostname-PID"
@@ -48,9 +51,9 @@ fn check_profile_lock(user_data_dir: &str) -> Result<()> {
             // Format: "hostname-PID"
             if let Some(pid_str) = target_str.rsplit('-').next() {
                 if let Ok(pid) = pid_str.parse::<u32>() {
-                    // Check if that PID is still alive via kill -0 (signal 0 = existence check)
-                    let alive = std::process::Command::new("kill")
-                        .args(["-0", &pid.to_string()])
+                    // Check if that PID is still alive via ps -p (works on macOS and Linux).
+                    let alive = std::process::Command::new("ps")
+                        .args(["-p", &pid.to_string()])
                         .stdout(Stdio::null())
                         .stderr(Stdio::null())
                         .status()
@@ -180,5 +183,60 @@ mod tests {
             let _: ChromeProcess = r.process;
             let _: u16 = r.debug_port;
         }
+    }
+
+    #[test]
+    fn test_check_profile_lock_no_lock_file() {
+        let dir = tempfile::tempdir().unwrap();
+        // No SingletonLock exists — should succeed
+        assert!(check_profile_lock(dir.path().to_str().unwrap()).is_ok());
+    }
+
+    #[test]
+    fn test_check_profile_lock_stale_lock_dead_pid() {
+        let dir = tempfile::tempdir().unwrap();
+        let lock_path = dir.path().join("SingletonLock");
+        // Create a symlink with a PID that doesn't exist (PID 2^31-1 is virtually never alive)
+        let _ = std::os::unix::fs::symlink("hostname-2147483647", &lock_path);
+        // Stale lock — dead PID should succeed (lock will be cleaned up during spawn)
+        assert!(check_profile_lock(dir.path().to_str().unwrap()).is_ok());
+    }
+
+    #[test]
+    fn test_check_profile_lock_live_lock_own_pid() {
+        let dir = tempfile::tempdir().unwrap();
+        let lock_path = dir.path().join("SingletonLock");
+        // Use our own PID — definitely alive
+        let pid = std::process::id();
+        let target = format!("hostname-{}", pid);
+        std::os::unix::fs::symlink(&target, &lock_path)
+            .expect("symlink creation should succeed");
+        // Verify symlink was created correctly
+        let read_target = std::fs::read_link(&lock_path).expect("read_link should succeed");
+        assert_eq!(read_target.to_str().unwrap(), target);
+        let result = check_profile_lock(dir.path().to_str().unwrap());
+        assert!(result.is_err(), "expected Err for live PID {}", pid);
+        let msg = result.unwrap_err().to_string();
+        assert!(msg.contains("locked by another Chrome instance"));
+        assert!(msg.contains(&pid.to_string()));
+    }
+
+    #[test]
+    fn test_check_profile_lock_malformed_symlink() {
+        let dir = tempfile::tempdir().unwrap();
+        let lock_path = dir.path().join("SingletonLock");
+        // Malformed symlink target — no PID parseable
+        let _ = std::os::unix::fs::symlink("garbage-no-pid", &lock_path);
+        // Should succeed (can't determine if locked, err on the side of proceeding)
+        assert!(check_profile_lock(dir.path().to_str().unwrap()).is_ok());
+    }
+
+    #[test]
+    fn test_check_profile_lock_regular_file_not_symlink() {
+        let dir = tempfile::tempdir().unwrap();
+        let lock_path = dir.path().join("SingletonLock");
+        // Regular file instead of symlink — read_link will fail, should succeed
+        std::fs::write(&lock_path, "not a symlink").unwrap();
+        assert!(check_profile_lock(dir.path().to_str().unwrap()).is_ok());
     }
 }
