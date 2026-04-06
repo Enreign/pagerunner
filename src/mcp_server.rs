@@ -2904,6 +2904,11 @@ async fn dispatch_tool_inner(
                 ).await {
                     let v = &r["result"]["value"];
                     if let (Some(x), Some(y)) = (v["x"].as_f64(), v["y"].as_f64()) {
+                        // Move cursor first — CSS animates over 0.6s
+                        let _ = browser::move_recording_cursor(session, tid, x, y, false).await;
+                        // Wait for animation to complete + capture frames along the path
+                        tokio::time::sleep(std::time::Duration::from_millis(700)).await;
+                        // Show click ripple at destination
                         let _ = browser::move_recording_cursor(session, tid, x, y, true).await;
                         tokio::time::sleep(std::time::Duration::from_millis(300)).await;
                     }
@@ -3135,6 +3140,8 @@ async fn dispatch_tool_inner(
                 ).await {
                     let v = &r["result"]["value"];
                     if let (Some(x), Some(y)) = (v["x"].as_f64(), v["y"].as_f64()) {
+                        let _ = browser::move_recording_cursor(session, tid, x, y, false).await;
+                        tokio::time::sleep(std::time::Duration::from_millis(700)).await;
                         let _ = browser::move_recording_cursor(session, tid, x, y, true).await;
                         tokio::time::sleep(std::time::Duration::from_millis(200)).await;
                     }
