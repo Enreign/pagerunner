@@ -172,36 +172,24 @@ impl RecordingHandle {
         let fps_str = fps.to_string();
         let out_fps_str = output_fps.to_string();
 
-        // Motion interpolation: capture at `fps`, output at `output_fps`.
-        // minterpolate generates smooth intermediate frames using optical flow.
-        let minterpolate_filter = if output_fps > fps {
-            format!("minterpolate=fps={}:mi_mode=mci:mc_mode=aobmc:me_mode=bidir:vsbmc=1", out_fps_str)
-        } else {
-            String::new()
-        };
-
-        let mut args: Vec<&str> = vec![
-            "-f", "image2pipe", "-c:v", "mjpeg", "-framerate", &fps_str,
-            "-i", "pipe:0",
-        ];
-
-        if !minterpolate_filter.is_empty() {
-            args.push("-vf");
-            args.push(&minterpolate_filter);
+        // Encode at capture fps — motion interpolation applied during render_recording
+        let ffmpeg_args: Vec<String> = match format {
+            "webm" => vec![
+                "-f", "image2pipe", "-c:v", "mjpeg", "-framerate", &fps_str,
+                "-i", "pipe:0",
+                "-c:v", "libvpx-vp9", "-pix_fmt", "yuv420p",
+                "-y", &video_path_str,
+            ],
+            _ => vec![
+                "-f", "image2pipe", "-c:v", "mjpeg", "-framerate", &fps_str,
+                "-i", "pipe:0",
+                "-c:v", "libx264", "-pix_fmt", "yuv420p", "-preset", "fast",
+                "-y", &video_path_str,
+            ],
         }
-
-        match format {
-            "webm" => {
-                args.extend_from_slice(&["-c:v", "libvpx-vp9", "-pix_fmt", "yuv420p"]);
-            }
-            _ => {
-                args.extend_from_slice(&["-c:v", "libx264", "-pix_fmt", "yuv420p", "-preset", "fast"]);
-            }
-        }
-
-        args.extend_from_slice(&["-y", &video_path_str]);
-
-        let ffmpeg_args: Vec<String> = args.into_iter().map(|s| s.to_string()).collect();
+        .into_iter()
+        .map(|s| s.to_string())
+        .collect();
 
         let mut child = tokio::process::Command::new("ffmpeg")
             .args(&ffmpeg_args)

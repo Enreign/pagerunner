@@ -2,6 +2,35 @@ use crate::error::{PagerunnerError, Result};
 use crate::recording::{get_recording_index, Marker, RecordingMetadata};
 use std::path::{Path, PathBuf};
 
+/// Apply motion interpolation to upscale frame rate for smooth playback.
+/// Uses ffmpeg minterpolate with blend mode (fast, good quality for UI content).
+async fn apply_minterpolate(
+    input_path: &Path,
+    output_path: &Path,
+    target_fps: u8,
+) -> bool {
+    let filter = format!(
+        "minterpolate=fps={}:mi_mode=blend",
+        target_fps
+    );
+    let status = tokio::process::Command::new("ffmpeg")
+        .args(&[
+            "-i", input_path.to_str().unwrap_or(""),
+            "-vf", &filter,
+            "-c:v", "libx264",
+            "-pix_fmt", "yuv420p",
+            "-preset", "fast",
+            "-y", output_path.to_str().unwrap_or(""),
+        ])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .await
+        .ok();
+
+    matches!(status, Some(s) if s.success())
+}
+
 /// Apply window chrome post-processing: gradient background, rounded corners, shadow.
 /// Takes the raw video and produces a polished version with padding and effects.
 pub async fn apply_window_chrome(
@@ -392,11 +421,21 @@ pub async fn render_annotated(
     std::fs::write(&srt_path, &srt_content)
         .map_err(|e| PagerunnerError::Config(format!("Failed to write SRT: {}", e)))?;
 
+    // Step 0: Motion interpolation — upscale frame rate for smooth motion
+    let interpolated_path = dir.join(format!("interpolated.{}", entry.format));
+    let smooth_source = if apply_minterpolate(&video_path, &interpolated_path, 30).await {
+        tracing::info!("Motion interpolation complete");
+        interpolated_path.clone()
+    } else {
+        tracing::info!("Skipping motion interpolation — using raw video");
+        video_path.clone()
+    };
+
     // Step 1: Burn subtitles into the video if requested
     let subtitled_path = if with_overlays && !metadata.markers.is_empty() {
         let path = dir.join(format!("subtitled.{}", entry.format));
         burn_subtitles_overlay(
-            &video_path,
+            &smooth_source,
             &metadata.markers,
             total_ms,
             &path,
@@ -411,7 +450,7 @@ pub async fn render_annotated(
     let source = subtitled_path
         .as_ref()
         .map(|p| PathBuf::from(p))
-        .unwrap_or_else(|| video_path.clone());
+        .unwrap_or_else(|| smooth_source.clone());
     let polished_path = dir.join(format!("annotated.{}", entry.format));
     let polished = apply_window_chrome(
         &source,
@@ -423,7 +462,10 @@ pub async fn render_annotated(
     )
     .await;
 
-    // Cleanup intermediate subtitled file if we produced a polished one
+    // Cleanup intermediate files
+    if polished.is_some() || subtitled_path.is_some() {
+        let _ = std::fs::remove_file(&interpolated_path);
+    }
     if polished.is_some() {
         if let Some(ref sub_path) = subtitled_path {
             let _ = std::fs::remove_file(sub_path);
