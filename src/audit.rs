@@ -105,6 +105,17 @@ pub enum AuditEventKind {
         /// How the gap was detected: "residual_scan" | "entropy_heuristic"
         source: String,
     },
+    RecordingStarted {
+        session_id: String,
+        recording_id: String,
+        profile: String,
+    },
+    RecordingStopped {
+        session_id: String,
+        recording_id: String,
+        duration_ms: Option<u64>,
+        markers_count: usize,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

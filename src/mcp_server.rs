@@ -695,6 +695,98 @@ pub fn all_tools() -> Vec<Value> {
                 "required": ["title"]
             }
         }),
+        json!({
+            "name": "start_recording",
+            "description": "Start recording the current tab as video. Uses CDP screencast to capture frames and ffmpeg to encode. Requires ffmpeg on PATH. Blocked when anonymization is active.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "session_id": { "type": "string", "description": "Session to record" },
+                    "target_id": { "type": "string", "description": "Tab to record" },
+                    "name": { "type": "string", "description": "Optional recording name" },
+                    "tags": {
+                        "type": "array", "items": { "type": "string" },
+                        "description": "Optional tags for organization"
+                    },
+                    "flow": { "type": "string", "description": "Optional flow label (e.g. 'deploy-v2.3.1', 'people-hub-demo')" }
+                },
+                "required": ["session_id", "target_id"]
+            }
+        }),
+        json!({
+            "name": "stop_recording",
+            "description": "Stop the active recording on a session. Finalizes the video file and saves metadata.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "session_id": { "type": "string", "description": "Session with active recording" }
+                },
+                "required": ["session_id"]
+            }
+        }),
+        json!({
+            "name": "add_marker",
+            "description": "Add a timestamped marker/annotation to the active recording. Markers are saved in the metadata sidecar and can be rendered as text overlays via render_recording.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "session_id": { "type": "string", "description": "Session with active recording" },
+                    "label": { "type": "string", "description": "Short label for this marker" },
+                    "description": { "type": "string", "description": "Optional longer description" }
+                },
+                "required": ["session_id", "label"]
+            }
+        }),
+        json!({
+            "name": "list_recordings",
+            "description": "List saved recordings, optionally filtered by profile, flow, or tag.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "profile": { "type": "string", "description": "Filter by profile name" },
+                    "flow": { "type": "string", "description": "Filter by flow label" },
+                    "tag": { "type": "string", "description": "Filter by tag" }
+                }
+            }
+        }),
+        json!({
+            "name": "get_recording",
+            "description": "Get details about a specific recording including path, duration, and markers.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "recording_id": { "type": "string", "description": "Recording ID" }
+                },
+                "required": ["recording_id"]
+            }
+        }),
+        json!({
+            "name": "delete_recording",
+            "description": "Delete a recording and its files from disk.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "recording_id": { "type": "string", "description": "Recording ID to delete" }
+                },
+                "required": ["recording_id"]
+            }
+        }),
+        json!({
+            "name": "render_recording",
+            "description": "Render an annotated version of a recording with marker text overlays composited onto the video. Requires ffmpeg on PATH.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "recording_id": { "type": "string", "description": "Recording to render" },
+                    "format": {
+                        "type": "string",
+                        "enum": ["mp4", "webm"],
+                        "description": "Output format (defaults to recording's original format)"
+                    }
+                },
+                "required": ["recording_id"]
+            }
+        }),
     ]
 }
 
@@ -3971,6 +4063,343 @@ async fn dispatch_tool_inner(
         }
 
         "list_notifications" => handle_list_notifications(&db),
+
+        "start_recording" => {
+            let session_id_str = args["session_id"]
+                .as_str()
+                .ok_or_else(|| PagerunnerError::Config("Missing session_id".into()))?
+                .to_string();
+            let target_id = args["target_id"]
+                .as_str()
+                .ok_or_else(|| PagerunnerError::Config("Missing target_id".into()))?
+                .to_string();
+            let name = args["name"].as_str().map(|s| s.to_string());
+            let flow = args["flow"].as_str().map(|s| s.to_string());
+            let tags: Vec<String> = args["tags"]
+                .as_array()
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                        .collect()
+                })
+                .unwrap_or_default();
+
+            let mut mgr = sessions.lock().await;
+            let session = mgr
+                .get_mut(&session_id_str)
+                .ok_or_else(|| {
+                    PagerunnerError::Config(format!("Session {} not found", session_id_str))
+                })?;
+
+            if session.recording.is_some() {
+                return Err(PagerunnerError::Config(
+                    "Recording already active on this session".into(),
+                ));
+            }
+
+            if session.anon_config.is_some() {
+                return Err(PagerunnerError::Config(
+                    "Recording is blocked when anonymization is active (would capture PII)".into(),
+                ));
+            }
+
+            let recording_id = format!(
+                "rec_{}",
+                &uuid::Uuid::new_v4().to_string().replace('-', "")[..12]
+            );
+            let profile = session.profile_name.clone();
+            let flow_label = flow
+                .clone()
+                .or_else(|| name.clone())
+                .unwrap_or_else(|| recording_id.clone());
+
+            let base_dir = crate::recording::resolve_recordings_dir(
+                config.recording.storage_dir.as_deref(),
+            );
+            let rec_dir =
+                crate::recording::recording_dir_path(&base_dir, &profile, &flow_label);
+
+            let format_str = match config.recording.format {
+                crate::config::RecordingFormat::Webm => "webm",
+                crate::config::RecordingFormat::Mp4 => "mp4",
+            };
+
+            let state = crate::recording::RecordingState::new(
+                recording_id.clone(),
+                session_id_str.clone(),
+                profile.clone(),
+                flow,
+                tags,
+                name,
+                format_str.to_string(),
+            );
+
+            let fps = config.recording.fps.max(1).min(10);
+            let handle =
+                crate::recording::RecordingHandle::start(state, rec_dir, format_str, fps).await?;
+
+            // Start CDP screencast
+            let cdp_session_id =
+                crate::browser::attach_to_target(session, &target_id).await?;
+
+            // Spawn frame processor
+            let frame_tx = handle.frame_tx_clone();
+            let _processor = crate::recording::spawn_frame_processor(
+                session.cdp.clone(),
+                cdp_session_id.clone(),
+                frame_tx,
+            );
+
+            crate::browser::start_screencast(session, &target_id, "jpeg", 80, 1280, 720, 1)
+                .await?;
+
+            session.recording = Some(handle);
+
+            if let Some(audit) = audit {
+                audit
+                    .record(crate::audit::AuditEvent::new(
+                        crate::audit::AuditEventKind::RecordingStarted {
+                            session_id: session_id_str.clone(),
+                            recording_id: recording_id.clone(),
+                            profile: profile.clone(),
+                        },
+                    ))
+                    .await;
+            }
+
+            Ok(serde_json::json!({
+                "ok": true,
+                "recording_id": recording_id,
+                "message": format!("Recording started for session {}", session_id_str)
+            })
+            .to_string())
+        }
+
+        "stop_recording" => {
+            let session_id_str = args["session_id"]
+                .as_str()
+                .ok_or_else(|| PagerunnerError::Config("Missing session_id".into()))?
+                .to_string();
+
+            let mut mgr = sessions.lock().await;
+            let session = mgr.get_mut(&session_id_str).ok_or_else(|| {
+                PagerunnerError::Config(format!("Session {} not found", session_id_str))
+            })?;
+
+            let handle = session.recording.take().ok_or_else(|| {
+                PagerunnerError::Config("No active recording on this session".into())
+            })?;
+
+            // Stop screencast (best-effort)
+            let _ = session
+                .cdp
+                .send("Page.stopScreencast", serde_json::json!({}))
+                .await;
+
+            let metadata = handle.stop().await?;
+
+            // Save to DB index
+            let entry = crate::recording::RecordingIndexEntry {
+                recording_id: metadata.recording_id.clone(),
+                session_id: metadata.session_id.clone(),
+                profile: metadata.profile.clone(),
+                flow: metadata.flow.clone(),
+                tags: metadata.tags.clone(),
+                name: metadata.name.clone(),
+                started_at: metadata.started_at,
+                duration_ms: metadata.duration_ms,
+                format: metadata.format.clone(),
+                dir_path: metadata.recording_id.clone(),
+            };
+            let _ = crate::recording::save_recording_index(&db, &entry);
+
+            if let Some(audit) = audit {
+                audit
+                    .record(crate::audit::AuditEvent::new(
+                        crate::audit::AuditEventKind::RecordingStopped {
+                            session_id: session_id_str.clone(),
+                            recording_id: metadata.recording_id.clone(),
+                            duration_ms: metadata.duration_ms,
+                            markers_count: metadata.markers.len(),
+                        },
+                    ))
+                    .await;
+            }
+
+            Ok(serde_json::json!({
+                "ok": true,
+                "recording_id": metadata.recording_id,
+                "duration_ms": metadata.duration_ms,
+                "markers": metadata.markers.len(),
+            })
+            .to_string())
+        }
+
+        "add_marker" => {
+            let session_id_str = args["session_id"]
+                .as_str()
+                .ok_or_else(|| PagerunnerError::Config("Missing session_id".into()))?
+                .to_string();
+            let label = args["label"]
+                .as_str()
+                .ok_or_else(|| PagerunnerError::Config("Missing label".into()))?
+                .to_string();
+            let description = args["description"].as_str().map(|s| s.to_string());
+
+            let mut mgr = sessions.lock().await;
+            let session = mgr.get_mut(&session_id_str).ok_or_else(|| {
+                PagerunnerError::Config(format!("Session {} not found", session_id_str))
+            })?;
+
+            let handle = session.recording.as_mut().ok_or_else(|| {
+                PagerunnerError::Config("No active recording on this session".into())
+            })?;
+
+            let ts_ms = handle.state.elapsed_ms();
+            handle
+                .state
+                .add_marker(label.clone(), description, ts_ms);
+
+            Ok(serde_json::json!({
+                "ok": true,
+                "ts_ms": ts_ms,
+                "label": label,
+                "total_markers": handle.state.metadata.markers.len(),
+            })
+            .to_string())
+        }
+
+        "list_recordings" => {
+            let profile = args["profile"].as_str();
+            let flow = args["flow"].as_str();
+            let tag = args["tag"].as_str();
+
+            let entries = crate::recording::list_recordings(&db, profile, flow, tag)?;
+            let items: Vec<serde_json::Value> = entries
+                .iter()
+                .map(|e| {
+                    serde_json::json!({
+                        "recording_id": e.recording_id,
+                        "profile": e.profile,
+                        "flow": e.flow,
+                        "name": e.name,
+                        "tags": e.tags,
+                        "started_at": e.started_at.to_rfc3339(),
+                        "duration_ms": e.duration_ms,
+                        "format": e.format,
+                    })
+                })
+                .collect();
+
+            Ok(serde_json::json!({
+                "ok": true,
+                "recordings": items,
+                "count": items.len(),
+            })
+            .to_string())
+        }
+
+        "get_recording" => {
+            let recording_id = args["recording_id"]
+                .as_str()
+                .ok_or_else(|| PagerunnerError::Config("Missing recording_id".into()))?;
+
+            let entry = crate::recording::get_recording_index(&db, recording_id)?
+                .ok_or_else(|| {
+                    PagerunnerError::Config(format!("Recording {} not found", recording_id))
+                })?;
+
+            let metadata_path =
+                std::path::PathBuf::from(&entry.dir_path).join("metadata.json");
+            let markers: Vec<serde_json::Value> = if metadata_path.exists() {
+                match std::fs::read_to_string(&metadata_path) {
+                    Ok(json) => {
+                        if let Ok(meta) =
+                            serde_json::from_str::<crate::recording::RecordingMetadata>(&json)
+                        {
+                            meta.markers
+                                .iter()
+                                .map(|m| {
+                                    serde_json::json!({
+                                        "ts_ms": m.ts_ms,
+                                        "label": m.label,
+                                        "description": m.description,
+                                    })
+                                })
+                                .collect()
+                        } else {
+                            vec![]
+                        }
+                    }
+                    Err(_) => vec![],
+                }
+            } else {
+                vec![]
+            };
+
+            let video_path = std::path::PathBuf::from(&entry.dir_path)
+                .join(format!("video.{}", entry.format));
+
+            Ok(serde_json::json!({
+                "ok": true,
+                "recording_id": entry.recording_id,
+                "profile": entry.profile,
+                "flow": entry.flow,
+                "name": entry.name,
+                "tags": entry.tags,
+                "started_at": entry.started_at.to_rfc3339(),
+                "duration_ms": entry.duration_ms,
+                "format": entry.format,
+                "video_path": video_path.to_str(),
+                "metadata_path": metadata_path.to_str(),
+                "dir_path": entry.dir_path,
+                "markers": markers,
+            })
+            .to_string())
+        }
+
+        "delete_recording" => {
+            let recording_id = args["recording_id"]
+                .as_str()
+                .ok_or_else(|| PagerunnerError::Config("Missing recording_id".into()))?;
+
+            let entry = crate::recording::get_recording_index(&db, recording_id)?
+                .ok_or_else(|| {
+                    PagerunnerError::Config(format!("Recording {} not found", recording_id))
+                })?;
+
+            let dir = std::path::PathBuf::from(&entry.dir_path);
+            if dir.exists() {
+                std::fs::remove_dir_all(&dir).map_err(|e| {
+                    PagerunnerError::Config(format!("Failed to delete recording dir: {}", e))
+                })?;
+            }
+
+            crate::recording::delete_recording_index(&db, recording_id)?;
+
+            Ok(serde_json::json!({
+                "ok": true,
+                "deleted": recording_id,
+            })
+            .to_string())
+        }
+
+        "render_recording" => {
+            let recording_id = args["recording_id"]
+                .as_str()
+                .ok_or_else(|| PagerunnerError::Config("Missing recording_id".into()))?;
+            let format = args["format"].as_str();
+
+            let output_path =
+                crate::recording_render::render_annotated(&db, recording_id, format).await?;
+
+            Ok(serde_json::json!({
+                "ok": true,
+                "recording_id": recording_id,
+                "annotated_path": output_path,
+            })
+            .to_string())
+        }
 
         _ => Err(crate::error::PagerunnerError::Cdp(format!(
             "Unknown tool: {}",

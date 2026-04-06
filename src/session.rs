@@ -53,6 +53,8 @@ pub struct Session {
     pub _console_processor: Option<tokio::task::JoinHandle<()>>,
     /// Frame navigation event processor task handle
     pub _frame_nav_processor: Option<tokio::task::JoinHandle<()>>,
+    /// Active video recording handle — None when not recording.
+    pub recording: Option<crate::recording::RecordingHandle>,
 }
 
 impl Session {
@@ -224,6 +226,7 @@ impl SessionManager {
                             console_buffer,
                             _console_processor: Some(console_processor_handle),
                             _frame_nav_processor: Some(frame_nav_handle),
+                            recording: None,
                         },
                     );
                     return Ok(id);
@@ -310,6 +313,7 @@ impl SessionManager {
                 console_buffer,
                 _console_processor: Some(console_processor_handle),
                 _frame_nav_processor: Some(frame_nav_processor_handle),
+                recording: None,
             },
         );
         self.profile_primary
@@ -465,6 +469,7 @@ impl SessionManager {
                 console_buffer,
                 _console_processor: Some(console_processor_handle),
                 _frame_nav_processor: Some(frame_nav_handle),
+                recording: None,
             },
         );
 
@@ -876,6 +881,7 @@ impl SessionManager {
                 console_buffer: crate::console_log::new_buffer(),
                 _console_processor: None,
                 _frame_nav_processor: None,
+                recording: None,
             },
         );
         id

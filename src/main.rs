@@ -24,6 +24,7 @@ mod network_guard;
 mod network_log;
 pub mod notification;
 mod recording;
+mod recording_render;
 mod sanitizer;
 mod schema_inference;
 mod security;
@@ -431,6 +432,52 @@ enum Commands {
     },
     /// Download the NER model for PERSON/ORG name detection (requires --features ner build)
     DownloadModel,
+    /// Start recording a tab as video
+    #[command(name = "start-recording")]
+    StartRecording {
+        session_id: String,
+        target_id: String,
+        #[arg(long)]
+        name: Option<String>,
+        #[arg(long)]
+        flow: Option<String>,
+        #[arg(long, value_delimiter = ',')]
+        tags: Option<Vec<String>>,
+    },
+    /// Stop the active recording on a session
+    #[command(name = "stop-recording")]
+    StopRecording { session_id: String },
+    /// Add a timestamped marker to the active recording
+    #[command(name = "add-marker")]
+    AddMarker {
+        session_id: String,
+        label: String,
+        #[arg(long)]
+        description: Option<String>,
+    },
+    /// List saved recordings
+    #[command(name = "list-recordings")]
+    ListRecordings {
+        #[arg(long)]
+        profile: Option<String>,
+        #[arg(long)]
+        flow: Option<String>,
+        #[arg(long)]
+        tag: Option<String>,
+    },
+    /// Get details about a specific recording
+    #[command(name = "get-recording")]
+    GetRecording { recording_id: String },
+    /// Delete a recording and its files
+    #[command(name = "delete-recording")]
+    DeleteRecording { recording_id: String },
+    /// Render an annotated version of a recording with marker overlays
+    #[command(name = "render-recording")]
+    RenderRecording {
+        recording_id: String,
+        #[arg(long)]
+        format: Option<String>,
+    },
 }
 
 /// Resolve the state DB path: PAGERUNNER_DB_PATH env var takes precedence,
@@ -693,6 +740,40 @@ fn format_audit_event(event: &crate::audit::AuditEvent) -> String {
                 target_id,
                 source,
                 entities.join(", ")
+            )
+        }
+        crate::audit::AuditEventKind::RecordingStarted {
+            session_id,
+            recording_id,
+            profile,
+        } => {
+            let sid = if session_id.len() >= 8 {
+                &session_id[..8]
+            } else {
+                session_id
+            };
+            format!(
+                "[{}] RECORDING_STARTED session={} recording={} profile={}",
+                ts, sid, recording_id, profile
+            )
+        }
+        crate::audit::AuditEventKind::RecordingStopped {
+            session_id,
+            recording_id,
+            duration_ms,
+            markers_count,
+        } => {
+            let sid = if session_id.len() >= 8 {
+                &session_id[..8]
+            } else {
+                session_id
+            };
+            let dur = duration_ms
+                .map(|d| format!("{}ms", d))
+                .unwrap_or_else(|| "?".to_string());
+            format!(
+                "[{}] RECORDING_STOPPED session={} recording={} duration={} markers={}",
+                ts, sid, recording_id, dur, markers_count
             )
         }
     }
@@ -1656,6 +1737,118 @@ async fn run() -> anyhow::Result<()> {
             #[cfg(feature = "ner")]
             download_ner_model()?;
         }
+        Commands::StartRecording {
+            session_id,
+            target_id,
+            name,
+            flow,
+            tags,
+        } => {
+            let config = config::PagerunnerConfig::load()?;
+            let mut args =
+                serde_json::json!({"session_id": session_id, "target_id": target_id});
+            if let Some(v) = name {
+                args["name"] = serde_json::json!(v);
+            }
+            if let Some(v) = flow {
+                args["flow"] = serde_json::json!(v);
+            }
+            if let Some(v) = tags {
+                args["tags"] = serde_json::json!(v);
+            }
+            crate::cli_tools::run_tool(
+                "start_recording",
+                args,
+                crate::cli_tools::ScreenshotMode::File,
+                &config,
+            )
+            .await?;
+        }
+        Commands::StopRecording { session_id } => {
+            let config = config::PagerunnerConfig::load()?;
+            crate::cli_tools::run_tool(
+                "stop_recording",
+                serde_json::json!({"session_id": session_id}),
+                crate::cli_tools::ScreenshotMode::File,
+                &config,
+            )
+            .await?;
+        }
+        Commands::AddMarker {
+            session_id,
+            label,
+            description,
+        } => {
+            let config = config::PagerunnerConfig::load()?;
+            let mut args = serde_json::json!({"session_id": session_id, "label": label});
+            if let Some(v) = description {
+                args["description"] = serde_json::json!(v);
+            }
+            crate::cli_tools::run_tool(
+                "add_marker",
+                args,
+                crate::cli_tools::ScreenshotMode::File,
+                &config,
+            )
+            .await?;
+        }
+        Commands::ListRecordings { profile, flow, tag } => {
+            let config = config::PagerunnerConfig::load()?;
+            let mut args = serde_json::json!({});
+            if let Some(v) = profile {
+                args["profile"] = serde_json::json!(v);
+            }
+            if let Some(v) = flow {
+                args["flow"] = serde_json::json!(v);
+            }
+            if let Some(v) = tag {
+                args["tag"] = serde_json::json!(v);
+            }
+            crate::cli_tools::run_tool(
+                "list_recordings",
+                args,
+                crate::cli_tools::ScreenshotMode::File,
+                &config,
+            )
+            .await?;
+        }
+        Commands::GetRecording { recording_id } => {
+            let config = config::PagerunnerConfig::load()?;
+            crate::cli_tools::run_tool(
+                "get_recording",
+                serde_json::json!({"recording_id": recording_id}),
+                crate::cli_tools::ScreenshotMode::File,
+                &config,
+            )
+            .await?;
+        }
+        Commands::DeleteRecording { recording_id } => {
+            let config = config::PagerunnerConfig::load()?;
+            crate::cli_tools::run_tool(
+                "delete_recording",
+                serde_json::json!({"recording_id": recording_id}),
+                crate::cli_tools::ScreenshotMode::File,
+                &config,
+            )
+            .await?;
+        }
+        Commands::RenderRecording {
+            recording_id,
+            format,
+        } => {
+            let config = config::PagerunnerConfig::load()?;
+            let mut args = serde_json::json!({"recording_id": recording_id});
+            if let Some(v) = format {
+                args["format"] = serde_json::json!(v);
+            }
+            crate::cli_tools::run_tool(
+                "render_recording",
+                args,
+                crate::cli_tools::ScreenshotMode::File,
+                &config,
+            )
+            .await?;
+        }
         Commands::Audit {
             session,
             tail,
@@ -1718,6 +1911,12 @@ async fn run() -> anyhow::Result<()> {
                             Some(session_id.as_str())
                         }
                         crate::audit::AuditEventKind::AnonymizationGap { session_id, .. } => {
+                            Some(session_id.as_str())
+                        }
+                        crate::audit::AuditEventKind::RecordingStarted { session_id, .. } => {
+                            Some(session_id.as_str())
+                        }
+                        crate::audit::AuditEventKind::RecordingStopped { session_id, .. } => {
                             Some(session_id.as_str())
                         }
                     };
