@@ -131,35 +131,31 @@ pub async fn render_annotated(
     std::fs::write(&srt_path, &srt_content)
         .map_err(|e| PagerunnerError::Config(format!("Failed to write SRT: {}", e)))?;
 
-    // Try to render with drawtext overlay (requires ffmpeg compiled with --enable-libfreetype)
-    let filter = build_subtitle_filter(&metadata.markers, total_ms);
-    let mut annotated_path: Option<String> = None;
+    // Mux subtitles into the video container so they show automatically in players
+    let annotated_path = dir.join(format!("annotated.{}", entry.format));
+    let mux_status = tokio::process::Command::new("ffmpeg")
+        .args(&[
+            "-i", video_path.to_str().unwrap(),
+            "-i", srt_path.to_str().unwrap(),
+            "-c", "copy",
+            "-c:s", "mov_text",
+            "-metadata:s:s:0", "language=eng",
+            "-y", annotated_path.to_str().unwrap(),
+        ])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .await
+        .ok();
 
-    if let Some(f) = &filter {
-        let out_path = dir.join(format!("annotated.{}", entry.format));
-        let status = tokio::process::Command::new("ffmpeg")
-            .args(&[
-                "-i", video_path.to_str().unwrap(),
-                "-vf", f,
-                "-c:v", "libx264", "-pix_fmt", "yuv420p",
-                "-y", out_path.to_str().unwrap(),
-            ])
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .status()
-            .await
-            .ok();
-
-        if let Some(s) = status {
-            if s.success() {
-                annotated_path = Some(out_path.to_str().unwrap().to_string());
-            }
-        }
-    }
+    let annotated = match mux_status {
+        Some(s) if s.success() => Some(annotated_path.to_str().unwrap().to_string()),
+        _ => None,
+    };
 
     Ok(serde_json::json!({
         "srt_path": srt_path.to_str().unwrap(),
-        "annotated_video": annotated_path,
+        "annotated_video": annotated,
         "video_path": video_path.to_str().unwrap(),
     }).to_string())
 }
