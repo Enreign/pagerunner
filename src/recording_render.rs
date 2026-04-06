@@ -53,11 +53,51 @@ pub fn build_subtitle_filter(markers: &[Marker], total_duration_ms: u64) -> Opti
     Some(filters.join(","))
 }
 
-/// Render an annotated version of a recording by compositing marker overlays.
+/// Format a millisecond timestamp as SRT time format (HH:MM:SS,mmm).
+fn ms_to_srt_time(ms: u64) -> String {
+    let total_s = ms / 1000;
+    let h = total_s / 3600;
+    let m = (total_s % 3600) / 60;
+    let s = total_s % 60;
+    let remainder_ms = ms % 1000;
+    format!("{:02}:{:02}:{:02},{:03}", h, m, s, remainder_ms)
+}
+
+/// Generate an SRT subtitle file from markers.
+pub fn generate_srt(markers: &[Marker], total_duration_ms: u64) -> String {
+    let mut srt = String::new();
+    for (i, marker) in markers.iter().enumerate() {
+        let start_ms = marker.ts_ms;
+        let end_ms = if i + 1 < markers.len() {
+            markers[i + 1].ts_ms
+        } else {
+            let end = start_ms + 5000;
+            if end > total_duration_ms { total_duration_ms } else { end }
+        };
+
+        let text = if let Some(desc) = &marker.description {
+            format!("{}\n{}", marker.label, desc)
+        } else {
+            marker.label.clone()
+        };
+
+        srt.push_str(&format!(
+            "{}\n{} --> {}\n{}\n\n",
+            i + 1,
+            ms_to_srt_time(start_ms),
+            ms_to_srt_time(end_ms),
+            text
+        ));
+    }
+    srt
+}
+
+/// Render an annotated recording. Generates an SRT subtitle file alongside the video.
+/// If ffmpeg has drawtext support, also renders an annotated video with burned-in overlays.
 pub async fn render_annotated(
     db: &crate::db::Db,
     recording_id: &str,
-    output_format: Option<&str>,
+    _output_format: Option<&str>,
 ) -> Result<String> {
     let entry = get_recording_index(db, recording_id)?
         .ok_or_else(|| PagerunnerError::Config(format!("Recording {} not found", recording_id)))?;
@@ -84,61 +124,44 @@ pub async fn render_annotated(
     };
 
     let total_ms = metadata.duration_ms.unwrap_or(0);
+
+    // Always generate SRT subtitle file
+    let srt_path = dir.join("markers.srt");
+    let srt_content = generate_srt(&metadata.markers, total_ms);
+    std::fs::write(&srt_path, &srt_content)
+        .map_err(|e| PagerunnerError::Config(format!("Failed to write SRT: {}", e)))?;
+
+    // Try to render with drawtext overlay (requires ffmpeg compiled with --enable-libfreetype)
     let filter = build_subtitle_filter(&metadata.markers, total_ms);
-
-    let out_format = output_format.unwrap_or(&entry.format);
-    let output_path = dir.join(format!("annotated.{}", out_format));
-
-    let mut args = vec![
-        "-i".to_string(),
-        video_path.to_str().unwrap().to_string(),
-    ];
+    let mut annotated_path: Option<String> = None;
 
     if let Some(f) = &filter {
-        args.push("-vf".to_string());
-        args.push(f.clone());
-    }
+        let out_path = dir.join(format!("annotated.{}", entry.format));
+        let status = tokio::process::Command::new("ffmpeg")
+            .args(&[
+                "-i", video_path.to_str().unwrap(),
+                "-vf", f,
+                "-c:v", "libx264", "-pix_fmt", "yuv420p",
+                "-y", out_path.to_str().unwrap(),
+            ])
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .await
+            .ok();
 
-    match out_format {
-        "webm" => {
-            args.extend_from_slice(&[
-                "-c:v".to_string(),
-                "libvpx-vp9".to_string(),
-                "-pix_fmt".to_string(),
-                "yuva420p".to_string(),
-            ]);
-        }
-        _ => {
-            args.extend_from_slice(&[
-                "-c:v".to_string(),
-                "libx264".to_string(),
-                "-pix_fmt".to_string(),
-                "yuv420p".to_string(),
-                "-movflags".to_string(),
-                "+faststart".to_string(),
-            ]);
+        if let Some(s) = status {
+            if s.success() {
+                annotated_path = Some(out_path.to_str().unwrap().to_string());
+            }
         }
     }
 
-    args.push("-y".to_string());
-    args.push(output_path.to_str().unwrap().to_string());
-
-    let status = tokio::process::Command::new("ffmpeg")
-        .args(&args)
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .status()
-        .await
-        .map_err(|e| PagerunnerError::Config(format!("Failed to spawn ffmpeg: {}", e)))?;
-
-    if !status.success() {
-        return Err(PagerunnerError::Config(format!(
-            "ffmpeg render failed with status: {}",
-            status
-        )));
-    }
-
-    Ok(output_path.to_str().unwrap().to_string())
+    Ok(serde_json::json!({
+        "srt_path": srt_path.to_str().unwrap(),
+        "annotated_video": annotated_path,
+        "video_path": video_path.to_str().unwrap(),
+    }).to_string())
 }
 
 #[cfg(test)]

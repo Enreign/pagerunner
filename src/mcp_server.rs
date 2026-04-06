@@ -4135,23 +4135,28 @@ async fn dispatch_tool_inner(
             );
 
             let fps = config.recording.fps.max(1).min(10);
-            let handle =
+            let mut handle =
                 crate::recording::RecordingHandle::start(state, rec_dir, format_str, fps).await?;
 
-            // Start CDP screencast
+            // Get the CDP session ID used for this target
             let cdp_session_id =
                 crate::browser::attach_to_target(session, &target_id).await?;
 
-            // Spawn frame processor
+            tracing::info!(
+                cdp_session = %cdp_session_id,
+                target = %target_id,
+                "Starting frame capture"
+            );
+
+            // Spawn periodic screenshot capture task
             let frame_tx = handle.frame_tx_clone();
-            let _processor = crate::recording::spawn_frame_processor(
+            let capture_task = crate::recording::spawn_frame_capture(
                 session.cdp.clone(),
                 cdp_session_id.clone(),
                 frame_tx,
+                fps,
             );
-
-            crate::browser::start_screencast(session, &target_id, "jpeg", 80, 1280, 720, 1)
-                .await?;
+            handle.set_capture_task(capture_task);
 
             session.recording = Some(handle);
 
@@ -4189,12 +4194,6 @@ async fn dispatch_tool_inner(
             let handle = session.recording.take().ok_or_else(|| {
                 PagerunnerError::Config("No active recording on this session".into())
             })?;
-
-            // Stop screencast (best-effort)
-            let _ = session
-                .cdp
-                .send("Page.stopScreencast", serde_json::json!({}))
-                .await;
 
             // Capture dir path before stop() consumes the handle
             let recording_dir = handle
@@ -4398,13 +4397,19 @@ async fn dispatch_tool_inner(
                 .ok_or_else(|| PagerunnerError::Config("Missing recording_id".into()))?;
             let format = args["format"].as_str();
 
-            let output_path =
+            let result_json =
                 crate::recording_render::render_annotated(&db, recording_id, format).await?;
+
+            // render_annotated returns a JSON string with srt_path, annotated_video, video_path
+            let result: serde_json::Value =
+                serde_json::from_str(&result_json).unwrap_or(serde_json::json!({}));
 
             Ok(serde_json::json!({
                 "ok": true,
                 "recording_id": recording_id,
-                "annotated_path": output_path,
+                "srt_path": result["srt_path"],
+                "annotated_video": result["annotated_video"],
+                "video_path": result["video_path"],
             })
             .to_string())
         }

@@ -140,6 +140,8 @@ pub struct RecordingHandle {
     pub state: RecordingState,
     frame_tx: mpsc::Sender<Vec<u8>>,
     ffmpeg_task: tokio::task::JoinHandle<Result<()>>,
+    /// Handle to the frame capture task — aborted on stop to close the channel.
+    capture_task: Option<tokio::task::JoinHandle<()>>,
 }
 
 impl RecordingHandle {
@@ -168,34 +170,16 @@ impl RecordingHandle {
 
         let ffmpeg_args: Vec<String> = match format {
             "webm" => vec![
-                "-f",
-                "image2pipe",
-                "-framerate",
-                &fps_str,
-                "-i",
-                "pipe:0",
-                "-c:v",
-                "libvpx-vp9",
-                "-pix_fmt",
-                "yuva420p",
-                "-y",
-                &video_path_str,
+                "-f", "image2pipe", "-c:v", "mjpeg", "-framerate", &fps_str,
+                "-i", "pipe:0",
+                "-c:v", "libvpx-vp9", "-pix_fmt", "yuv420p",
+                "-y", &video_path_str,
             ],
             _ => vec![
-                "-f",
-                "image2pipe",
-                "-framerate",
-                &fps_str,
-                "-i",
-                "pipe:0",
-                "-c:v",
-                "libx264",
-                "-pix_fmt",
-                "yuv420p",
-                "-movflags",
-                "+faststart",
-                "-y",
-                &video_path_str,
+                "-f", "image2pipe", "-c:v", "mjpeg", "-framerate", &fps_str,
+                "-i", "pipe:0",
+                "-c:v", "libx264", "-pix_fmt", "yuv420p",
+                "-y", &video_path_str,
             ],
         }
         .into_iter()
@@ -218,22 +202,52 @@ impl RecordingHandle {
         let (frame_tx, mut frame_rx) = mpsc::channel::<Vec<u8>>(64);
 
         let ffmpeg_task = tokio::spawn(async move {
+            let mut bytes_written: u64 = 0;
+            let mut frames_written: u64 = 0;
             while let Some(frame_data) = frame_rx.recv().await {
-                if stdin.write_all(&frame_data).await.is_err() {
-                    break;
+                let len = frame_data.len();
+                match stdin.write_all(&frame_data).await {
+                    Ok(()) => {
+                        if let Err(e) = stdin.flush().await {
+                            tracing::warn!(error = %e, "ffmpeg stdin flush failed");
+                            break;
+                        }
+                        bytes_written += len as u64;
+                        frames_written += 1;
+                        if frames_written <= 3 || frames_written % 10 == 0 {
+                            tracing::info!(
+                                frame = frames_written,
+                                frame_bytes = len,
+                                total_bytes = bytes_written,
+                                "Wrote frame to ffmpeg"
+                            );
+                        }
+                    }
+                    Err(e) => {
+                        tracing::warn!(
+                            error = %e,
+                            bytes_written,
+                            frames_written,
+                            "ffmpeg stdin write failed"
+                        );
+                        break;
+                    }
                 }
             }
+            tracing::info!(bytes_written, "Closing ffmpeg stdin, waiting for finalization");
             drop(stdin);
             let status = child
                 .wait()
                 .await
                 .map_err(|e| PagerunnerError::Config(format!("ffmpeg wait error: {}", e)))?;
             if !status.success() {
+                tracing::warn!(status = %status, "ffmpeg encoding failed");
                 return Err(PagerunnerError::Config(format!(
                     "ffmpeg exited with status: {}",
                     status
                 )));
             }
+            tracing::info!("ffmpeg encoding completed successfully");
             Ok(())
         });
 
@@ -241,12 +255,18 @@ impl RecordingHandle {
             state,
             frame_tx,
             ffmpeg_task,
+            capture_task: None,
         })
     }
 
-    /// Get a clone of the frame sender for the frame processor task.
+    /// Get a clone of the frame sender for the capture task.
     pub fn frame_tx_clone(&self) -> mpsc::Sender<Vec<u8>> {
         self.frame_tx.clone()
+    }
+
+    /// Set the capture task handle so it can be aborted on stop.
+    pub fn set_capture_task(&mut self, task: tokio::task::JoinHandle<()>) {
+        self.capture_task = Some(task);
     }
 
     /// Send a JPEG frame to the ffmpeg encoder.
@@ -257,7 +277,7 @@ impl RecordingHandle {
             .map_err(|_| PagerunnerError::Config("Recording frame channel closed".into()))
     }
 
-    /// Stop the recording: close the frame channel, wait for ffmpeg, save metadata.
+    /// Stop the recording: abort capture, close the frame channel, wait for ffmpeg, save metadata.
     pub async fn stop(self) -> Result<RecordingMetadata> {
         let mut state = self.state;
         let now = chrono::Utc::now();
@@ -265,11 +285,18 @@ impl RecordingHandle {
         state.metadata.duration_ms =
             Some((now - state.metadata.started_at).num_milliseconds().max(0) as u64);
 
-        // Drop the sender to close the channel — ffmpeg task will drop stdin
+        // Abort the capture task first — it holds a clone of frame_tx.
+        // Without this, dropping our frame_tx doesn't close the channel.
+        if let Some(task) = self.capture_task {
+            task.abort();
+            let _ = task.await; // wait for abort to take effect
+        }
+
+        // Now drop the sender to close the channel — ffmpeg task will drop stdin
         drop(self.frame_tx);
 
-        // Wait for ffmpeg with a timeout — ffmpeg can hang on empty input
-        let timeout = std::time::Duration::from_secs(10);
+        // Wait for ffmpeg to finalize — encoding + container finalization
+        let timeout = std::time::Duration::from_secs(30);
         match tokio::time::timeout(timeout, self.ffmpeg_task).await {
             Ok(Ok(Ok(()))) => {}
             Ok(Ok(Err(e))) => {
@@ -279,7 +306,7 @@ impl RecordingHandle {
                 tracing::warn!(error = %e, "ffmpeg task panicked");
             }
             Err(_) => {
-                tracing::warn!("ffmpeg finalization timed out after 10s — video may be incomplete");
+                tracing::warn!("ffmpeg finalization timed out after 30s — video may be incomplete");
             }
         }
 
@@ -289,54 +316,55 @@ impl RecordingHandle {
     }
 }
 
-/// Spawn a background task that listens for CDP Page.screencastFrame events
-/// and feeds decoded JPEG frames to the recording handle.
-pub fn spawn_frame_processor(
+/// Spawn a background task that periodically captures screenshots (JPEG)
+/// and feeds them to the ffmpeg encoder.
+///
+/// Uses `Page.captureScreenshot` on a timer rather than `Page.startScreencast`
+/// because screencast only emits frames when page content changes visually,
+/// which misses static pages entirely.
+pub fn spawn_frame_capture(
     cdp: crate::cdp::CdpConn,
     cdp_session_id: String,
     frame_tx: mpsc::Sender<Vec<u8>>,
+    fps: u8,
 ) -> tokio::task::JoinHandle<()> {
-    let mut events = cdp.subscribe_events();
+    let interval = std::time::Duration::from_millis(1000 / fps.max(1) as u64);
     let mut frame_count: u64 = 0;
     tokio::spawn(async move {
+        let mut ticker = tokio::time::interval(interval);
         loop {
-            let event = match events.recv().await {
-                Ok(e) => e,
-                Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
-                    tracing::warn!(skipped = n, "Frame processor lagged — skipped events");
-                    continue;
-                }
-                Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
-            };
-            let method = event.get("method").and_then(|m| m.as_str());
-            if method != Some("Page.screencastFrame") {
-                continue;
+            ticker.tick().await;
+
+            // Check if the receiver is still alive
+            if frame_tx.is_closed() {
+                break;
             }
 
-            // CDP events scoped to a target session have a top-level "sessionId"
-            // (string). Only process frames from our target session.
-            if let Some(event_session) = event.get("sessionId").and_then(|s| s.as_str()) {
-                if event_session != cdp_session_id {
-                    continue;
-                }
-            }
-            // If no sessionId on the event, accept it (browser-level screencast)
+            let result = cdp
+                .send_on_session(
+                    "Page.captureScreenshot",
+                    serde_json::json!({
+                        "format": "jpeg",
+                        "quality": 80,
+                    }),
+                    Some(cdp_session_id.clone()),
+                )
+                .await;
 
-            let params = match event.get("params") {
-                Some(p) => p,
-                None => continue,
-            };
-
-            let data_b64 = match params.get("data").and_then(|d| d.as_str()) {
-                Some(d) => d,
-                None => continue,
-            };
-            let frame_bytes = match base64::engine::general_purpose::STANDARD.decode(data_b64) {
-                Ok(b) => b,
+            let data_b64 = match result {
+                Ok(val) => match val.get("data").and_then(|d| d.as_str()) {
+                    Some(d) => d.to_string(),
+                    None => continue,
+                },
                 Err(e) => {
-                    tracing::warn!("screencast frame base64 decode error: {}", e);
+                    tracing::debug!(error = %e, "Screenshot capture failed — skipping frame");
                     continue;
                 }
+            };
+
+            let frame_bytes = match base64::engine::general_purpose::STANDARD.decode(&data_b64) {
+                Ok(b) => b,
+                Err(_) => continue,
             };
 
             frame_count += 1;
@@ -344,30 +372,15 @@ pub fn spawn_frame_processor(
                 tracing::info!(
                     session = %cdp_session_id,
                     frame_size = frame_bytes.len(),
-                    "First screencast frame received"
+                    "First capture frame received"
                 );
             }
 
-            // Ack the frame so Chrome sends the next one.
-            // The "sessionId" field in screencastFrame params is actually the frame
-            // sequence number (integer), not a CDP session ID.
-            let frame_number = params
-                .get("sessionId")
-                .and_then(|n| n.as_u64())
-                .unwrap_or(0);
-            let _ = cdp
-                .send_on_session(
-                    "Page.screencastFrameAck",
-                    serde_json::json!({"sessionId": frame_number}),
-                    Some(cdp_session_id.clone()),
-                )
-                .await;
-
             if frame_tx.send(frame_bytes).await.is_err() {
-                break; // Recording stopped
+                break;
             }
         }
-        tracing::info!(frames = frame_count, "Frame processor exiting");
+        tracing::info!(frames = frame_count, "Frame capture exiting");
     })
 }
 

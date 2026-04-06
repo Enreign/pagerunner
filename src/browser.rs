@@ -819,6 +819,7 @@ pub fn fragility_warning(
 }
 
 /// Start CDP screencast — Chrome will push frames as events.
+/// Enables the Page domain first (required for screencast events).
 pub async fn start_screencast(
     session: &mut Session,
     target_id: &str,
@@ -829,6 +830,13 @@ pub async fn start_screencast(
     every_nth_frame: u32,
 ) -> Result<()> {
     let session_id = attach_to_target(session, target_id).await?;
+
+    // Page domain must be enabled for screencastFrame events to fire
+    session
+        .cdp
+        .send_on_session("Page.enable", json!({}), Some(session_id.clone()))
+        .await?;
+
     session
         .cdp
         .send_on_session(
