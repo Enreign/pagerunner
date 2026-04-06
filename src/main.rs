@@ -23,6 +23,7 @@ mod mcp_server;
 mod network_guard;
 mod network_log;
 pub mod notification;
+mod recording;
 mod sanitizer;
 mod schema_inference;
 mod security;
