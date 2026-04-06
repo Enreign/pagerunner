@@ -477,6 +477,27 @@ enum Commands {
         recording_id: String,
         #[arg(long)]
         format: Option<String>,
+        /// Skip text overlays — produce SRT only
+        #[arg(long)]
+        no_overlays: bool,
+        /// Overlay position: top or bottom
+        #[arg(long)]
+        position: Option<String>,
+        /// Font name
+        #[arg(long)]
+        font: Option<String>,
+        /// Font size in points
+        #[arg(long)]
+        font_size: Option<u32>,
+        /// Text color (name or hex)
+        #[arg(long)]
+        text_color: Option<String>,
+        /// Background color with alpha (e.g. #000000AA)
+        #[arg(long)]
+        bg_color: Option<String>,
+        /// Overlay bar height in pixels
+        #[arg(long)]
+        bar_height: Option<u32>,
     },
 }
 
@@ -1835,11 +1856,39 @@ async fn run() -> anyhow::Result<()> {
         Commands::RenderRecording {
             recording_id,
             format,
+            no_overlays,
+            position,
+            font,
+            font_size,
+            text_color,
+            bg_color,
+            bar_height,
         } => {
             let config = config::PagerunnerConfig::load()?;
             let mut args = serde_json::json!({"recording_id": recording_id});
             if let Some(v) = format {
                 args["format"] = serde_json::json!(v);
+            }
+            if no_overlays {
+                args["with_overlays"] = serde_json::json!(false);
+            }
+            if let Some(v) = position {
+                args["position"] = serde_json::json!(v);
+            }
+            if let Some(v) = font {
+                args["font"] = serde_json::json!(v);
+            }
+            if let Some(v) = font_size {
+                args["font_size"] = serde_json::json!(v);
+            }
+            if let Some(v) = text_color {
+                args["text_color"] = serde_json::json!(v);
+            }
+            if let Some(v) = bg_color {
+                args["bg_color"] = serde_json::json!(v);
+            }
+            if let Some(v) = bar_height {
+                args["bar_height"] = serde_json::json!(v);
             }
             crate::cli_tools::run_tool(
                 "render_recording",

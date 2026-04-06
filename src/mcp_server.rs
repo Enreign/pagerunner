@@ -773,7 +773,7 @@ pub fn all_tools() -> Vec<Value> {
         }),
         json!({
             "name": "render_recording",
-            "description": "Render an annotated version of a recording with marker text overlays composited onto the video. Requires ffmpeg on PATH.",
+            "description": "Render a recording with optional marker text overlays burned into the video. Always generates an SRT subtitle file. Overlay appearance is configurable per-call or via [overlay] in config.toml. Requires ffmpeg (and ImageMagick for overlays) on PATH.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -782,7 +782,21 @@ pub fn all_tools() -> Vec<Value> {
                         "type": "string",
                         "enum": ["mp4", "webm"],
                         "description": "Output format (defaults to recording's original format)"
-                    }
+                    },
+                    "with_overlays": {
+                        "type": "boolean",
+                        "description": "Burn text overlays into the video (default: true). Set false for clean video + SRT only."
+                    },
+                    "position": {
+                        "type": "string",
+                        "enum": ["top", "bottom"],
+                        "description": "Overlay position (default: from config or 'bottom')"
+                    },
+                    "font": { "type": "string", "description": "Font name (default: from config or 'Helvetica')" },
+                    "font_size": { "type": "integer", "description": "Font size in points (default: from config or 36)" },
+                    "text_color": { "type": "string", "description": "Text color — name or hex (default: from config or 'white')" },
+                    "bg_color": { "type": "string", "description": "Background color with alpha (default: from config or '#000000AA')" },
+                    "bar_height": { "type": "integer", "description": "Overlay bar height in pixels (default: from config or 120)" }
                 },
                 "required": ["recording_id"]
             }
@@ -4396,11 +4410,45 @@ async fn dispatch_tool_inner(
                 .as_str()
                 .ok_or_else(|| PagerunnerError::Config("Missing recording_id".into()))?;
             let format = args["format"].as_str();
+            let with_overlays = args["with_overlays"].as_bool().unwrap_or(true);
 
-            let result_json =
-                crate::recording_render::render_annotated(&db, recording_id, format).await?;
+            // Build overlay config: per-call overrides > config.toml > defaults
+            let overlay_cfg = crate::recording_render::OverlayStyle {
+                position: args["position"]
+                    .as_str()
+                    .unwrap_or(&config.overlay.position)
+                    .to_string(),
+                font: args["font"]
+                    .as_str()
+                    .unwrap_or(&config.overlay.font)
+                    .to_string(),
+                font_size: args["font_size"]
+                    .as_u64()
+                    .map(|v| v as u32)
+                    .unwrap_or(config.overlay.font_size),
+                text_color: args["text_color"]
+                    .as_str()
+                    .unwrap_or(&config.overlay.text_color)
+                    .to_string(),
+                bg_color: args["bg_color"]
+                    .as_str()
+                    .unwrap_or(&config.overlay.bg_color)
+                    .to_string(),
+                bar_height: args["bar_height"]
+                    .as_u64()
+                    .map(|v| v as u32)
+                    .unwrap_or(config.overlay.bar_height),
+            };
 
-            // render_annotated returns a JSON string with srt_path, annotated_video, video_path
+            let result_json = crate::recording_render::render_annotated(
+                &db,
+                recording_id,
+                format,
+                with_overlays,
+                &overlay_cfg,
+            )
+            .await?;
+
             let result: serde_json::Value =
                 serde_json::from_str(&result_json).unwrap_or(serde_json::json!({}));
 

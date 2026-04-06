@@ -216,6 +216,61 @@ impl Default for RecordingConfig {
     }
 }
 
+fn default_overlay_position() -> String {
+    "bottom".to_string()
+}
+fn default_overlay_font() -> String {
+    "Helvetica".to_string()
+}
+fn default_overlay_font_size() -> u32 {
+    36
+}
+fn default_overlay_text_color() -> String {
+    "white".to_string()
+}
+fn default_overlay_bg_color() -> String {
+    "#000000AA".to_string()
+}
+fn default_overlay_bar_height() -> u32 {
+    120
+}
+
+/// Configuration for text overlays rendered by `render_recording`.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct OverlayConfig {
+    /// Position: "top" or "bottom" (default: "bottom")
+    #[serde(default = "default_overlay_position")]
+    pub position: String,
+    /// Font name (default: "Helvetica"). Must be available to ImageMagick.
+    #[serde(default = "default_overlay_font")]
+    pub font: String,
+    /// Font size in points (default: 36)
+    #[serde(default = "default_overlay_font_size")]
+    pub font_size: u32,
+    /// Text color — any ImageMagick color name or hex (default: "white")
+    #[serde(default = "default_overlay_text_color")]
+    pub text_color: String,
+    /// Background color with optional alpha (default: "#000000AA")
+    #[serde(default = "default_overlay_bg_color")]
+    pub bg_color: String,
+    /// Bar height in pixels (default: 120). Capped at 10% of video height.
+    #[serde(default = "default_overlay_bar_height")]
+    pub bar_height: u32,
+}
+
+impl Default for OverlayConfig {
+    fn default() -> Self {
+        Self {
+            position: default_overlay_position(),
+            font: default_overlay_font(),
+            font_size: default_overlay_font_size(),
+            text_color: default_overlay_text_color(),
+            bg_color: default_overlay_bg_color(),
+            bar_height: default_overlay_bar_height(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize, Default)]
 pub struct PagerunnerConfig {
     #[serde(default)]
@@ -234,6 +289,8 @@ pub struct PagerunnerConfig {
     pub retention: RetentionConfig,
     #[serde(default)]
     pub recording: RecordingConfig,
+    #[serde(default)]
+    pub overlay: OverlayConfig,
 }
 
 impl PagerunnerConfig {

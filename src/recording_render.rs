@@ -2,6 +2,16 @@ use crate::error::{PagerunnerError, Result};
 use crate::recording::{get_recording_index, Marker, RecordingMetadata};
 use std::path::{Path, PathBuf};
 
+/// Overlay appearance settings, resolved from per-call args > config.toml > defaults.
+pub struct OverlayStyle {
+    pub position: String,   // "top" or "bottom"
+    pub font: String,       // ImageMagick font name
+    pub font_size: u32,     // points
+    pub text_color: String, // color name or hex
+    pub bg_color: String,   // color with alpha, e.g. "#000000AA"
+    pub bar_height: u32,    // pixels
+}
+
 /// Escape special characters for ffmpeg drawtext filter.
 pub fn escape_ffmpeg_text(s: &str) -> String {
     s.replace('\\', "\\\\")
@@ -99,6 +109,7 @@ async fn burn_subtitles_overlay(
     markers: &[Marker],
     total_duration_ms: u64,
     output_path: &Path,
+    style: &OverlayStyle,
 ) -> Option<String> {
     if markers.is_empty() {
         return None;
@@ -125,11 +136,15 @@ async fn burn_subtitles_overlay(
         return None;
     }
     let (w, h) = (dims[0], dims[1]);
-    let bar_height = 120u32.min(h / 10); // cap at 10% of video height
+    let bar_height = style.bar_height.min(h / 10); // cap at 10% of video height
+    let pointsize = if style.font_size > 0 {
+        style.font_size.min(bar_height)
+    } else {
+        (bar_height / 3).max(16)
+    };
 
     // Generate overlay PNGs with ImageMagick
     let tmp = std::env::temp_dir();
-    let pointsize = (bar_height / 3).max(16);
     for (i, mk) in markers.iter().enumerate() {
         let text = if let Some(desc) = &mk.description {
             format!("{}  —  {}", mk.label, desc)
@@ -142,10 +157,10 @@ async fn burn_subtitles_overlay(
             .args(&[
                 "-size", &format!("{}x{}", w, bar_height),
                 "xc:none",
-                "-fill", "#000000AA",
+                "-fill", &style.bg_color,
                 "-draw", &format!("rectangle 0,0 {},{}", w, bar_height),
-                "-fill", "white",
-                "-font", "Helvetica",
+                "-fill", &style.text_color,
+                "-font", &style.font,
                 "-pointsize", &pointsize.to_string(),
                 "-gravity", "West",
                 "-annotate", "+20+0", &text,
@@ -181,7 +196,7 @@ async fn burn_subtitles_overlay(
             let total = total_duration_ms as f64 / 1000.0;
             if end > total { total } else { end }
         };
-        let y_pos = h - bar_height;
+        let y_pos = if style.position == "top" { 0 } else { h - bar_height };
         let out_label = format!("[v{}]", i);
         filter_parts.push(format!(
             "{}[{}:v]overlay=0:{}:enable='between(t,{:.2},{:.2})'{}",
@@ -232,6 +247,8 @@ pub async fn render_annotated(
     db: &crate::db::Db,
     recording_id: &str,
     _output_format: Option<&str>,
+    with_overlays: bool,
+    style: &OverlayStyle,
 ) -> Result<String> {
     let entry = get_recording_index(db, recording_id)?
         .ok_or_else(|| PagerunnerError::Config(format!("Recording {} not found", recording_id)))?;
@@ -265,16 +282,20 @@ pub async fn render_annotated(
     std::fs::write(&srt_path, &srt_content)
         .map_err(|e| PagerunnerError::Config(format!("Failed to write SRT: {}", e)))?;
 
-    // Burn subtitles into the video using ImageMagick overlay images + ffmpeg.
-    // This produces permanently visible text overlays — works in every player.
-    let annotated_path = dir.join(format!("annotated.{}", entry.format));
-    let annotated = burn_subtitles_overlay(
-        &video_path,
-        &metadata.markers,
-        total_ms,
-        &annotated_path,
-    )
-    .await;
+    // Burn subtitles into the video if requested
+    let annotated = if with_overlays && !metadata.markers.is_empty() {
+        let annotated_path = dir.join(format!("annotated.{}", entry.format));
+        burn_subtitles_overlay(
+            &video_path,
+            &metadata.markers,
+            total_ms,
+            &annotated_path,
+            style,
+        )
+        .await
+    } else {
+        None
+    };
 
     Ok(serde_json::json!({
         "srt_path": srt_path.to_str().unwrap(),
