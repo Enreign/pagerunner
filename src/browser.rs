@@ -818,6 +818,79 @@ pub fn fragility_warning(
     }))
 }
 
+/// Inject the recording cursor overlay into the page.
+/// Call this when recording starts and after each navigation.
+pub async fn inject_recording_cursor(session: &mut Session, target_id: &str) -> Result<()> {
+    let session_id = attach_to_target(session, target_id).await?;
+    let _ = session
+        .cdp
+        .send_on_session(
+            "Runtime.evaluate",
+            json!({
+                "expression": crate::recording_cursor::INJECT_CURSOR_JS,
+                "returnByValue": true
+            }),
+            Some(session_id),
+        )
+        .await;
+    Ok(())
+}
+
+/// Move the recording cursor to (x, y) and optionally show a click ripple.
+pub async fn move_recording_cursor(
+    session: &mut Session,
+    target_id: &str,
+    x: f64,
+    y: f64,
+    click: bool,
+) -> Result<()> {
+    let session_id = attach_to_target(session, target_id).await?;
+    // Move cursor
+    let _ = session
+        .cdp
+        .send_on_session(
+            "Runtime.evaluate",
+            json!({
+                "expression": crate::recording_cursor::move_cursor_js(x, y),
+                "returnByValue": true
+            }),
+            Some(session_id.clone()),
+        )
+        .await;
+
+    if click {
+        let _ = session
+            .cdp
+            .send_on_session(
+                "Runtime.evaluate",
+                json!({
+                    "expression": crate::recording_cursor::click_ripple_js(x, y),
+                    "returnByValue": true
+                }),
+                Some(session_id),
+            )
+            .await;
+    }
+    Ok(())
+}
+
+/// Remove the recording cursor overlay.
+pub async fn remove_recording_cursor(session: &mut Session, target_id: &str) -> Result<()> {
+    let session_id = attach_to_target(session, target_id).await?;
+    let _ = session
+        .cdp
+        .send_on_session(
+            "Runtime.evaluate",
+            json!({
+                "expression": crate::recording_cursor::REMOVE_CURSOR_JS,
+                "returnByValue": true
+            }),
+            Some(session_id),
+        )
+        .await;
+    Ok(())
+}
+
 /// Start CDP screencast — Chrome will push frames as events.
 /// Enables the Page domain first (required for screencast events).
 pub async fn start_screencast(

@@ -24,6 +24,7 @@ mod network_guard;
 mod network_log;
 pub mod notification;
 mod recording;
+mod recording_cursor;
 mod recording_render;
 mod sanitizer;
 mod schema_inference;

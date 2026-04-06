@@ -2413,6 +2413,12 @@ async fn dispatch_tool_inner(
             if let Ok(mut map) = session.tab_urls.write() {
                 map.insert(tid.to_string(), url.to_string());
             }
+            // Re-inject cursor after navigation (DOM was destroyed)
+            if session.recording.is_some() {
+                // Wait briefly for page to load enough for body to exist
+                tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                let _ = browser::inject_recording_cursor(session, tid).await;
+            }
             Ok(serde_json::json!({"ok": true, "url": url, "target_id": tid}).to_string())
         }
 
@@ -2886,6 +2892,24 @@ async fn dispatch_tool_inner(
                 .read()
                 .ok()
                 .and_then(|m| m.get(tid).cloned());
+            // Move cursor to target if recording (before click for visual feedback)
+            let is_recording = session.recording.is_some();
+            if is_recording {
+                let js = browser::build_selector_chain_js(selector);
+                let sid_cdp = browser::attach_to_target(session, tid).await.unwrap_or_default();
+                if let Ok(r) = session.cdp.send_on_session(
+                    "Runtime.evaluate",
+                    json!({"expression": &js, "returnByValue": true}),
+                    Some(sid_cdp),
+                ).await {
+                    let v = &r["result"]["value"];
+                    if let (Some(x), Some(y)) = (v["x"].as_f64(), v["y"].as_f64()) {
+                        let _ = browser::move_recording_cursor(session, tid, x, y, true).await;
+                        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+                    }
+                }
+            }
+
             let click_result = browser::click(session, tid, selector).await;
             // Track selector stability — best-effort, never fails the tool call
             if let Some(ref tab_url) = tab_url {
@@ -3099,6 +3123,24 @@ async fn dispatch_tool_inner(
                 .read()
                 .ok()
                 .and_then(|m| m.get(tid).cloned());
+            // Move cursor to target if recording
+            let is_recording = session.recording.is_some();
+            if is_recording {
+                let js = browser::build_selector_chain_js(selector);
+                let sid_cdp = browser::attach_to_target(session, tid).await.unwrap_or_default();
+                if let Ok(r) = session.cdp.send_on_session(
+                    "Runtime.evaluate",
+                    json!({"expression": &js, "returnByValue": true}),
+                    Some(sid_cdp),
+                ).await {
+                    let v = &r["result"]["value"];
+                    if let (Some(x), Some(y)) = (v["x"].as_f64(), v["y"].as_f64()) {
+                        let _ = browser::move_recording_cursor(session, tid, x, y, true).await;
+                        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+                    }
+                }
+            }
+
             let fill_result = browser::fill(session, tid, selector, &fill_value).await;
             // Track selector stability — best-effort, never fails the tool call
             if let Some(ref tab_url) = tab_url {
@@ -4161,6 +4203,9 @@ async fn dispatch_tool_inner(
                 target = %target_id,
                 "Starting frame capture"
             );
+
+            // Inject cursor overlay into the page
+            let _ = crate::browser::inject_recording_cursor(session, &target_id).await;
 
             // Spawn periodic screenshot capture task
             let frame_tx = handle.frame_tx_clone();
