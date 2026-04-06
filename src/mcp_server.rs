@@ -2170,6 +2170,7 @@ async fn dispatch_tool_inner(
                                     cdp_sid,
                                     frame_tx,
                                     fps,
+                                    handle.zoom.clone(),
                                 );
                                 handle.set_capture_task(capture);
                                 let _ = crate::browser::inject_recording_cursor(
@@ -2996,11 +2997,14 @@ async fn dispatch_tool_inner(
                 ).await {
                     let v = &r["result"]["value"];
                     if let (Some(x), Some(y)) = (v["x"].as_f64(), v["y"].as_f64()) {
-                        // Set cursor target — physics loop handles smooth movement
+                        // Auto-zoom: zoom into interaction area
+                        if let Some(rec) = &session.recording {
+                            if let Ok(mut z) = rec.zoom.write() {
+                                z.zoom_to(x, y, 1.8);
+                            }
+                        }
                         let _ = browser::move_recording_cursor(session, tid, x, y, false).await;
-                        // Wait for spring animation to settle (~0.5s)
                         tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-                        // Show click ripple at destination
                         let _ = browser::move_recording_cursor(session, tid, x, y, true).await;
                         tokio::time::sleep(std::time::Duration::from_millis(200)).await;
                     }
@@ -3008,6 +3012,17 @@ async fn dispatch_tool_inner(
             }
 
             let click_result = browser::click(session, tid, selector).await;
+
+            // Zoom out after click
+            if is_recording {
+                // Hold the zoom briefly so viewer sees the result
+                tokio::time::sleep(std::time::Duration::from_millis(600)).await;
+                if let Some(rec) = &session.recording {
+                    if let Ok(mut z) = rec.zoom.write() {
+                        z.zoom_out();
+                    }
+                }
+            }
             // Track selector stability — best-effort, never fails the tool call
             if let Some(ref tab_url) = tab_url {
                 if let Some(origin) = crate::network_log::url_to_origin(tab_url) {
@@ -3254,8 +3269,14 @@ async fn dispatch_tool_inner(
                 ).await {
                     let v = &r["result"]["value"];
                     if let (Some(x), Some(y)) = (v["x"].as_f64(), v["y"].as_f64()) {
+                        // Auto-zoom into the input field
+                        if let Some(rec) = &session.recording {
+                            if let Ok(mut z) = rec.zoom.write() {
+                                z.zoom_to(x, y, 1.8);
+                            }
+                        }
                         let _ = browser::move_recording_cursor(session, tid, x, y, false).await;
-                        tokio::time::sleep(std::time::Duration::from_millis(700)).await;
+                        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
                         let _ = browser::move_recording_cursor(session, tid, x, y, true).await;
                         tokio::time::sleep(std::time::Duration::from_millis(200)).await;
                     }
@@ -3263,11 +3284,20 @@ async fn dispatch_tool_inner(
             }
 
             let fill_result = if is_recording {
-                // Focus the input (shows blinking caret), then type with delays
                 browser::animated_fill(session, tid, selector, &fill_value).await
             } else {
                 browser::fill(session, tid, selector, &fill_value).await
             };
+
+            // Zoom out after fill
+            if is_recording {
+                tokio::time::sleep(std::time::Duration::from_millis(400)).await;
+                if let Some(rec) = &session.recording {
+                    if let Ok(mut z) = rec.zoom.write() {
+                        z.zoom_out();
+                    }
+                }
+            }
             // Track selector stability — best-effort, never fails the tool call
             if let Some(ref tab_url) = tab_url {
                 if let Some(origin) = crate::network_log::url_to_origin(tab_url) {
@@ -4382,6 +4412,7 @@ async fn dispatch_tool_inner(
                 cdp_session_id.clone(),
                 frame_tx,
                 fps,
+                handle.zoom.clone(),
             );
             handle.set_capture_task(capture_task);
 

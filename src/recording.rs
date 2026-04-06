@@ -3,10 +3,85 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::process::Stdio;
+use std::sync::{Arc, RwLock};
 use tokio::io::AsyncWriteExt;
 use tokio::sync::mpsc;
 
 use crate::error::{PagerunnerError, Result};
+
+// ── Auto-zoom state ──
+
+/// Zoom state shared between MCP dispatch (writer) and frame capture (reader).
+#[derive(Debug, Clone)]
+pub struct ZoomState {
+    pub target_scale: f64,
+    pub target_x: f64,
+    pub target_y: f64,
+    pub current_scale: f64,
+    pub current_x: f64,
+    pub current_y: f64,
+    pub viewport_w: f64,
+    pub viewport_h: f64,
+}
+
+impl Default for ZoomState {
+    fn default() -> Self {
+        Self {
+            target_scale: 1.0, target_x: 0.0, target_y: 0.0,
+            current_scale: 1.0, current_x: 0.0, current_y: 0.0,
+            viewport_w: 0.0, viewport_h: 0.0,
+        }
+    }
+}
+
+impl ZoomState {
+    /// Set zoom target — capture loop smoothly interpolates toward this.
+    pub fn zoom_to(&mut self, x: f64, y: f64, scale: f64) {
+        self.target_x = x;
+        self.target_y = y;
+        self.target_scale = scale.clamp(1.0, 3.0);
+    }
+
+    /// Reset to full viewport.
+    pub fn zoom_out(&mut self) {
+        self.target_scale = 1.0;
+    }
+
+    /// Interpolate current values toward target (called each frame).
+    pub fn step(&mut self) {
+        let lerp = 0.12;
+        self.current_scale += (self.target_scale - self.current_scale) * lerp;
+        self.current_x += (self.target_x - self.current_x) * lerp;
+        self.current_y += (self.target_y - self.current_y) * lerp;
+        if (self.target_scale - self.current_scale).abs() < 0.01 {
+            self.current_scale = self.target_scale;
+            self.current_x = self.target_x;
+            self.current_y = self.target_y;
+        }
+    }
+
+    /// Build CDP clip parameter for Page.captureScreenshot.
+    /// Returns None when not zoomed (captures full viewport).
+    pub fn clip_params(&self) -> Option<serde_json::Value> {
+        if self.current_scale <= 1.01 || self.viewport_w == 0.0 {
+            return None;
+        }
+        let s = self.current_scale;
+        let clip_w = self.viewport_w / s;
+        let clip_h = self.viewport_h / s;
+        let clip_x = (self.current_x - clip_w / 2.0).max(0.0).min(self.viewport_w - clip_w);
+        let clip_y = (self.current_y - clip_h / 2.0).max(0.0).min(self.viewport_h - clip_h);
+        Some(serde_json::json!({
+            "x": clip_x, "y": clip_y,
+            "width": clip_w, "height": clip_h,
+            "scale": s
+        }))
+    }
+}
+
+pub type SharedZoomState = Arc<RwLock<ZoomState>>;
+
+// ── Recording types ──
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Marker {
@@ -142,6 +217,8 @@ pub struct RecordingHandle {
     ffmpeg_task: tokio::task::JoinHandle<Result<()>>,
     /// Handle to the frame capture task — aborted on stop to close the channel.
     capture_task: Option<tokio::task::JoinHandle<()>>,
+    /// Shared zoom state for auto-zoom during recording.
+    pub zoom: SharedZoomState,
 }
 
 impl RecordingHandle {
@@ -261,6 +338,7 @@ impl RecordingHandle {
             frame_tx,
             ffmpeg_task,
             capture_task: None,
+            zoom: Arc::new(RwLock::new(ZoomState::default())),
         })
     }
 
@@ -332,6 +410,7 @@ pub fn spawn_frame_capture(
     cdp_session_id: String,
     frame_tx: mpsc::Sender<Vec<u8>>,
     fps: u8,
+    zoom: SharedZoomState,
 ) -> tokio::task::JoinHandle<()> {
     let interval = std::time::Duration::from_millis(1000 / fps.max(1) as u64);
     let mut frame_count: u64 = 0;
@@ -340,18 +419,29 @@ pub fn spawn_frame_capture(
         loop {
             ticker.tick().await;
 
-            // Check if the receiver is still alive
             if frame_tx.is_closed() {
                 break;
+            }
+
+            // Step zoom interpolation and build clip params
+            let clip = {
+                let mut z = zoom.write().unwrap_or_else(|e| e.into_inner());
+                z.step();
+                z.clip_params()
+            };
+
+            let mut params = serde_json::json!({
+                "format": "jpeg",
+                "quality": 80,
+            });
+            if let Some(clip_val) = clip {
+                params["clip"] = clip_val;
             }
 
             let result = cdp
                 .send_on_session(
                     "Page.captureScreenshot",
-                    serde_json::json!({
-                        "format": "jpeg",
-                        "quality": 80,
-                    }),
+                    params,
                     Some(cdp_session_id.clone()),
                 )
                 .await;
@@ -371,6 +461,26 @@ pub fn spawn_frame_capture(
                 Ok(b) => b,
                 Err(_) => continue,
             };
+
+            // On first frame, detect viewport dimensions for zoom calculations
+            if frame_count == 0 {
+                // Get viewport size
+                if let Ok(r) = cdp.send_on_session(
+                    "Runtime.evaluate",
+                    serde_json::json!({
+                        "expression": "({w:window.innerWidth,h:window.innerHeight})",
+                        "returnByValue": true
+                    }),
+                    Some(cdp_session_id.clone()),
+                ).await {
+                    let v = &r["result"]["value"];
+                    if let (Some(w), Some(h)) = (v["w"].as_f64(), v["h"].as_f64()) {
+                        let mut z = zoom.write().unwrap_or_else(|e| e.into_inner());
+                        z.viewport_w = w;
+                        z.viewport_h = h;
+                    }
+                }
+            }
 
             frame_count += 1;
             if frame_count == 1 {
