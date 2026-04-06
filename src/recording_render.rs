@@ -84,6 +84,135 @@ pub fn build_zoom_filter(
     ))
 }
 
+/// Apply zoom keyframes using ffmpeg split + crop + overlay.
+/// Each zoom-in/zoom-out pair creates a cropped+scaled overlay segment
+/// that fades in/out over the base video using opacity transitions.
+async fn apply_zoom_keyframes(
+    input_path: &Path,
+    keyframes: &[crate::recording::ZoomKeyframe],
+    output_path: &Path,
+) -> Option<String> {
+    // Group keyframes into zoom-in/zoom-out pairs
+    let mut zoom_segments: Vec<(f64, f64, f64, f64, f64)> = Vec::new(); // (start, end, x, y, scale)
+    let mut i = 0;
+    while i < keyframes.len() {
+        let kf = &keyframes[i];
+        if kf.scale > 1.01 {
+            // Find matching zoom-out
+            let zoom_out_t = if i + 1 < keyframes.len() {
+                keyframes[i + 1].ts_ms as f64 / 1000.0
+            } else {
+                kf.ts_ms as f64 / 1000.0 + 3.0
+            };
+            zoom_segments.push((
+                kf.ts_ms as f64 / 1000.0,
+                zoom_out_t,
+                kf.x,
+                kf.y,
+                kf.scale,
+            ));
+            i += 2; // skip the zoom-out keyframe
+        } else {
+            i += 1;
+        }
+    }
+
+    if zoom_segments.is_empty() {
+        return None;
+    }
+
+    // Build filter_complex: for each zoom segment, create a cropped+scaled overlay
+    let transition = 0.5; // transition time for fade
+    let n = zoom_segments.len();
+    let mut inputs_count = n + 1; // base + one crop per segment
+    let _ = inputs_count;
+
+    // Build splits and crop chains
+    let mut filter_parts = Vec::new();
+    // Split the input into n+1 streams
+    let split_labels: Vec<String> = (0..=n).map(|j| format!("[s{}]", j)).collect();
+    filter_parts.push(format!(
+        "[0:v]split={}{}",
+        n + 1,
+        split_labels.join("")
+    ));
+
+    // For each zoom segment, create a cropped+scaled version
+    for (j, (start, end, x, y, scale)) in zoom_segments.iter().enumerate() {
+        // Use static pixel values to avoid expression parsing issues
+        let probe2 = tokio::process::Command::new("ffprobe")
+            .args(&["-v", "error", "-select_streams", "v:0",
+                "-show_entries", "stream=width,height",
+                "-of", "default=noprint_wrappers=1:nokey=1",
+                input_path.to_str()?])
+            .output().await.ok()?;
+        let dims2: Vec<f64> = String::from_utf8_lossy(&probe2.stdout)
+            .lines().filter_map(|l| l.trim().parse().ok()).collect();
+        if dims2.len() < 2 { return None; }
+        let (vw_f, vh_f) = (dims2[0], dims2[1]);
+
+        let crop_w = ((vw_f / scale) as u32 / 2 * 2) as u32;
+        let crop_h = ((vh_f / scale) as u32 / 2 * 2) as u32;
+        let crop_x = ((*x - crop_w as f64 / 2.0).max(0.0).min(vw_f - crop_w as f64)) as u32;
+        let crop_y = ((*y - crop_h as f64 / 2.0).max(0.0).min(vh_f - crop_h as f64)) as u32;
+        let out_w = vw_f as u32;
+        let out_h = vh_f as u32;
+
+        // All values are static pixels — no ffmpeg expressions needed
+        filter_parts.push(format!(
+            "[s{}]crop={}:{}:{}:{},scale={}:{}:flags=lanczos[z{}]",
+            j + 1, crop_w, crop_h, crop_x, crop_y, out_w, out_h, j
+        ));
+    }
+
+    // Chain overlays: base → overlay zoomed segments with enable timing
+    let mut prev = format!("[s0]");
+    for (j, (start, end, _, _, _)) in zoom_segments.iter().enumerate() {
+        let out = format!("[v{}]", j);
+        let enable_start = start + transition; // fade in complete
+        let enable_end = end; // fade out starts at zoom-out keyframe
+        // Show the zoomed overlay during the zoom period
+        filter_parts.push(format!(
+            "{}[z{}]overlay=0:0:enable='between(t,{:.2},{:.2})'{}",
+            prev, j,
+            start + 0.1, // slight delay for transition feel
+            end - 0.1,
+            out
+        ));
+        prev = out;
+    }
+
+    let filter_complex = filter_parts.join(";");
+    let last_label = format!("[v{}]", n - 1);
+
+    tracing::info!(filter = %filter_complex, "Zoom filter_complex");
+    let output = tokio::process::Command::new("ffmpeg")
+        .args(&[
+            "-i", input_path.to_str()?,
+            "-filter_complex", &filter_complex,
+            "-map", &last_label,
+            "-c:v", "libx264", "-pix_fmt", "yuv420p", "-preset", "fast",
+            "-y", output_path.to_str()?,
+        ])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::piped())
+        .output()
+        .await
+        .ok()?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let tail: String = stderr.chars().rev().take(300).collect::<Vec<_>>().into_iter().rev().collect();
+        tracing::warn!(stderr = %tail, "Zoom filter_complex failed");
+    }
+
+    if output.status.success() {
+        Some(output_path.to_str()?.to_string())
+    } else {
+        None
+    }
+}
+
 /// Apply motion interpolation to upscale frame rate for smooth playback.
 /// Uses ffmpeg minterpolate with blend mode (fast, good quality for UI content).
 async fn apply_minterpolate(
@@ -513,72 +642,19 @@ pub async fn render_annotated(
         video_path.clone()
     };
 
-    // Step 0.5: Apply zoom keyframes (smooth crop+scale at output fps)
+    // Step 0.5: Apply zoom keyframes via split+crop+overlay
     let zoomed_path = dir.join(format!("zoomed.{}", entry.format));
     let zoom_source = if !metadata.zoom_keyframes.is_empty() {
-        // Get video dimensions
-        let probe = tokio::process::Command::new("ffprobe")
-            .args(&[
-                "-v", "error", "-select_streams", "v:0",
-                "-show_entries", "stream=width,height",
-                "-of", "default=noprint_wrappers=1:nokey=1",
-                smooth_source.to_str().unwrap_or(""),
-            ])
-            .output()
-            .await
-            .ok();
-        let dims: Vec<u32> = probe
-            .map(|p| {
-                String::from_utf8_lossy(&p.stdout)
-                    .lines()
-                    .filter_map(|l| l.trim().parse().ok())
-                    .collect()
-            })
-            .unwrap_or_default();
-
-        if dims.len() >= 2 {
-            if let Some(zoom_filter) =
-                build_zoom_filter(&metadata.zoom_keyframes, total_ms, dims[0], dims[1])
-            {
-                tracing::info!(filter_len = zoom_filter.len(), "Applying zoom filter");
-                let output = tokio::process::Command::new("ffmpeg")
-                    .args(&[
-                        "-i", smooth_source.to_str().unwrap_or(""),
-                        "-vf", &zoom_filter,
-                        "-c:v", "libx264", "-pix_fmt", "yuv420p", "-preset", "fast",
-                        "-y", zoomed_path.to_str().unwrap_or(""),
-                    ])
-                    .stdout(std::process::Stdio::null())
-                    .stderr(std::process::Stdio::piped())
-                    .output()
-                    .await
-                    .ok();
-                let status = output.as_ref().map(|o| o.status);
-                if let Some(ref o) = output {
-                    if !o.status.success() {
-                        let stderr = String::from_utf8_lossy(&o.stderr);
-                        // Get the last 500 chars which has the actual error
-                        let err_tail: String = stderr.chars().rev().take(500).collect::<Vec<_>>().into_iter().rev().collect();
-                        tracing::warn!(
-                            stderr = %err_tail,
-                            "Zoom ffmpeg failed"
-                        );
-                    }
-                }
-                if matches!(status, Some(s) if s.success()) {
-                    tracing::info!("Zoom post-processing complete");
-                    // Clean up interpolated if we produced zoomed
-                    let _ = std::fs::remove_file(&interpolated_path);
-                    zoomed_path.clone()
-                } else {
-                    tracing::warn!("Zoom filter failed — using unzoomed video");
-                    smooth_source.clone()
-                }
-            } else {
+        match apply_zoom_keyframes(&smooth_source, &metadata.zoom_keyframes, &zoomed_path).await {
+            Some(path) => {
+                tracing::info!("Zoom post-processing complete");
+                let _ = std::fs::remove_file(&interpolated_path);
+                PathBuf::from(path)
+            }
+            None => {
+                tracing::info!("Zoom not applied — using unzoomed video");
                 smooth_source.clone()
             }
-        } else {
-            smooth_source.clone()
         }
     } else {
         smooth_source.clone()
