@@ -3128,7 +3128,8 @@ async fn dispatch_tool_inner(
                 .read()
                 .ok()
                 .and_then(|m| m.get(tid).cloned());
-            // Move cursor to target if recording
+            // When recording: animate cursor to field, focus it (shows caret),
+            // then type character by character so each keystroke is captured.
             let is_recording = session.recording.is_some();
             if is_recording {
                 let js = browser::build_selector_chain_js(selector);
@@ -3148,7 +3149,12 @@ async fn dispatch_tool_inner(
                 }
             }
 
-            let fill_result = browser::fill(session, tid, selector, &fill_value).await;
+            let fill_result = if is_recording {
+                // Focus the input (shows blinking caret), then type with delays
+                browser::animated_fill(session, tid, selector, &fill_value).await
+            } else {
+                browser::fill(session, tid, selector, &fill_value).await
+            };
             // Track selector stability — best-effort, never fails the tool call
             if let Some(ref tab_url) = tab_url {
                 if let Some(origin) = crate::network_log::url_to_origin(tab_url) {

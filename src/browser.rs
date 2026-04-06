@@ -891,6 +891,96 @@ pub async fn remove_recording_cursor(session: &mut Session, target_id: &str) -> 
     Ok(())
 }
 
+/// Fill an input with animated typing — focuses the element (shows caret),
+/// clears existing value, then types characters one at a time with delays
+/// so each keystroke is captured in the recording.
+pub async fn animated_fill(
+    session: &mut Session,
+    target_id: &str,
+    selector: &str,
+    value: &str,
+) -> Result<()> {
+    let session_id = attach_to_target(session, target_id).await?;
+    let sel_json = serde_json::to_string(selector)
+        .unwrap_or_else(|_| format!("\"{}\"", selector.replace('"', "\\\"")));
+
+    // Focus + select all existing text
+    let focus_js = format!(
+        r#"(() => {{
+            const el = document.querySelector({sel});
+            if (!el) return false;
+            el.focus();
+            el.select();
+            return true;
+        }})()"#,
+        sel = sel_json
+    );
+    let result = session
+        .cdp
+        .send_on_session(
+            "Runtime.evaluate",
+            json!({"expression": focus_js, "returnByValue": true}),
+            Some(session_id.clone()),
+        )
+        .await?;
+
+    if result["result"]["value"].as_bool() != Some(true) {
+        return Err(PagerunnerError::Cdp(format!(
+            "Selector not found: {}",
+            selector
+        )));
+    }
+
+    // Brief pause to show the focused/selected state
+    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+
+    // Clear existing text
+    session
+        .cdp
+        .send_on_session(
+            "Input.insertText",
+            json!({"text": ""}),
+            Some(session_id.clone()),
+        )
+        .await?;
+
+    // Delete any selected content via backspace
+    session
+        .cdp
+        .send_on_session(
+            "Input.dispatchKeyEvent",
+            json!({"type": "keyDown", "key": "Backspace", "code": "Backspace", "windowsVirtualKeyCode": 8}),
+            Some(session_id.clone()),
+        )
+        .await?;
+    session
+        .cdp
+        .send_on_session(
+            "Input.dispatchKeyEvent",
+            json!({"type": "keyUp", "key": "Backspace", "code": "Backspace", "windowsVirtualKeyCode": 8}),
+            Some(session_id.clone()),
+        )
+        .await?;
+
+    // Type characters one at a time with ~80ms delay between each
+    for ch in value.chars() {
+        session
+            .cdp
+            .send_on_session(
+                "Input.insertText",
+                json!({"text": ch.to_string()}),
+                Some(session_id.clone()),
+            )
+            .await?;
+        tokio::time::sleep(std::time::Duration::from_millis(80)).await;
+    }
+
+    // Brief pause to show the completed text
+    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+
+    Ok(())
+}
+
 /// Start CDP screencast — Chrome will push frames as events.
 /// Enables the Page domain first (required for screencast events).
 pub async fn start_screencast(
