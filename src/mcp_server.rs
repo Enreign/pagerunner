@@ -4196,6 +4196,14 @@ async fn dispatch_tool_inner(
                 .send("Page.stopScreencast", serde_json::json!({}))
                 .await;
 
+            // Capture dir path before stop() consumes the handle
+            let recording_dir = handle
+                .state
+                .recording_dir
+                .to_str()
+                .unwrap_or("")
+                .to_string();
+
             let metadata = handle.stop().await?;
 
             // Save to DB index
@@ -4209,7 +4217,7 @@ async fn dispatch_tool_inner(
                 started_at: metadata.started_at,
                 duration_ms: metadata.duration_ms,
                 format: metadata.format.clone(),
-                dir_path: metadata.recording_id.clone(),
+                dir_path: recording_dir,
             };
             let _ = crate::recording::save_recording_index(&db, &entry);
 

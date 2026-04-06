@@ -265,15 +265,21 @@ impl RecordingHandle {
         state.metadata.duration_ms =
             Some((now - state.metadata.started_at).num_milliseconds().max(0) as u64);
 
+        // Drop the sender to close the channel — ffmpeg task will drop stdin
         drop(self.frame_tx);
 
-        match self.ffmpeg_task.await {
-            Ok(Ok(())) => {}
-            Ok(Err(e)) => {
+        // Wait for ffmpeg with a timeout — ffmpeg can hang on empty input
+        let timeout = std::time::Duration::from_secs(10);
+        match tokio::time::timeout(timeout, self.ffmpeg_task).await {
+            Ok(Ok(Ok(()))) => {}
+            Ok(Ok(Err(e))) => {
                 tracing::warn!(error = %e, "ffmpeg encoding error during stop");
             }
-            Err(e) => {
+            Ok(Err(e)) => {
                 tracing::warn!(error = %e, "ffmpeg task panicked");
+            }
+            Err(_) => {
+                tracing::warn!("ffmpeg finalization timed out after 10s — video may be incomplete");
             }
         }
 
@@ -291,16 +297,30 @@ pub fn spawn_frame_processor(
     frame_tx: mpsc::Sender<Vec<u8>>,
 ) -> tokio::task::JoinHandle<()> {
     let mut events = cdp.subscribe_events();
+    let mut frame_count: u64 = 0;
     tokio::spawn(async move {
-        while let Ok(event) = events.recv().await {
+        loop {
+            let event = match events.recv().await {
+                Ok(e) => e,
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                    tracing::warn!(skipped = n, "Frame processor lagged — skipped events");
+                    continue;
+                }
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+            };
             let method = event.get("method").and_then(|m| m.as_str());
             if method != Some("Page.screencastFrame") {
                 continue;
             }
-            let event_session = event.get("sessionId").and_then(|s| s.as_str());
-            if event_session != Some(&cdp_session_id) {
-                continue;
+
+            // CDP events scoped to a target session have a top-level "sessionId"
+            // (string). Only process frames from our target session.
+            if let Some(event_session) = event.get("sessionId").and_then(|s| s.as_str()) {
+                if event_session != cdp_session_id {
+                    continue;
+                }
             }
+            // If no sessionId on the event, accept it (browser-level screencast)
 
             let params = match event.get("params") {
                 Some(p) => p,
@@ -313,26 +333,41 @@ pub fn spawn_frame_processor(
             };
             let frame_bytes = match base64::engine::general_purpose::STANDARD.decode(data_b64) {
                 Ok(b) => b,
-                Err(_) => continue,
+                Err(e) => {
+                    tracing::warn!("screencast frame base64 decode error: {}", e);
+                    continue;
+                }
             };
 
-            // Ack the frame so Chrome sends the next one
-            let session_id_val = params
+            frame_count += 1;
+            if frame_count == 1 {
+                tracing::info!(
+                    session = %cdp_session_id,
+                    frame_size = frame_bytes.len(),
+                    "First screencast frame received"
+                );
+            }
+
+            // Ack the frame so Chrome sends the next one.
+            // The "sessionId" field in screencastFrame params is actually the frame
+            // sequence number (integer), not a CDP session ID.
+            let frame_number = params
                 .get("sessionId")
                 .and_then(|n| n.as_u64())
                 .unwrap_or(0);
             let _ = cdp
                 .send_on_session(
                     "Page.screencastFrameAck",
-                    serde_json::json!({"sessionId": session_id_val}),
+                    serde_json::json!({"sessionId": frame_number}),
                     Some(cdp_session_id.clone()),
                 )
                 .await;
 
             if frame_tx.send(frame_bytes).await.is_err() {
-                break;
+                break; // Recording stopped
             }
         }
+        tracing::info!(frames = frame_count, "Frame processor exiting");
     })
 }
 
