@@ -1,6 +1,6 @@
 use crate::error::{PagerunnerError, Result};
 use crate::recording::{get_recording_index, Marker, RecordingMetadata};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 /// Escape special characters for ffmpeg drawtext filter.
 pub fn escape_ffmpeg_text(s: &str) -> String {
@@ -92,6 +92,140 @@ pub fn generate_srt(markers: &[Marker], total_duration_ms: u64) -> String {
     srt
 }
 
+/// Burn subtitle overlays into a video using ImageMagick (for text→PNG) + ffmpeg overlay filter.
+/// Returns the annotated video path on success, None if magick/ffmpeg aren't available.
+async fn burn_subtitles_overlay(
+    video_path: &Path,
+    markers: &[Marker],
+    total_duration_ms: u64,
+    output_path: &Path,
+) -> Option<String> {
+    if markers.is_empty() {
+        return None;
+    }
+
+    // Get video dimensions
+    let probe = tokio::process::Command::new("ffprobe")
+        .args(&[
+            "-v", "error",
+            "-select_streams", "v:0",
+            "-show_entries", "stream=width,height",
+            "-of", "default=noprint_wrappers=1:nokey=1",
+            video_path.to_str()?,
+        ])
+        .output()
+        .await
+        .ok()?;
+
+    let dims: Vec<u32> = String::from_utf8_lossy(&probe.stdout)
+        .lines()
+        .filter_map(|l| l.trim().parse().ok())
+        .collect();
+    if dims.len() < 2 {
+        return None;
+    }
+    let (w, h) = (dims[0], dims[1]);
+    let bar_height = 120u32.min(h / 10); // cap at 10% of video height
+
+    // Generate overlay PNGs with ImageMagick
+    let tmp = std::env::temp_dir();
+    let pointsize = (bar_height / 3).max(16);
+    for (i, mk) in markers.iter().enumerate() {
+        let text = if let Some(desc) = &mk.description {
+            format!("{}  —  {}", mk.label, desc)
+        } else {
+            mk.label.clone()
+        };
+
+        let out = tmp.join(format!("pagerunner_sub_{}.png", i));
+        let status = tokio::process::Command::new("magick")
+            .args(&[
+                "-size", &format!("{}x{}", w, bar_height),
+                "xc:none",
+                "-fill", "#000000AA",
+                "-draw", &format!("rectangle 0,0 {},{}", w, bar_height),
+                "-fill", "white",
+                "-font", "Helvetica",
+                "-pointsize", &pointsize.to_string(),
+                "-gravity", "West",
+                "-annotate", "+20+0", &text,
+                out.to_str().unwrap(),
+            ])
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .await
+            .ok()?;
+
+        if !status.success() {
+            tracing::warn!("magick failed to generate subtitle overlay — is ImageMagick installed?");
+            return None;
+        }
+    }
+
+    // Build ffmpeg overlay filter chain
+    let mut inputs = vec!["-i".to_string(), video_path.to_str()?.to_string()];
+    for i in 0..markers.len() {
+        inputs.push("-i".to_string());
+        inputs.push(tmp.join(format!("pagerunner_sub_{}.png", i)).to_str()?.to_string());
+    }
+
+    let mut filter_parts = Vec::new();
+    let mut prev = "[0:v]".to_string();
+    for (i, mk) in markers.iter().enumerate() {
+        let start_s = mk.ts_ms as f64 / 1000.0;
+        let end_s = if i + 1 < markers.len() {
+            markers[i + 1].ts_ms as f64 / 1000.0
+        } else {
+            let end = start_s + 5.0;
+            let total = total_duration_ms as f64 / 1000.0;
+            if end > total { total } else { end }
+        };
+        let y_pos = h - bar_height;
+        let out_label = format!("[v{}]", i);
+        filter_parts.push(format!(
+            "{}[{}:v]overlay=0:{}:enable='between(t,{:.2},{:.2})'{}",
+            prev,
+            i + 1,
+            y_pos,
+            start_s,
+            end_s,
+            out_label
+        ));
+        prev = out_label;
+    }
+    let last_label = format!("[v{}]", markers.len() - 1);
+    let filter_complex = filter_parts.join(";");
+
+    let mut args = inputs;
+    args.extend_from_slice(&[
+        "-filter_complex".to_string(), filter_complex,
+        "-map".to_string(), last_label,
+        "-c:v".to_string(), "libx264".to_string(),
+        "-pix_fmt".to_string(), "yuv420p".to_string(),
+        "-y".to_string(), output_path.to_str()?.to_string(),
+    ]);
+
+    let status = tokio::process::Command::new("ffmpeg")
+        .args(&args)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .await
+        .ok()?;
+
+    // Cleanup temp PNGs
+    for i in 0..markers.len() {
+        let _ = std::fs::remove_file(tmp.join(format!("pagerunner_sub_{}.png", i)));
+    }
+
+    if status.success() {
+        Some(output_path.to_str()?.to_string())
+    } else {
+        None
+    }
+}
+
 /// Render an annotated recording. Generates an SRT subtitle file alongside the video.
 /// If ffmpeg has drawtext support, also renders an annotated video with burned-in overlays.
 pub async fn render_annotated(
@@ -131,33 +265,23 @@ pub async fn render_annotated(
     std::fs::write(&srt_path, &srt_content)
         .map_err(|e| PagerunnerError::Config(format!("Failed to write SRT: {}", e)))?;
 
-    // Mux subtitles into the video container so they show automatically in players
+    // Burn subtitles into the video using ImageMagick overlay images + ffmpeg.
+    // This produces permanently visible text overlays — works in every player.
     let annotated_path = dir.join(format!("annotated.{}", entry.format));
-    let mux_status = tokio::process::Command::new("ffmpeg")
-        .args(&[
-            "-i", video_path.to_str().unwrap(),
-            "-i", srt_path.to_str().unwrap(),
-            "-c", "copy",
-            "-c:s", "mov_text",
-            "-metadata:s:s:0", "language=eng",
-            "-y", annotated_path.to_str().unwrap(),
-        ])
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .status()
-        .await
-        .ok();
-
-    let annotated = match mux_status {
-        Some(s) if s.success() => Some(annotated_path.to_str().unwrap().to_string()),
-        _ => None,
-    };
+    let annotated = burn_subtitles_overlay(
+        &video_path,
+        &metadata.markers,
+        total_ms,
+        &annotated_path,
+    )
+    .await;
 
     Ok(serde_json::json!({
         "srt_path": srt_path.to_str().unwrap(),
-        "annotated_video": annotated,
+        "annotated_video": annotated.as_deref(),
         "video_path": video_path.to_str().unwrap(),
-    }).to_string())
+    })
+    .to_string())
 }
 
 #[cfg(test)]
