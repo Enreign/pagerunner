@@ -195,18 +195,48 @@ pub async fn navigate(session: &mut Session, target_id: &str, url: &str) -> Resu
 
 pub async fn get_content(session: &mut Session, target_id: &str) -> Result<String> {
     let session_id = attach_to_target(session, target_id).await?;
+    let timeout = std::time::Duration::from_secs(15);
+
+    // Try innerText first (better formatting, but forces layout reflow which can
+    // crash the renderer on heavy SPAs).
     let result = session
         .cdp
-        .send_on_session(
+        .send_on_session_with_timeout(
             "Runtime.evaluate",
             json!({
                 "expression": "document.body.innerText",
                 "returnByValue": true
             }),
-            Some(session_id),
+            Some(session_id.clone()),
+            timeout,
         )
-        .await?;
-    Ok(result["result"]["value"].as_str().unwrap_or("").into())
+        .await;
+
+    match result {
+        Ok(val) => Ok(val["result"]["value"].as_str().unwrap_or("").into()),
+        Err(e) => {
+            tracing::warn!(
+                target_id = %target_id,
+                error = %e,
+                "innerText extraction failed, falling back to textContent"
+            );
+            // Re-attach in case the CDP session died during the failed attempt.
+            let session_id = attach_to_target(session, target_id).await?;
+            let val = session
+                .cdp
+                .send_on_session_with_timeout(
+                    "Runtime.evaluate",
+                    json!({
+                        "expression": "document.body.textContent",
+                        "returnByValue": true
+                    }),
+                    Some(session_id),
+                    timeout,
+                )
+                .await?;
+            Ok(val["result"]["value"].as_str().unwrap_or("").into())
+        }
+    }
 }
 
 pub async fn evaluate(session: &mut Session, target_id: &str, expression: &str) -> Result<Value> {
