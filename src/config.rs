@@ -176,7 +176,7 @@ pub struct NerConfig {
 }
 
 fn default_recording_fps() -> u8 {
-    2
+    4
 }
 
 #[derive(Debug, Clone, PartialEq, Default, Deserialize, Serialize)]
@@ -710,7 +710,7 @@ user_data_dir = "/tmp/chrome"
         assert_eq!(config.recording.max_size_mb, 0);
         assert_eq!(config.recording.format, RecordingFormat::Mp4);
         assert!(!config.recording.auto_record);
-        assert_eq!(config.recording.fps, 2);
+        assert_eq!(config.recording.fps, 4);
     }
 
     #[test]
