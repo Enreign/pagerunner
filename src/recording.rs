@@ -551,6 +551,579 @@ mod tests {
     }
 
     #[test]
+    fn test_recording_state_new_minimal() {
+        let state = RecordingState::new(
+            "rec_min".into(),
+            "ses_min".into(),
+            "p".into(),
+            None,
+            vec![],
+            None,
+            "webm".into(),
+        );
+        assert_eq!(state.metadata.format, "webm");
+        assert!(state.metadata.flow.is_none());
+        assert!(state.metadata.name.is_none());
+        assert!(state.metadata.tags.is_empty());
+        assert_eq!(state.recording_dir, PathBuf::new());
+    }
+
+    #[test]
+    fn test_add_multiple_markers() {
+        let mut state = RecordingState::new(
+            "rec_1".into(),
+            "ses_1".into(),
+            "p".into(),
+            None,
+            vec![],
+            None,
+            "mp4".into(),
+        );
+        state.add_marker("A".into(), None, 1000);
+        state.add_marker("B".into(), Some("desc B".into()), 2000);
+        state.add_marker("C".into(), None, 5000);
+        assert_eq!(state.metadata.markers.len(), 3);
+        assert_eq!(state.metadata.markers[0].label, "A");
+        assert!(state.metadata.markers[0].description.is_none());
+        assert_eq!(state.metadata.markers[1].description.as_deref(), Some("desc B"));
+        assert_eq!(state.metadata.markers[2].ts_ms, 5000);
+    }
+
+    #[test]
+    fn test_metadata_skip_serializing_none_fields() {
+        let meta = RecordingMetadata {
+            recording_id: "r1".into(),
+            session_id: "s1".into(),
+            profile: "p".into(),
+            flow: None,
+            tags: vec![],
+            name: None,
+            started_at: chrono::Utc::now(),
+            stopped_at: None,
+            duration_ms: None,
+            format: "mp4".into(),
+            markers: vec![],
+        };
+        let json = serde_json::to_string(&meta).unwrap();
+        assert!(!json.contains("\"flow\""));
+        assert!(!json.contains("\"name\""));
+        assert!(!json.contains("\"stopped_at\""));
+        assert!(!json.contains("\"duration_ms\""));
+    }
+
+    #[test]
+    fn test_metadata_includes_set_fields() {
+        let meta = RecordingMetadata {
+            recording_id: "r1".into(),
+            session_id: "s1".into(),
+            profile: "p".into(),
+            flow: Some("deploy".into()),
+            tags: vec!["prod".into()],
+            name: Some("Deploy v1".into()),
+            started_at: chrono::Utc::now(),
+            stopped_at: Some(chrono::Utc::now()),
+            duration_ms: Some(5000),
+            format: "webm".into(),
+            markers: vec![Marker {
+                ts_ms: 100,
+                label: "start".into(),
+                description: None,
+            }],
+        };
+        let json = serde_json::to_string(&meta).unwrap();
+        assert!(json.contains("\"flow\""));
+        assert!(json.contains("deploy"));
+        assert!(json.contains("\"stopped_at\""));
+        assert!(json.contains("5000"));
+        assert!(json.contains("\"webm\""));
+    }
+
+    #[test]
+    fn test_marker_description_skip_none() {
+        let m = Marker {
+            ts_ms: 0,
+            label: "x".into(),
+            description: None,
+        };
+        let json = serde_json::to_string(&m).unwrap();
+        assert!(!json.contains("description"));
+    }
+
+    #[test]
+    fn test_recording_dir_empty_flow() {
+        let base = PathBuf::from("/tmp/rec");
+        let path = recording_dir_path(&base, "p", "");
+        // Should still produce a valid path
+        assert!(path.starts_with("/tmp/rec/p"));
+    }
+
+    #[test]
+    fn test_recording_dir_unicode_flow() {
+        let base = PathBuf::from("/tmp/rec");
+        let path = recording_dir_path(&base, "p", "демо-тест");
+        let name = path.file_name().unwrap().to_str().unwrap();
+        // Cyrillic chars are alphanumeric, should be kept
+        assert!(name.contains("демо-тест"));
+    }
+
+    #[test]
+    fn test_metadata_save_creates_pretty_json() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut state = RecordingState::new(
+            "rec_pretty".into(),
+            "ses_1".into(),
+            "p".into(),
+            None,
+            vec![],
+            None,
+            "mp4".into(),
+        );
+        state.recording_dir = dir.path().to_path_buf();
+        state.save_metadata().unwrap();
+        let content = std::fs::read_to_string(dir.path().join("metadata.json")).unwrap();
+        // Pretty JSON has newlines
+        assert!(content.contains('\n'));
+        assert!(content.contains("  "));
+    }
+
+    #[test]
+    fn test_metadata_save_overwrites() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut state = RecordingState::new(
+            "rec_ow".into(),
+            "ses_1".into(),
+            "p".into(),
+            None,
+            vec![],
+            None,
+            "mp4".into(),
+        );
+        state.recording_dir = dir.path().to_path_buf();
+        state.save_metadata().unwrap();
+        state.add_marker("m1".into(), None, 500);
+        state.save_metadata().unwrap();
+        let content = std::fs::read_to_string(dir.path().join("metadata.json")).unwrap();
+        let loaded: RecordingMetadata = serde_json::from_str(&content).unwrap();
+        assert_eq!(loaded.markers.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_check_ffmpeg_available() {
+        // This test verifies ffmpeg is available in the dev environment.
+        // If ffmpeg is not installed, this test will fail — which is correct,
+        // since video recording requires ffmpeg.
+        let result = check_ffmpeg().await;
+        assert!(
+            result.is_ok(),
+            "ffmpeg not found on PATH — install ffmpeg to run recording tests"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_recording_handle_start_stop() {
+        // End-to-end test: start a recording, send a dummy JPEG frame, stop it.
+        let dir = tempfile::tempdir().unwrap();
+        let rec_dir = dir.path().join("test_recording");
+
+        let state = RecordingState::new(
+            "rec_e2e".into(),
+            "ses_1".into(),
+            "test".into(),
+            Some("e2e-flow".into()),
+            vec!["integration".into()],
+            Some("E2E Test".into()),
+            "mp4".into(),
+        );
+
+        let handle = RecordingHandle::start(state, rec_dir.clone(), "mp4", 2).await;
+        if handle.is_err() {
+            // ffmpeg not available — skip
+            eprintln!("Skipping: ffmpeg not available");
+            return;
+        }
+        let handle = handle.unwrap();
+
+        // Send a minimal valid JPEG (smallest valid JPEG is the SOI+EOI markers)
+        // ffmpeg needs real frames; send a tiny 1x1 JPEG
+        let tiny_jpeg = create_tiny_jpeg();
+        handle.send_frame(tiny_jpeg.clone()).await.unwrap();
+        handle.send_frame(tiny_jpeg).await.unwrap();
+
+        let metadata = handle.stop().await.unwrap();
+        assert_eq!(metadata.recording_id, "rec_e2e");
+        assert_eq!(metadata.profile, "test");
+        assert_eq!(metadata.flow.as_deref(), Some("e2e-flow"));
+        assert!(metadata.stopped_at.is_some());
+        assert!(metadata.duration_ms.is_some());
+
+        // metadata.json should exist
+        assert!(rec_dir.join("metadata.json").exists());
+
+        // video.mp4 should exist — but ffmpeg may fail to encode the minimal
+        // JPEG frames, in which case the file may be empty or absent.
+        // The important thing is that stop() didn't panic.
+    }
+
+    #[tokio::test]
+    async fn test_recording_handle_stop_without_frames() {
+        let dir = tempfile::tempdir().unwrap();
+        let rec_dir = dir.path().join("empty_recording");
+
+        let state = RecordingState::new(
+            "rec_empty".into(),
+            "ses_1".into(),
+            "test".into(),
+            None,
+            vec![],
+            None,
+            "mp4".into(),
+        );
+
+        let handle = RecordingHandle::start(state, rec_dir.clone(), "mp4", 2).await;
+        if handle.is_err() {
+            return; // ffmpeg not available
+        }
+        let handle = handle.unwrap();
+
+        // Stop immediately without sending any frames
+        let metadata = handle.stop().await.unwrap();
+        assert_eq!(metadata.recording_id, "rec_empty");
+        assert!(metadata.stopped_at.is_some());
+        assert!(rec_dir.join("metadata.json").exists());
+    }
+
+    #[tokio::test]
+    async fn test_recording_handle_with_markers() {
+        let dir = tempfile::tempdir().unwrap();
+        let rec_dir = dir.path().join("marker_recording");
+
+        let state = RecordingState::new(
+            "rec_markers".into(),
+            "ses_1".into(),
+            "test".into(),
+            None,
+            vec![],
+            None,
+            "mp4".into(),
+        );
+
+        let mut handle = RecordingHandle::start(state, rec_dir.clone(), "mp4", 2).await;
+        if handle.is_err() {
+            return;
+        }
+        let mut handle = handle.unwrap();
+
+        // Add markers
+        handle.state.add_marker("Step 1".into(), Some("First step".into()), 0);
+        handle.state.add_marker("Step 2".into(), None, 1000);
+
+        let metadata = handle.stop().await.unwrap();
+        assert_eq!(metadata.markers.len(), 2);
+        assert_eq!(metadata.markers[0].label, "Step 1");
+        assert_eq!(metadata.markers[1].ts_ms, 1000);
+
+        // Verify metadata file has markers
+        let content = std::fs::read_to_string(rec_dir.join("metadata.json")).unwrap();
+        let loaded: RecordingMetadata = serde_json::from_str(&content).unwrap();
+        assert_eq!(loaded.markers.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn test_recording_handle_webm_format() {
+        let dir = tempfile::tempdir().unwrap();
+        let rec_dir = dir.path().join("webm_recording");
+
+        let state = RecordingState::new(
+            "rec_webm".into(),
+            "ses_1".into(),
+            "test".into(),
+            None,
+            vec![],
+            None,
+            "webm".into(),
+        );
+
+        let handle = RecordingHandle::start(state, rec_dir.clone(), "webm", 2).await;
+        if handle.is_err() {
+            return;
+        }
+        let handle = handle.unwrap();
+
+        let metadata = handle.stop().await.unwrap();
+        assert_eq!(metadata.format, "webm");
+        // video.webm may not exist if ffmpeg couldn't encode without frames.
+        // The important thing is stop() completed and metadata was saved.
+        assert!(rec_dir.join("metadata.json").exists());
+    }
+
+    #[test]
+    fn test_recording_index_get() {
+        let dir = tempfile::tempdir().unwrap();
+        let key = crate::db::Db::generate_key();
+        let db = crate::db::Db::open_with_key(
+            dir.path().join("test.db").to_str().unwrap(),
+            key,
+        )
+        .unwrap();
+
+        // get nonexistent
+        assert!(get_recording_index(&db, "nonexistent").unwrap().is_none());
+
+        let entry = RecordingIndexEntry {
+            recording_id: "rec_get".into(),
+            session_id: "ses_1".into(),
+            profile: "p".into(),
+            flow: Some("f".into()),
+            tags: vec!["t".into()],
+            name: Some("n".into()),
+            started_at: chrono::Utc::now(),
+            duration_ms: Some(1000),
+            format: "mp4".into(),
+            dir_path: "/tmp/r".into(),
+        };
+
+        save_recording_index(&db, &entry).unwrap();
+        let got = get_recording_index(&db, "rec_get").unwrap().unwrap();
+        assert_eq!(got.recording_id, "rec_get");
+        assert_eq!(got.dir_path, "/tmp/r");
+        assert_eq!(got.format, "mp4");
+    }
+
+    #[test]
+    fn test_recording_index_tag_filter() {
+        let dir = tempfile::tempdir().unwrap();
+        let key = crate::db::Db::generate_key();
+        let db = crate::db::Db::open_with_key(
+            dir.path().join("test.db").to_str().unwrap(),
+            key,
+        )
+        .unwrap();
+
+        let e1 = RecordingIndexEntry {
+            recording_id: "rec_1".into(),
+            session_id: "s".into(),
+            profile: "p".into(),
+            flow: None,
+            tags: vec!["deploy".into(), "prod".into()],
+            name: None,
+            started_at: chrono::Utc::now(),
+            duration_ms: None,
+            format: "mp4".into(),
+            dir_path: "/tmp/1".into(),
+        };
+        let e2 = RecordingIndexEntry {
+            recording_id: "rec_2".into(),
+            session_id: "s".into(),
+            profile: "p".into(),
+            flow: None,
+            tags: vec!["demo".into()],
+            name: None,
+            started_at: chrono::Utc::now(),
+            duration_ms: None,
+            format: "mp4".into(),
+            dir_path: "/tmp/2".into(),
+        };
+
+        save_recording_index(&db, &e1).unwrap();
+        save_recording_index(&db, &e2).unwrap();
+
+        let by_deploy = list_recordings(&db, None, None, Some("deploy")).unwrap();
+        assert_eq!(by_deploy.len(), 1);
+        assert_eq!(by_deploy[0].recording_id, "rec_1");
+
+        let by_demo = list_recordings(&db, None, None, Some("demo")).unwrap();
+        assert_eq!(by_demo.len(), 1);
+
+        let by_missing = list_recordings(&db, None, None, Some("missing")).unwrap();
+        assert!(by_missing.is_empty());
+    }
+
+    #[test]
+    fn test_recording_index_combined_filters() {
+        let dir = tempfile::tempdir().unwrap();
+        let key = crate::db::Db::generate_key();
+        let db = crate::db::Db::open_with_key(
+            dir.path().join("test.db").to_str().unwrap(),
+            key,
+        )
+        .unwrap();
+
+        let e1 = RecordingIndexEntry {
+            recording_id: "rec_a".into(),
+            session_id: "s".into(),
+            profile: "personal".into(),
+            flow: Some("deploy".into()),
+            tags: vec!["prod".into()],
+            name: None,
+            started_at: chrono::Utc::now(),
+            duration_ms: None,
+            format: "mp4".into(),
+            dir_path: "/a".into(),
+        };
+        let e2 = RecordingIndexEntry {
+            recording_id: "rec_b".into(),
+            session_id: "s".into(),
+            profile: "work".into(),
+            flow: Some("deploy".into()),
+            tags: vec!["prod".into()],
+            name: None,
+            started_at: chrono::Utc::now(),
+            duration_ms: None,
+            format: "mp4".into(),
+            dir_path: "/b".into(),
+        };
+
+        save_recording_index(&db, &e1).unwrap();
+        save_recording_index(&db, &e2).unwrap();
+
+        // profile + flow
+        let results = list_recordings(&db, Some("personal"), Some("deploy"), None).unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].recording_id, "rec_a");
+
+        // profile + flow + tag
+        let results = list_recordings(&db, Some("work"), Some("deploy"), Some("prod")).unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].recording_id, "rec_b");
+    }
+
+    #[test]
+    fn test_recording_index_ordering() {
+        let dir = tempfile::tempdir().unwrap();
+        let key = crate::db::Db::generate_key();
+        let db = crate::db::Db::open_with_key(
+            dir.path().join("test.db").to_str().unwrap(),
+            key,
+        )
+        .unwrap();
+
+        let now = chrono::Utc::now();
+        let earlier = now - chrono::Duration::hours(1);
+
+        let e_old = RecordingIndexEntry {
+            recording_id: "rec_old".into(),
+            session_id: "s".into(),
+            profile: "p".into(),
+            flow: None,
+            tags: vec![],
+            name: None,
+            started_at: earlier,
+            duration_ms: None,
+            format: "mp4".into(),
+            dir_path: "/old".into(),
+        };
+        let e_new = RecordingIndexEntry {
+            recording_id: "rec_new".into(),
+            session_id: "s".into(),
+            profile: "p".into(),
+            flow: None,
+            tags: vec![],
+            name: None,
+            started_at: now,
+            duration_ms: None,
+            format: "mp4".into(),
+            dir_path: "/new".into(),
+        };
+
+        // Insert old first, new second
+        save_recording_index(&db, &e_old).unwrap();
+        save_recording_index(&db, &e_new).unwrap();
+
+        let results = list_recordings(&db, None, None, None).unwrap();
+        assert_eq!(results.len(), 2);
+        // Newest first
+        assert_eq!(results[0].recording_id, "rec_new");
+        assert_eq!(results[1].recording_id, "rec_old");
+    }
+
+    #[test]
+    fn test_delete_recording_index_nonexistent() {
+        let dir = tempfile::tempdir().unwrap();
+        let key = crate::db::Db::generate_key();
+        let db = crate::db::Db::open_with_key(
+            dir.path().join("test.db").to_str().unwrap(),
+            key,
+        )
+        .unwrap();
+
+        // Should not error
+        delete_recording_index(&db, "nonexistent").unwrap();
+    }
+
+    #[test]
+    fn test_recording_index_update() {
+        let dir = tempfile::tempdir().unwrap();
+        let key = crate::db::Db::generate_key();
+        let db = crate::db::Db::open_with_key(
+            dir.path().join("test.db").to_str().unwrap(),
+            key,
+        )
+        .unwrap();
+
+        let entry = RecordingIndexEntry {
+            recording_id: "rec_upd".into(),
+            session_id: "s".into(),
+            profile: "p".into(),
+            flow: None,
+            tags: vec![],
+            name: None,
+            started_at: chrono::Utc::now(),
+            duration_ms: None,
+            format: "mp4".into(),
+            dir_path: "/a".into(),
+        };
+        save_recording_index(&db, &entry).unwrap();
+
+        // Update with duration
+        let updated = RecordingIndexEntry {
+            duration_ms: Some(5000),
+            dir_path: "/b".into(),
+            ..entry
+        };
+        save_recording_index(&db, &updated).unwrap();
+
+        let got = get_recording_index(&db, "rec_upd").unwrap().unwrap();
+        assert_eq!(got.duration_ms, Some(5000));
+        assert_eq!(got.dir_path, "/b");
+
+        // Should still be just 1 entry
+        let all = list_recordings(&db, None, None, None).unwrap();
+        assert_eq!(all.len(), 1);
+    }
+
+    /// Create a minimal valid 1x1 white JPEG for testing.
+    fn create_tiny_jpeg() -> Vec<u8> {
+        // Minimal JFIF JPEG: 1x1 pixel, white
+        vec![
+            0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x10, 0x4A, 0x46, 0x49, 0x46, 0x00, 0x01, 0x01, 0x00,
+            0x00, 0x01, 0x00, 0x01, 0x00, 0x00, 0xFF, 0xDB, 0x00, 0x43, 0x00, 0x08, 0x06, 0x06,
+            0x07, 0x06, 0x05, 0x08, 0x07, 0x07, 0x07, 0x09, 0x09, 0x08, 0x0A, 0x0C, 0x14, 0x0D,
+            0x0C, 0x0B, 0x0B, 0x0C, 0x19, 0x12, 0x13, 0x0F, 0x14, 0x1D, 0x1A, 0x1F, 0x1E, 0x1D,
+            0x1A, 0x1C, 0x1C, 0x20, 0x24, 0x2E, 0x27, 0x20, 0x22, 0x2C, 0x23, 0x1C, 0x1C, 0x28,
+            0x37, 0x29, 0x2C, 0x30, 0x31, 0x34, 0x34, 0x34, 0x1F, 0x27, 0x39, 0x3D, 0x38, 0x32,
+            0x3C, 0x2E, 0x33, 0x34, 0x32, 0xFF, 0xC0, 0x00, 0x0B, 0x08, 0x00, 0x01, 0x00, 0x01,
+            0x01, 0x01, 0x11, 0x00, 0xFF, 0xC4, 0x00, 0x1F, 0x00, 0x00, 0x01, 0x05, 0x01, 0x01,
+            0x01, 0x01, 0x01, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x02,
+            0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0A, 0x0B, 0xFF, 0xC4, 0x00, 0xB5, 0x10,
+            0x00, 0x02, 0x01, 0x03, 0x03, 0x02, 0x04, 0x03, 0x05, 0x05, 0x04, 0x04, 0x00, 0x00,
+            0x01, 0x7D, 0x01, 0x02, 0x03, 0x00, 0x04, 0x11, 0x05, 0x12, 0x21, 0x31, 0x41, 0x06,
+            0x13, 0x51, 0x61, 0x07, 0x22, 0x71, 0x14, 0x32, 0x81, 0x91, 0xA1, 0x08, 0x23, 0x42,
+            0xB1, 0xC1, 0x15, 0x52, 0xD1, 0xF0, 0x24, 0x33, 0x62, 0x72, 0x82, 0x09, 0x0A, 0x16,
+            0x17, 0x18, 0x19, 0x1A, 0x25, 0x26, 0x27, 0x28, 0x29, 0x2A, 0x34, 0x35, 0x36, 0x37,
+            0x38, 0x39, 0x3A, 0x43, 0x44, 0x45, 0x46, 0x47, 0x48, 0x49, 0x4A, 0x53, 0x54, 0x55,
+            0x56, 0x57, 0x58, 0x59, 0x5A, 0x63, 0x64, 0x65, 0x66, 0x67, 0x68, 0x69, 0x6A, 0x73,
+            0x74, 0x75, 0x76, 0x77, 0x78, 0x79, 0x7A, 0x83, 0x84, 0x85, 0x86, 0x87, 0x88, 0x89,
+            0x8A, 0x92, 0x93, 0x94, 0x95, 0x96, 0x97, 0x98, 0x99, 0x9A, 0xA2, 0xA3, 0xA4, 0xA5,
+            0xA6, 0xA7, 0xA8, 0xA9, 0xAA, 0xB2, 0xB3, 0xB4, 0xB5, 0xB6, 0xB7, 0xB8, 0xB9, 0xBA,
+            0xC2, 0xC3, 0xC4, 0xC5, 0xC6, 0xC7, 0xC8, 0xC9, 0xCA, 0xD2, 0xD3, 0xD4, 0xD5, 0xD6,
+            0xD7, 0xD8, 0xD9, 0xDA, 0xE1, 0xE2, 0xE3, 0xE4, 0xE5, 0xE6, 0xE7, 0xE8, 0xE9, 0xEA,
+            0xF1, 0xF2, 0xF3, 0xF4, 0xF5, 0xF6, 0xF7, 0xF8, 0xF9, 0xFA, 0xFF, 0xDA, 0x00, 0x08,
+            0x01, 0x01, 0x00, 0x00, 0x3F, 0x00, 0x7B, 0x94, 0x11, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xFF, 0xD9,
+        ]
+    }
+
+    #[test]
     fn test_recording_index_roundtrip() {
         let dir = tempfile::tempdir().unwrap();
         let key = crate::db::Db::generate_key();

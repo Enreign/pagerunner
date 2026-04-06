@@ -688,4 +688,51 @@ user_data_dir = "/tmp/t"
         assert!(!cfg.recording.auto_record);
         assert_eq!(cfg.recording.fps, 2);
     }
+
+    #[test]
+    fn test_recording_config_partial_overrides() {
+        let toml = r#"
+[recording]
+fps = 10
+auto_record = true
+"#;
+        let cfg: PagerunnerConfig = toml::from_str(toml).unwrap();
+        assert!(cfg.recording.auto_record);
+        assert_eq!(cfg.recording.fps, 10);
+        // Rest should be defaults
+        assert_eq!(cfg.recording.format, RecordingFormat::Mp4);
+        assert!(cfg.recording.storage_dir.is_none());
+        assert_eq!(cfg.recording.retention_days, 0);
+        assert_eq!(cfg.recording.max_size_mb, 0);
+    }
+
+    #[test]
+    fn test_recording_format_serialization_roundtrip() {
+        let mp4: RecordingFormat = serde_json::from_str(r#""mp4""#).unwrap();
+        assert_eq!(mp4, RecordingFormat::Mp4);
+        let webm: RecordingFormat = serde_json::from_str(r#""webm""#).unwrap();
+        assert_eq!(webm, RecordingFormat::Webm);
+        let json = serde_json::to_string(&RecordingFormat::Webm).unwrap();
+        assert_eq!(json, r#""webm""#);
+    }
+
+    #[test]
+    fn test_recording_config_with_all_fields() {
+        let toml = r#"
+[recording]
+storage_dir = "/data/recordings"
+retention_days = 90
+max_size_mb = 1024
+format = "webm"
+auto_record = true
+fps = 5
+"#;
+        let cfg: PagerunnerConfig = toml::from_str(toml).unwrap();
+        assert_eq!(cfg.recording.storage_dir.as_deref(), Some("/data/recordings"));
+        assert_eq!(cfg.recording.retention_days, 90);
+        assert_eq!(cfg.recording.max_size_mb, 1024);
+        assert_eq!(cfg.recording.format, RecordingFormat::Webm);
+        assert!(cfg.recording.auto_record);
+        assert_eq!(cfg.recording.fps, 5);
+    }
 }

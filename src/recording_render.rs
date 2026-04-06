@@ -194,4 +194,128 @@ mod tests {
         assert_eq!(escape_ffmpeg_text("it's a test"), "it\\'s a test");
         assert_eq!(escape_ffmpeg_text("line1:line2"), "line1\\:line2");
     }
+
+    #[test]
+    fn test_escape_ffmpeg_text_all_special() {
+        assert_eq!(escape_ffmpeg_text("a\\b"), "a\\\\b");
+        assert_eq!(escape_ffmpeg_text("[x]"), "\\[x\\]");
+        assert_eq!(escape_ffmpeg_text("a;b"), "a\\;b");
+    }
+
+    #[test]
+    fn test_escape_ffmpeg_text_no_special() {
+        assert_eq!(escape_ffmpeg_text("hello world 123"), "hello world 123");
+    }
+
+    #[test]
+    fn test_filter_marker_timing_boundaries() {
+        // Marker A at 1s, B at 5s. A should show from 1-5, B from 5-10 (or end)
+        let markers = vec![
+            Marker { ts_ms: 1000, label: "A".into(), description: None },
+            Marker { ts_ms: 5000, label: "B".into(), description: None },
+        ];
+        let filter = build_subtitle_filter(&markers, 30000).unwrap();
+        // A: between(t,1.00,5.00)
+        assert!(filter.contains("between(t,1.00,5.00)"));
+        // B: between(t,5.00,10.00) (last marker: +5s)
+        assert!(filter.contains("between(t,5.00,10.00)"));
+    }
+
+    #[test]
+    fn test_filter_last_marker_clamps_to_video_duration() {
+        // Marker at 28s, video is 30s — last marker should show until 30s, not 33s
+        let markers = vec![
+            Marker { ts_ms: 28000, label: "End".into(), description: None },
+        ];
+        let filter = build_subtitle_filter(&markers, 30000).unwrap();
+        // Should clamp to 30.00, not 33.00
+        assert!(filter.contains("between(t,28.00,30.00)"));
+    }
+
+    #[test]
+    fn test_filter_last_marker_within_5s() {
+        // Marker at 10s, video is 30s — last marker shows for 5s
+        let markers = vec![
+            Marker { ts_ms: 10000, label: "Mid".into(), description: None },
+        ];
+        let filter = build_subtitle_filter(&markers, 30000).unwrap();
+        assert!(filter.contains("between(t,10.00,15.00)"));
+    }
+
+    #[test]
+    fn test_filter_with_description() {
+        let markers = vec![
+            Marker {
+                ts_ms: 0,
+                label: "Start".into(),
+                description: Some("Beginning of recording".into()),
+            },
+        ];
+        let filter = build_subtitle_filter(&markers, 10000).unwrap();
+        assert!(filter.contains("Start\\: Beginning of recording"));
+    }
+
+    #[test]
+    fn test_filter_without_description() {
+        let markers = vec![
+            Marker { ts_ms: 0, label: "Just a label".into(), description: None },
+        ];
+        let filter = build_subtitle_filter(&markers, 10000).unwrap();
+        assert!(filter.contains("Just a label"));
+        // Without description, text is just the label — no "label: desc" colon separator
+        assert!(!filter.contains("Just a label\\:"));
+    }
+
+    #[test]
+    fn test_filter_special_chars_in_label() {
+        let markers = vec![
+            Marker {
+                ts_ms: 0,
+                label: "Step [1]: it's a test".into(),
+                description: None,
+            },
+        ];
+        let filter = build_subtitle_filter(&markers, 10000).unwrap();
+        // Special chars should be escaped
+        assert!(filter.contains("\\[1\\]"));
+        assert!(filter.contains("\\'"));
+    }
+
+    #[test]
+    fn test_filter_zero_duration_video() {
+        let markers = vec![
+            Marker { ts_ms: 0, label: "X".into(), description: None },
+        ];
+        // Video duration 0ms — marker should still appear briefly
+        let filter = build_subtitle_filter(&markers, 0).unwrap();
+        assert!(filter.contains("drawtext"));
+    }
+
+    #[test]
+    fn test_filter_many_markers() {
+        let markers: Vec<Marker> = (0..20)
+            .map(|i| Marker {
+                ts_ms: i * 1000,
+                label: format!("Step {}", i),
+                description: None,
+            })
+            .collect();
+        let filter = build_subtitle_filter(&markers, 25000).unwrap();
+        // Should have 20 drawtext filters joined by commas
+        let count = filter.matches("drawtext=").count();
+        assert_eq!(count, 20);
+    }
+
+    #[test]
+    fn test_filter_consecutive_markers_same_timestamp() {
+        // Edge case: two markers at the same time
+        let markers = vec![
+            Marker { ts_ms: 5000, label: "A".into(), description: None },
+            Marker { ts_ms: 5000, label: "B".into(), description: None },
+        ];
+        let filter = build_subtitle_filter(&markers, 10000).unwrap();
+        // Both should appear; A shows from 5-5 (zero duration), B from 5-10
+        assert!(filter.contains("A"));
+        assert!(filter.contains("B"));
+    }
 }

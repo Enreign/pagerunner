@@ -4588,6 +4588,55 @@ mod tests {
     }
 
     #[test]
+    fn test_tools_list_includes_recording_tools() {
+        let tools = all_tools();
+        for name in &[
+            "start_recording",
+            "stop_recording",
+            "add_marker",
+            "list_recordings",
+            "get_recording",
+            "delete_recording",
+            "render_recording",
+        ] {
+            assert!(
+                tools.iter().any(|t| t["name"] == *name),
+                "missing recording tool: {}",
+                name
+            );
+        }
+    }
+
+    #[test]
+    fn test_start_recording_schema() {
+        let tools = all_tools();
+        let tool = tools
+            .iter()
+            .find(|t| t["name"] == "start_recording")
+            .unwrap();
+        let required = tool["inputSchema"]["required"].as_array().unwrap();
+        assert!(required.iter().any(|r| r == "session_id"));
+        assert!(required.iter().any(|r| r == "target_id"));
+        let props = &tool["inputSchema"]["properties"];
+        assert!(props.get("name").is_some());
+        assert!(props.get("tags").is_some());
+        assert!(props.get("flow").is_some());
+    }
+
+    #[test]
+    fn test_render_recording_schema() {
+        let tools = all_tools();
+        let tool = tools
+            .iter()
+            .find(|t| t["name"] == "render_recording")
+            .unwrap();
+        let required = tool["inputSchema"]["required"].as_array().unwrap();
+        assert!(required.iter().any(|r| r == "recording_id"));
+        let props = &tool["inputSchema"]["properties"];
+        assert!(props.get("format").is_some());
+    }
+
+    #[test]
     fn test_tools_list_includes_kv_and_snapshot_management() {
         let tools = all_tools();
         for name in &[

@@ -440,4 +440,68 @@ mod tests {
         let entries = db.scan_prefix("audit", "").unwrap();
         assert_eq!(entries.len(), 5);
     }
+
+    #[test]
+    fn recording_started_event_serialization() {
+        let event = AuditEvent::new(AuditEventKind::RecordingStarted {
+            session_id: "ses_123".into(),
+            recording_id: "rec_abc".into(),
+            profile: "personal".into(),
+        });
+        let json = serde_json::to_string(&event).unwrap();
+        let back: AuditEvent = serde_json::from_str(&json).unwrap();
+        match back.kind {
+            AuditEventKind::RecordingStarted {
+                session_id,
+                recording_id,
+                profile,
+            } => {
+                assert_eq!(session_id, "ses_123");
+                assert_eq!(recording_id, "rec_abc");
+                assert_eq!(profile, "personal");
+            }
+            _ => panic!("wrong variant"),
+        }
+    }
+
+    #[test]
+    fn recording_stopped_event_serialization() {
+        let event = AuditEvent::new(AuditEventKind::RecordingStopped {
+            session_id: "ses_123".into(),
+            recording_id: "rec_abc".into(),
+            duration_ms: Some(5000),
+            markers_count: 3,
+        });
+        let json = serde_json::to_string(&event).unwrap();
+        let back: AuditEvent = serde_json::from_str(&json).unwrap();
+        match back.kind {
+            AuditEventKind::RecordingStopped {
+                duration_ms,
+                markers_count,
+                ..
+            } => {
+                assert_eq!(duration_ms, Some(5000));
+                assert_eq!(markers_count, 3);
+            }
+            _ => panic!("wrong variant"),
+        }
+    }
+
+    #[test]
+    fn recording_stopped_event_no_duration() {
+        let event = AuditEvent::new(AuditEventKind::RecordingStopped {
+            session_id: "s".into(),
+            recording_id: "r".into(),
+            duration_ms: None,
+            markers_count: 0,
+        });
+        let json = serde_json::to_string(&event).unwrap();
+        let back: AuditEvent = serde_json::from_str(&json).unwrap();
+        match back.kind {
+            AuditEventKind::RecordingStopped { duration_ms, .. } => {
+                assert!(duration_ms.is_none());
+            }
+            _ => panic!("wrong variant"),
+        }
+    }
 }
