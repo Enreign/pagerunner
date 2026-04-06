@@ -111,6 +111,15 @@ pub struct Marker {
     pub description: Option<String>,
 }
 
+/// A zoom keyframe — stored in metadata, applied during render.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ZoomKeyframe {
+    pub ts_ms: u64,
+    pub x: f64,
+    pub y: f64,
+    pub scale: f64, // 1.0 = no zoom, 1.8 = zoomed in
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RecordingMetadata {
     pub recording_id: String,
@@ -128,6 +137,8 @@ pub struct RecordingMetadata {
     pub duration_ms: Option<u64>,
     pub format: String,
     pub markers: Vec<Marker>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub zoom_keyframes: Vec<ZoomKeyframe>,
 }
 
 /// Resolve the base recordings directory.
@@ -200,9 +211,21 @@ impl RecordingState {
                 duration_ms: None,
                 format,
                 markers: vec![],
+                zoom_keyframes: vec![],
             },
             recording_dir: PathBuf::new(),
         }
+    }
+
+    /// Add a zoom keyframe at the current elapsed time.
+    pub fn add_zoom(&mut self, x: f64, y: f64, scale: f64) {
+        let ts_ms = self.elapsed_ms();
+        self.metadata.zoom_keyframes.push(ZoomKeyframe {
+            ts_ms,
+            x,
+            y,
+            scale: scale.clamp(1.0, 3.0),
+        });
     }
 
     pub fn add_marker(&mut self, label: String, description: Option<String>, ts_ms: u64) {

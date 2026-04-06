@@ -2,6 +2,88 @@ use crate::error::{PagerunnerError, Result};
 use crate::recording::{get_recording_index, Marker, RecordingMetadata};
 use std::path::{Path, PathBuf};
 
+/// Build an ffmpeg filter for smooth zoom from keyframes.
+/// Uses simple `between(t,...)` expressions with linear interpolation.
+/// Returns None if there are no zoom keyframes.
+pub fn build_zoom_filter(
+    keyframes: &[crate::recording::ZoomKeyframe],
+    _total_duration_ms: u64,
+    video_w: u32,
+    video_h: u32,
+) -> Option<String> {
+    if keyframes.is_empty() {
+        return None;
+    }
+
+    let transition = 0.8_f64;
+
+    // Build a scale expression: chain of if(between(t,a,b), lerp, ...) ending in 1
+    // Each zoom_in/zoom_out pair produces two segments
+    let mut parts: Vec<String> = Vec::new();
+
+    for (i, kf) in keyframes.iter().enumerate() {
+        let t0 = kf.ts_ms as f64 / 1000.0;
+        let t1 = t0 + transition;
+
+        let from_scale = if i > 0 { keyframes[i - 1].scale } else { 1.0 };
+        let to_scale = kf.scale;
+
+        if (to_scale - from_scale).abs() < 0.01 {
+            continue;
+        }
+
+        // Linear interp: from_scale + (to_scale - from_scale) * (t - t0) / dur
+        // Held after transition completes until next keyframe
+        let next_t = if i + 1 < keyframes.len() {
+            keyframes[i + 1].ts_ms as f64 / 1000.0
+        } else {
+            t1 + 10.0 // hold for a while
+        };
+
+        // During transition: interpolate
+        parts.push(format!(
+            "if(between(t,{t0:.2},{t1:.2}),{from:.3}+{delta:.3}*(t-{t0:.2})/{dur:.2},0)",
+            t0 = t0, t1 = t1,
+            from = from_scale,
+            delta = to_scale - from_scale,
+            dur = transition,
+        ));
+        // After transition until next keyframe: hold
+        parts.push(format!(
+            "if(between(t,{t1:.2},{next:.2}),{val:.3},0)",
+            t1 = t1, next = next_t, val = to_scale
+        ));
+    }
+
+    if parts.is_empty() {
+        return None;
+    }
+
+    // Sum all parts + base of 1 for times outside any zoom
+    // (parts are non-overlapping, only one is non-zero at any time)
+    // We add a base and subtract 1 for each non-zero part to avoid double-counting
+    // Actually simpler: use max(1, sum_of_parts) since parts return 0 outside their range
+    let scale_expr = format!("max(1,{})", parts.join("+"));
+
+    // Find the zoom-in center (use the first zoom-in keyframe for simplicity)
+    let zoom_kf = keyframes.iter().find(|k| k.scale > 1.01);
+    let (cx, cy) = match zoom_kf {
+        Some(k) => (k.x, k.y),
+        None => (video_w as f64 / 2.0, video_h as f64 / 2.0),
+    };
+
+    // Crop centered on (cx, cy), clamped to video bounds
+    let s = &scale_expr;
+    let crop_w = format!("trunc(iw/({s})/2)*2"); // ensure even
+    let crop_h = format!("trunc(ih/({s})/2)*2");
+    let crop_x = format!("trunc(min(max({cx:.0}-iw/({s})/2,0),iw-iw/({s}))/2)*2");
+    let crop_y = format!("trunc(min(max({cy:.0}-ih/({s})/2,0),ih-ih/({s}))/2)*2");
+
+    Some(format!(
+        "crop=w='{crop_w}':h='{crop_h}':x='{crop_x}':y='{crop_y}',scale={video_w}:{video_h}:flags=lanczos"
+    ))
+}
+
 /// Apply motion interpolation to upscale frame rate for smooth playback.
 /// Uses ffmpeg minterpolate with blend mode (fast, good quality for UI content).
 async fn apply_minterpolate(
@@ -431,11 +513,82 @@ pub async fn render_annotated(
         video_path.clone()
     };
 
+    // Step 0.5: Apply zoom keyframes (smooth crop+scale at output fps)
+    let zoomed_path = dir.join(format!("zoomed.{}", entry.format));
+    let zoom_source = if !metadata.zoom_keyframes.is_empty() {
+        // Get video dimensions
+        let probe = tokio::process::Command::new("ffprobe")
+            .args(&[
+                "-v", "error", "-select_streams", "v:0",
+                "-show_entries", "stream=width,height",
+                "-of", "default=noprint_wrappers=1:nokey=1",
+                smooth_source.to_str().unwrap_or(""),
+            ])
+            .output()
+            .await
+            .ok();
+        let dims: Vec<u32> = probe
+            .map(|p| {
+                String::from_utf8_lossy(&p.stdout)
+                    .lines()
+                    .filter_map(|l| l.trim().parse().ok())
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        if dims.len() >= 2 {
+            if let Some(zoom_filter) =
+                build_zoom_filter(&metadata.zoom_keyframes, total_ms, dims[0], dims[1])
+            {
+                tracing::info!(filter_len = zoom_filter.len(), "Applying zoom filter");
+                let output = tokio::process::Command::new("ffmpeg")
+                    .args(&[
+                        "-i", smooth_source.to_str().unwrap_or(""),
+                        "-vf", &zoom_filter,
+                        "-c:v", "libx264", "-pix_fmt", "yuv420p", "-preset", "fast",
+                        "-y", zoomed_path.to_str().unwrap_or(""),
+                    ])
+                    .stdout(std::process::Stdio::null())
+                    .stderr(std::process::Stdio::piped())
+                    .output()
+                    .await
+                    .ok();
+                let status = output.as_ref().map(|o| o.status);
+                if let Some(ref o) = output {
+                    if !o.status.success() {
+                        let stderr = String::from_utf8_lossy(&o.stderr);
+                        // Get the last 500 chars which has the actual error
+                        let err_tail: String = stderr.chars().rev().take(500).collect::<Vec<_>>().into_iter().rev().collect();
+                        tracing::warn!(
+                            stderr = %err_tail,
+                            "Zoom ffmpeg failed"
+                        );
+                    }
+                }
+                if matches!(status, Some(s) if s.success()) {
+                    tracing::info!("Zoom post-processing complete");
+                    // Clean up interpolated if we produced zoomed
+                    let _ = std::fs::remove_file(&interpolated_path);
+                    zoomed_path.clone()
+                } else {
+                    tracing::warn!("Zoom filter failed — using unzoomed video");
+                    smooth_source.clone()
+                }
+            } else {
+                smooth_source.clone()
+            }
+        } else {
+            smooth_source.clone()
+        }
+    } else {
+        smooth_source.clone()
+    };
+
     // Step 1: Burn subtitles into the video if requested
     let subtitled_path = if with_overlays && !metadata.markers.is_empty() {
         let path = dir.join(format!("subtitled.{}", entry.format));
         burn_subtitles_overlay(
-            &smooth_source,
+            &zoom_source,
             &metadata.markers,
             total_ms,
             &path,
@@ -450,7 +603,7 @@ pub async fn render_annotated(
     let source = subtitled_path
         .as_ref()
         .map(|p| PathBuf::from(p))
-        .unwrap_or_else(|| smooth_source.clone());
+        .unwrap_or_else(|| zoom_source.clone());
     let polished_path = dir.join(format!("annotated.{}", entry.format));
     let polished = apply_window_chrome(
         &source,
@@ -463,9 +616,8 @@ pub async fn render_annotated(
     .await;
 
     // Cleanup intermediate files
-    if polished.is_some() || subtitled_path.is_some() {
-        let _ = std::fs::remove_file(&interpolated_path);
-    }
+    let _ = std::fs::remove_file(&interpolated_path);
+    let _ = std::fs::remove_file(&zoomed_path);
     if polished.is_some() {
         if let Some(ref sub_path) = subtitled_path {
             let _ = std::fs::remove_file(sub_path);

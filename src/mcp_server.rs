@@ -2997,12 +2997,14 @@ async fn dispatch_tool_inner(
                 ).await {
                     let v = &r["result"]["value"];
                     if let (Some(x), Some(y)) = (v["x"].as_f64(), v["y"].as_f64()) {
-                        browser::apply_css_zoom(session, tid, x, y, 1.8).await;
+                        // Store zoom-in keyframe — applied during render
+                        if let Some(rec) = &mut session.recording {
+                            rec.state.add_zoom(x, y, 1.8);
+                        }
                         let _ = browser::move_recording_cursor(session, tid, x, y, false).await;
-                        // Wait for zoom + cursor to settle (0.8s zoom transition)
-                        tokio::time::sleep(std::time::Duration::from_millis(900)).await;
+                        tokio::time::sleep(std::time::Duration::from_millis(600)).await;
                         let _ = browser::move_recording_cursor(session, tid, x, y, true).await;
-                        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+                        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
                     }
                 }
             }
@@ -3012,8 +3014,9 @@ async fn dispatch_tool_inner(
             // Zoom out after click
             if is_recording {
                 tokio::time::sleep(std::time::Duration::from_millis(800)).await;
-                browser::reset_css_zoom(session, tid).await;
-                tokio::time::sleep(std::time::Duration::from_millis(1100)).await;
+                if let Some(rec) = &mut session.recording {
+                    rec.state.add_zoom(0.0, 0.0, 1.0);
+                }
             }
             // Track selector stability — best-effort, never fails the tool call
             if let Some(ref tab_url) = tab_url {
@@ -3261,12 +3264,14 @@ async fn dispatch_tool_inner(
                 ).await {
                     let v = &r["result"]["value"];
                     if let (Some(x), Some(y)) = (v["x"].as_f64(), v["y"].as_f64()) {
-                        browser::apply_css_zoom(session, tid, x, y, 1.8).await;
+                        // Store zoom-in keyframe — applied during render
+                        if let Some(rec) = &mut session.recording {
+                            rec.state.add_zoom(x, y, 1.8);
+                        }
                         let _ = browser::move_recording_cursor(session, tid, x, y, false).await;
-                        // Wait for zoom + cursor to settle (0.8s zoom transition)
-                        tokio::time::sleep(std::time::Duration::from_millis(900)).await;
+                        tokio::time::sleep(std::time::Duration::from_millis(600)).await;
                         let _ = browser::move_recording_cursor(session, tid, x, y, true).await;
-                        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+                        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
                     }
                 }
             }
@@ -3280,8 +3285,9 @@ async fn dispatch_tool_inner(
             // Zoom out after fill
             if is_recording {
                 tokio::time::sleep(std::time::Duration::from_millis(600)).await;
-                browser::reset_css_zoom(session, tid).await;
-                tokio::time::sleep(std::time::Duration::from_millis(1100)).await;
+                if let Some(rec) = &mut session.recording {
+                    rec.state.add_zoom(0.0, 0.0, 1.0);
+                }
             }
             // Track selector stability — best-effort, never fails the tool call
             if let Some(ref tab_url) = tab_url {
