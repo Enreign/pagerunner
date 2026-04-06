@@ -1002,7 +1002,7 @@ pub async fn apply_css_zoom(session: &mut Session, target_id: &str, x: f64, y: f
         let ox = (x / vw * 100.0).clamp(0.0, 100.0);
         let oy = (y / vh * 100.0).clamp(0.0, 100.0);
         let js = format!(
-            "document.documentElement.style.transition='transform 0.4s cubic-bezier(0.25,0.1,0.25,1)';document.documentElement.style.transformOrigin='{:.1}% {:.1}%';document.documentElement.style.transform='scale({:.2})';",
+            "document.documentElement.style.transition='transform 0.8s cubic-bezier(0.16,1,0.3,1)';document.documentElement.style.transformOrigin='{:.1}% {:.1}%';document.documentElement.style.transform='scale({:.2})';",
             ox, oy, scale
         );
         let _ = session.cdp.send_on_session(
@@ -1018,7 +1018,7 @@ pub async fn reset_css_zoom(session: &mut Session, target_id: &str) {
     if let Ok(sid) = attach_to_target(session, target_id).await {
         let _ = session.cdp.send_on_session(
             "Runtime.evaluate",
-            json!({"expression": "document.documentElement.style.transform='none';setTimeout(()=>{document.documentElement.style.transition='';document.documentElement.style.transform='';document.documentElement.style.transformOrigin='';},500);", "returnByValue": true}),
+            json!({"expression": "document.documentElement.style.transition='transform 1s cubic-bezier(0.16,1,0.3,1)';document.documentElement.style.transform='scale(1)';setTimeout(()=>{document.documentElement.style.transition='';document.documentElement.style.transform='';document.documentElement.style.transformOrigin='';},1200);", "returnByValue": true}),
             Some(sid),
         ).await;
     }
