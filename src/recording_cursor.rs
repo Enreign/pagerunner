@@ -120,6 +120,33 @@ pub fn click_ripple_js(x: f64, y: f64) -> String {
     )
 }
 
+/// JavaScript to fade the page out (before navigation).
+pub const FADE_OUT_JS: &str = r#"
+(() => {
+    const overlay = document.createElement('div');
+    overlay.id = '__pr_fade';
+    overlay.style.cssText = 'position:fixed;inset:0;z-index:2147483646;background:white;opacity:0;transition:opacity 0.3s ease-in;pointer-events:none;';
+    document.body.appendChild(overlay);
+    // Trigger reflow, then fade
+    overlay.offsetHeight;
+    overlay.style.opacity = '1';
+})()
+"#;
+
+/// JavaScript to fade the page in (after navigation loads).
+pub const FADE_IN_JS: &str = r#"
+(() => {
+    // Create a white overlay that fades out
+    const overlay = document.createElement('div');
+    overlay.id = '__pr_fade';
+    overlay.style.cssText = 'position:fixed;inset:0;z-index:2147483646;background:white;opacity:1;transition:opacity 0.4s ease-out;pointer-events:none;';
+    document.body.appendChild(overlay);
+    overlay.offsetHeight;
+    overlay.style.opacity = '0';
+    setTimeout(() => overlay.remove(), 500);
+})()
+"#;
+
 #[cfg(test)]
 mod tests {
     use super::*;

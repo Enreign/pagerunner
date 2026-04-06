@@ -465,6 +465,35 @@ pub fn delete_recording_index(db: &crate::db::Db, recording_id: &str) -> Result<
     db.delete(RECORDING_TABLE, recording_id)
 }
 
+/// Delete recordings older than `retention_days`. Returns count of deleted recordings.
+pub fn cleanup_old_recordings(db: &crate::db::Db, retention_days: u64) -> Result<usize> {
+    if retention_days == 0 {
+        return Ok(0);
+    }
+    let cutoff = chrono::Utc::now() - chrono::Duration::days(retention_days as i64);
+    let all = db.scan_prefix(RECORDING_TABLE, "")?;
+    let mut deleted = 0;
+    for (_key, bytes) in all {
+        let entry: RecordingIndexEntry = match serde_json::from_slice(&bytes) {
+            Ok(e) => e,
+            Err(_) => continue,
+        };
+        if entry.started_at < cutoff {
+            // Delete files from disk
+            let dir = std::path::PathBuf::from(&entry.dir_path);
+            if dir.exists() {
+                let _ = std::fs::remove_dir_all(&dir);
+            }
+            let _ = db.delete(RECORDING_TABLE, &entry.recording_id);
+            deleted += 1;
+        }
+    }
+    if deleted > 0 {
+        tracing::info!(deleted, retention_days, "Cleaned up old recordings");
+    }
+    Ok(deleted)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

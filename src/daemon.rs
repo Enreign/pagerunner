@@ -55,6 +55,15 @@ pub async fn run() -> Result<()> {
         );
     }
 
+    // Cleanup old recordings based on retention policy
+    if config.recording.retention_days > 0 {
+        match crate::recording::cleanup_old_recordings(&db, config.recording.retention_days) {
+            Ok(n) if n > 0 => tracing::info!(deleted = n, "Recording retention cleanup"),
+            Err(e) => tracing::warn!(error = %e, "Recording retention cleanup failed"),
+            _ => {}
+        }
+    }
+
     // Background reconnection task: periodically checks for sessions in Reconnecting
     // state and attempts to reconnect them. Acquires and releases the lock around
     // each step to avoid blocking tool calls.

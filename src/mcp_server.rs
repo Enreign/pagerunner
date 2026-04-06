@@ -2116,6 +2116,79 @@ async fn dispatch_tool_inner(
                 .await;
             }
 
+            // Auto-record: start recording automatically if configured
+            if config.recording.auto_record && !anonymize {
+                let mut mgr = sessions.lock().await;
+                if let Some(session) = mgr.get_mut(&id) {
+                    // Get the first tab
+                    if let Ok(tabs) = crate::browser::list_tabs(&session.cdp).await {
+                        if let Some(tab) = tabs.first() {
+                            let rec_id = format!(
+                                "rec_{}",
+                                &uuid::Uuid::new_v4().to_string().replace('-', "")[..12]
+                            );
+                            let base_dir = crate::recording::resolve_recordings_dir(
+                                config.recording.storage_dir.as_deref(),
+                            );
+                            let rec_dir = crate::recording::recording_dir_path(
+                                &base_dir,
+                                &profile.name,
+                                &format!("auto-{}", rec_id),
+                            );
+                            let format_str = match config.recording.format {
+                                crate::config::RecordingFormat::Webm => "webm",
+                                crate::config::RecordingFormat::Mp4 => "mp4",
+                            };
+                            let state = crate::recording::RecordingState::new(
+                                rec_id.clone(),
+                                id.clone(),
+                                profile.name.clone(),
+                                Some("auto".into()),
+                                vec!["auto-record".into()],
+                                None,
+                                format_str.to_string(),
+                            );
+                            let fps = config.recording.fps.max(1).min(15);
+                            if let Ok(mut handle) = crate::recording::RecordingHandle::start(
+                                state,
+                                rec_dir,
+                                format_str,
+                                fps,
+                                config.recording.output_fps.max(fps),
+                            )
+                            .await
+                            {
+                                let cdp_sid = crate::browser::attach_to_target(
+                                    session,
+                                    &tab.target_id,
+                                )
+                                .await
+                                .unwrap_or_default();
+                                let frame_tx = handle.frame_tx_clone();
+                                let capture = crate::recording::spawn_frame_capture(
+                                    session.cdp.clone(),
+                                    cdp_sid,
+                                    frame_tx,
+                                    fps,
+                                );
+                                handle.set_capture_task(capture);
+                                let _ = crate::browser::inject_recording_cursor(
+                                    session,
+                                    &tab.target_id,
+                                )
+                                .await;
+                                session.recording = Some(handle);
+                                tracing::info!(
+                                    recording_id = %rec_id,
+                                    profile = %profile.name,
+                                    "Auto-recording started"
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+
             Ok(
                 serde_json::json!({"ok": true, "session_id": id, "stealth": stealth_val})
                     .to_string(),
@@ -2408,16 +2481,35 @@ async fn dispatch_tool_inner(
             }
             session.nav_count += 1;
 
+            // Fade out before navigation if recording
+            let is_recording = session.recording.is_some();
+            if is_recording {
+                let sid_cdp = browser::attach_to_target(session, tid).await.unwrap_or_default();
+                let _ = session.cdp.send_on_session(
+                    "Runtime.evaluate",
+                    json!({"expression": crate::recording_cursor::FADE_OUT_JS, "returnByValue": true}),
+                    Some(sid_cdp),
+                ).await;
+                tokio::time::sleep(std::time::Duration::from_millis(350)).await;
+            }
+
             browser::navigate(session, tid, url).await?;
             // Record URL after successful navigation for untrusted-content domain labeling.
             if let Ok(mut map) = session.tab_urls.write() {
                 map.insert(tid.to_string(), url.to_string());
             }
-            // Re-inject cursor after navigation (DOM was destroyed)
-            if session.recording.is_some() {
-                // Wait briefly for page to load enough for body to exist
-                tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+            // Re-inject cursor + fade in after navigation
+            if is_recording {
+                tokio::time::sleep(std::time::Duration::from_millis(800)).await;
                 let _ = browser::inject_recording_cursor(session, tid).await;
+                // Fade in
+                let sid_cdp = browser::attach_to_target(session, tid).await.unwrap_or_default();
+                let _ = session.cdp.send_on_session(
+                    "Runtime.evaluate",
+                    json!({"expression": crate::recording_cursor::FADE_IN_JS, "returnByValue": true}),
+                    Some(sid_cdp),
+                ).await;
+                tokio::time::sleep(std::time::Duration::from_millis(500)).await;
             }
             Ok(serde_json::json!({"ok": true, "url": url, "target_id": tid}).to_string())
         }
@@ -2983,6 +3075,27 @@ async fn dispatch_tool_inner(
             } else {
                 text.to_string()
             };
+            // Move cursor to selector if recording and selector is provided
+            if session.recording.is_some() {
+                if let Some(sel) = selector {
+                    let js = browser::build_selector_chain_js(sel);
+                    let sid_cdp = browser::attach_to_target(session, tid).await.unwrap_or_default();
+                    if let Ok(r) = session.cdp.send_on_session(
+                        "Runtime.evaluate",
+                        json!({"expression": &js, "returnByValue": true}),
+                        Some(sid_cdp),
+                    ).await {
+                        let v = &r["result"]["value"];
+                        if let (Some(x), Some(y)) = (v["x"].as_f64(), v["y"].as_f64()) {
+                            let _ = browser::move_recording_cursor(session, tid, x, y, false).await;
+                            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                            let _ = browser::move_recording_cursor(session, tid, x, y, true).await;
+                            tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+                        }
+                    }
+                }
+            }
+
             browser::type_text(session, tid, &type_text_value, selector).await?;
             Ok(serde_json::json!({"ok": true}).to_string())
         }
@@ -3258,6 +3371,41 @@ async fn dispatch_tool_inner(
             let selector = args["selector"].as_str();
             let mut mgr = sessions.lock().await;
             let session = mgr.get_live(sid)?;
+
+            // Move cursor to scroll target if recording
+            if session.recording.is_some() {
+                if let Some(sel) = selector {
+                    // Scroll to element — move cursor there
+                    let js = browser::build_selector_chain_js(sel);
+                    let sid_cdp = browser::attach_to_target(session, tid).await.unwrap_or_default();
+                    if let Ok(r) = session.cdp.send_on_session(
+                        "Runtime.evaluate",
+                        json!({"expression": &js, "returnByValue": true}),
+                        Some(sid_cdp),
+                    ).await {
+                        let v = &r["result"]["value"];
+                        if let (Some(cx), Some(cy)) = (v["x"].as_f64(), v["y"].as_f64()) {
+                            let _ = browser::move_recording_cursor(session, tid, cx, cy, false).await;
+                            tokio::time::sleep(std::time::Duration::from_millis(400)).await;
+                        }
+                    }
+                } else {
+                    // Scroll by offset — move cursor to center of viewport
+                    let sid_cdp = browser::attach_to_target(session, tid).await.unwrap_or_default();
+                    if let Ok(r) = session.cdp.send_on_session(
+                        "Runtime.evaluate",
+                        json!({"expression": "({x: window.innerWidth/2, y: window.innerHeight/2})", "returnByValue": true}),
+                        Some(sid_cdp),
+                    ).await {
+                        let v = &r["result"]["value"];
+                        if let (Some(cx), Some(cy)) = (v["x"].as_f64(), v["y"].as_f64()) {
+                            let _ = browser::move_recording_cursor(session, tid, cx, cy, false).await;
+                            tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+                        }
+                    }
+                }
+            }
+
             browser::scroll(session, tid, x, y, selector).await?;
             Ok(serde_json::json!({"ok": true}).to_string())
         }
