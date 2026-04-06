@@ -175,6 +175,47 @@ pub struct NerConfig {
     pub enabled: Option<bool>,
 }
 
+fn default_recording_fps() -> u8 {
+    2
+}
+
+#[derive(Debug, Clone, PartialEq, Default, Deserialize, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum RecordingFormat {
+    #[default]
+    Mp4,
+    Webm,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct RecordingConfig {
+    #[serde(default)]
+    pub storage_dir: Option<String>,
+    #[serde(default)]
+    pub retention_days: u64,
+    #[serde(default)]
+    pub max_size_mb: u64,
+    #[serde(default)]
+    pub format: RecordingFormat,
+    #[serde(default)]
+    pub auto_record: bool,
+    #[serde(default = "default_recording_fps")]
+    pub fps: u8,
+}
+
+impl Default for RecordingConfig {
+    fn default() -> Self {
+        Self {
+            storage_dir: None,
+            retention_days: 0,
+            max_size_mb: 0,
+            format: RecordingFormat::default(),
+            auto_record: false,
+            fps: default_recording_fps(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize, Default)]
 pub struct PagerunnerConfig {
     #[serde(default)]
@@ -191,6 +232,8 @@ pub struct PagerunnerConfig {
     pub checkpoints: CheckpointConfig,
     #[serde(default)]
     pub retention: RetentionConfig,
+    #[serde(default)]
+    pub recording: RecordingConfig,
 }
 
 impl PagerunnerConfig {
@@ -600,5 +643,49 @@ user_data_dir = "/tmp/chrome"
             Some("/tmp/chrome")
         );
         assert!(cfg.profiles[0].debug_port.is_none());
+    }
+
+    #[test]
+    fn test_recording_config_defaults() {
+        let config = PagerunnerConfig::default();
+        assert!(config.recording.storage_dir.is_none());
+        assert_eq!(config.recording.retention_days, 0);
+        assert_eq!(config.recording.max_size_mb, 0);
+        assert_eq!(config.recording.format, RecordingFormat::Mp4);
+        assert!(!config.recording.auto_record);
+        assert_eq!(config.recording.fps, 2);
+    }
+
+    #[test]
+    fn test_recording_config_from_toml() {
+        let toml = r#"
+[recording]
+storage_dir = "/tmp/recordings"
+retention_days = 30
+max_size_mb = 500
+format = "webm"
+auto_record = true
+fps = 5
+"#;
+        let config: PagerunnerConfig = toml::from_str(toml).unwrap();
+        assert_eq!(config.recording.storage_dir.as_deref(), Some("/tmp/recordings"));
+        assert_eq!(config.recording.retention_days, 30);
+        assert_eq!(config.recording.max_size_mb, 500);
+        assert_eq!(config.recording.format, RecordingFormat::Webm);
+        assert!(config.recording.auto_record);
+        assert_eq!(config.recording.fps, 5);
+    }
+
+    #[test]
+    fn test_recording_config_absent_gives_defaults() {
+        let toml = r#"
+[[profiles]]
+name = "test"
+display_name = "Test"
+user_data_dir = "/tmp/t"
+"#;
+        let cfg: PagerunnerConfig = toml::from_str(toml).unwrap();
+        assert!(!cfg.recording.auto_record);
+        assert_eq!(cfg.recording.fps, 2);
     }
 }
