@@ -2904,13 +2904,13 @@ async fn dispatch_tool_inner(
                 ).await {
                     let v = &r["result"]["value"];
                     if let (Some(x), Some(y)) = (v["x"].as_f64(), v["y"].as_f64()) {
-                        // Move cursor first — CSS animates over 0.6s
+                        // Set cursor target — physics loop handles smooth movement
                         let _ = browser::move_recording_cursor(session, tid, x, y, false).await;
-                        // Wait for animation to complete + capture frames along the path
-                        tokio::time::sleep(std::time::Duration::from_millis(700)).await;
+                        // Wait for spring animation to settle (~0.5s)
+                        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
                         // Show click ripple at destination
                         let _ = browser::move_recording_cursor(session, tid, x, y, true).await;
-                        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+                        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
                     }
                 }
             }
@@ -4205,7 +4205,14 @@ async fn dispatch_tool_inner(
 
             let fps = config.recording.fps.max(1).min(10);
             let mut handle =
-                crate::recording::RecordingHandle::start(state, rec_dir, format_str, fps).await?;
+                crate::recording::RecordingHandle::start(
+                    state,
+                    rec_dir,
+                    format_str,
+                    fps,
+                    config.recording.output_fps.max(fps),
+                )
+                .await?;
 
             // Get the CDP session ID used for this target
             let cdp_session_id =

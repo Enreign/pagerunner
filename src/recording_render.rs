@@ -2,6 +2,116 @@ use crate::error::{PagerunnerError, Result};
 use crate::recording::{get_recording_index, Marker, RecordingMetadata};
 use std::path::{Path, PathBuf};
 
+/// Apply window chrome post-processing: gradient background, rounded corners, shadow.
+/// Takes the raw video and produces a polished version with padding and effects.
+pub async fn apply_window_chrome(
+    input_path: &Path,
+    output_path: &Path,
+    padding: u32,
+    corner_radius: u32,
+    bg_color_start: &str,
+    bg_color_end: &str,
+) -> Option<String> {
+    // Step 1: Generate gradient background image with ImageMagick
+    let tmp = std::env::temp_dir();
+
+    // Get video dimensions
+    let probe = tokio::process::Command::new("ffprobe")
+        .args(&[
+            "-v", "error",
+            "-select_streams", "v:0",
+            "-show_entries", "stream=width,height",
+            "-of", "default=noprint_wrappers=1:nokey=1",
+            input_path.to_str()?,
+        ])
+        .output()
+        .await
+        .ok()?;
+
+    let dims: Vec<u32> = String::from_utf8_lossy(&probe.stdout)
+        .lines()
+        .filter_map(|l| l.trim().parse().ok())
+        .collect();
+    if dims.len() < 2 {
+        return None;
+    }
+    let (vid_w, vid_h) = (dims[0], dims[1]);
+    let canvas_w = vid_w + padding * 2;
+    let canvas_h = vid_h + padding * 2;
+
+    // Generate a rounded-corner mask for the video
+    let mask_path = tmp.join("__pr_mask.png");
+    let mask_status = tokio::process::Command::new("magick")
+        .args(&[
+            "-size", &format!("{}x{}", vid_w, vid_h),
+            "xc:none",
+            "-fill", "white",
+            "-draw", &format!("roundrectangle 0,0 {},{} {},{}", vid_w - 1, vid_h - 1, corner_radius, corner_radius),
+            mask_path.to_str().unwrap(),
+        ])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .await
+        .ok()?;
+
+    if !mask_status.success() {
+        return None;
+    }
+
+    // Generate gradient background
+    let bg_path = tmp.join("__pr_bg.png");
+    let bg_status = tokio::process::Command::new("magick")
+        .args(&[
+            "-size", &format!("{}x{}", canvas_w, canvas_h),
+            &format!("gradient:{}-{}", bg_color_start, bg_color_end),
+            bg_path.to_str().unwrap(),
+        ])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .await
+        .ok()?;
+
+    if !bg_status.success() {
+        return None;
+    }
+
+    // Build ffmpeg filter: apply rounded mask, then overlay on gradient background
+    // [0] = input video, [1] = mask, [2] = background
+    let filter = format!(
+        "[0:v][1:v]alphamerge[masked];[2:v][masked]overlay={}:{}",
+        padding, padding
+    );
+
+    let status = tokio::process::Command::new("ffmpeg")
+        .args(&[
+            "-i", input_path.to_str()?,
+            "-i", mask_path.to_str().unwrap(),
+            "-i", bg_path.to_str().unwrap(),
+            "-filter_complex", &filter,
+            "-c:v", "libx264",
+            "-pix_fmt", "yuv420p",
+            "-preset", "fast",
+            "-y", output_path.to_str()?,
+        ])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .await
+        .ok()?;
+
+    // Cleanup temp files
+    let _ = std::fs::remove_file(&mask_path);
+    let _ = std::fs::remove_file(&bg_path);
+
+    if status.success() {
+        Some(output_path.to_str()?.to_string())
+    } else {
+        None
+    }
+}
+
 /// Overlay appearance settings, resolved from per-call args > config.toml > defaults.
 pub struct OverlayStyle {
     pub position: String,   // "top" or "bottom"
@@ -282,14 +392,14 @@ pub async fn render_annotated(
     std::fs::write(&srt_path, &srt_content)
         .map_err(|e| PagerunnerError::Config(format!("Failed to write SRT: {}", e)))?;
 
-    // Burn subtitles into the video if requested
-    let annotated = if with_overlays && !metadata.markers.is_empty() {
-        let annotated_path = dir.join(format!("annotated.{}", entry.format));
+    // Step 1: Burn subtitles into the video if requested
+    let subtitled_path = if with_overlays && !metadata.markers.is_empty() {
+        let path = dir.join(format!("subtitled.{}", entry.format));
         burn_subtitles_overlay(
             &video_path,
             &metadata.markers,
             total_ms,
-            &annotated_path,
+            &path,
             style,
         )
         .await
@@ -297,9 +407,36 @@ pub async fn render_annotated(
         None
     };
 
+    // Step 2: Apply window chrome (gradient background + rounded corners)
+    let source = subtitled_path
+        .as_ref()
+        .map(|p| PathBuf::from(p))
+        .unwrap_or_else(|| video_path.clone());
+    let polished_path = dir.join(format!("annotated.{}", entry.format));
+    let polished = apply_window_chrome(
+        &source,
+        &polished_path,
+        40,   // padding
+        16,   // corner radius
+        "#1e1e2e",  // dark gradient start (catppuccin mocha)
+        "#313244",  // dark gradient end
+    )
+    .await;
+
+    // Cleanup intermediate subtitled file if we produced a polished one
+    if polished.is_some() {
+        if let Some(ref sub_path) = subtitled_path {
+            let _ = std::fs::remove_file(sub_path);
+        }
+    }
+
+    let final_video = polished
+        .as_deref()
+        .or(subtitled_path.as_deref());
+
     Ok(serde_json::json!({
         "srt_path": srt_path.to_str().unwrap(),
-        "annotated_video": annotated.as_deref(),
+        "annotated_video": final_video,
         "video_path": video_path.to_str().unwrap(),
     })
     .to_string())

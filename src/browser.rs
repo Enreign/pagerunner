@@ -972,7 +972,8 @@ pub async fn animated_fill(
                 Some(session_id.clone()),
             )
             .await?;
-        tokio::time::sleep(std::time::Duration::from_millis(80)).await;
+        // ~120ms per character — at 10fps capture, each char gets its own frame
+        tokio::time::sleep(std::time::Duration::from_millis(120)).await;
     }
 
     // Brief pause to show the completed text

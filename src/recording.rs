@@ -146,11 +146,14 @@ pub struct RecordingHandle {
 
 impl RecordingHandle {
     /// Start a new recording: spawn ffmpeg and return the handle.
+    /// `fps` is the capture rate, `output_fps` is the final video frame rate
+    /// (ffmpeg minterpolate fills in the gap for smooth motion).
     pub async fn start(
         mut state: RecordingState,
         recording_dir: PathBuf,
         format: &str,
         fps: u8,
+        output_fps: u8,
     ) -> Result<Self> {
         check_ffmpeg().await?;
 
@@ -167,24 +170,38 @@ impl RecordingHandle {
         let video_path = recording_dir.join(format!("video.{}", video_ext));
         let video_path_str = video_path.to_str().unwrap().to_string();
         let fps_str = fps.to_string();
+        let out_fps_str = output_fps.to_string();
 
-        let ffmpeg_args: Vec<String> = match format {
-            "webm" => vec![
-                "-f", "image2pipe", "-c:v", "mjpeg", "-framerate", &fps_str,
-                "-i", "pipe:0",
-                "-c:v", "libvpx-vp9", "-pix_fmt", "yuv420p",
-                "-y", &video_path_str,
-            ],
-            _ => vec![
-                "-f", "image2pipe", "-c:v", "mjpeg", "-framerate", &fps_str,
-                "-i", "pipe:0",
-                "-c:v", "libx264", "-pix_fmt", "yuv420p",
-                "-y", &video_path_str,
-            ],
+        // Motion interpolation: capture at `fps`, output at `output_fps`.
+        // minterpolate generates smooth intermediate frames using optical flow.
+        let minterpolate_filter = if output_fps > fps {
+            format!("minterpolate=fps={}:mi_mode=mci:mc_mode=aobmc:me_mode=bidir:vsbmc=1", out_fps_str)
+        } else {
+            String::new()
+        };
+
+        let mut args: Vec<&str> = vec![
+            "-f", "image2pipe", "-c:v", "mjpeg", "-framerate", &fps_str,
+            "-i", "pipe:0",
+        ];
+
+        if !minterpolate_filter.is_empty() {
+            args.push("-vf");
+            args.push(&minterpolate_filter);
         }
-        .into_iter()
-        .map(|s| s.to_string())
-        .collect();
+
+        match format {
+            "webm" => {
+                args.extend_from_slice(&["-c:v", "libvpx-vp9", "-pix_fmt", "yuv420p"]);
+            }
+            _ => {
+                args.extend_from_slice(&["-c:v", "libx264", "-pix_fmt", "yuv420p", "-preset", "fast"]);
+            }
+        }
+
+        args.extend_from_slice(&["-y", &video_path_str]);
+
+        let ffmpeg_args: Vec<String> = args.into_iter().map(|s| s.to_string()).collect();
 
         let mut child = tokio::process::Command::new("ffmpeg")
             .args(&ffmpeg_args)
@@ -783,7 +800,7 @@ mod tests {
             "mp4".into(),
         );
 
-        let handle = RecordingHandle::start(state, rec_dir.clone(), "mp4", 2).await;
+        let handle = RecordingHandle::start(state, rec_dir.clone(), "mp4", 2, 2).await;
         if handle.is_err() {
             // ffmpeg not available — skip
             eprintln!("Skipping: ffmpeg not available");
@@ -827,7 +844,7 @@ mod tests {
             "mp4".into(),
         );
 
-        let handle = RecordingHandle::start(state, rec_dir.clone(), "mp4", 2).await;
+        let handle = RecordingHandle::start(state, rec_dir.clone(), "mp4", 2, 2).await;
         if handle.is_err() {
             return; // ffmpeg not available
         }
@@ -855,7 +872,7 @@ mod tests {
             "mp4".into(),
         );
 
-        let mut handle = RecordingHandle::start(state, rec_dir.clone(), "mp4", 2).await;
+        let mut handle = RecordingHandle::start(state, rec_dir.clone(), "mp4", 2, 2).await;
         if handle.is_err() {
             return;
         }
@@ -891,7 +908,7 @@ mod tests {
             "webm".into(),
         );
 
-        let handle = RecordingHandle::start(state, rec_dir.clone(), "webm", 2).await;
+        let handle = RecordingHandle::start(state, rec_dir.clone(), "webm", 2, 2).await;
         if handle.is_err() {
             return;
         }

@@ -176,7 +176,11 @@ pub struct NerConfig {
 }
 
 fn default_recording_fps() -> u8 {
-    4
+    10
+}
+
+fn default_output_fps() -> u8 {
+    30
 }
 
 #[derive(Debug, Clone, PartialEq, Default, Deserialize, Serialize)]
@@ -199,8 +203,12 @@ pub struct RecordingConfig {
     pub format: RecordingFormat,
     #[serde(default)]
     pub auto_record: bool,
+    /// Capture frames per second (1-15, default 10)
     #[serde(default = "default_recording_fps")]
     pub fps: u8,
+    /// Output frame rate after motion interpolation (default 30)
+    #[serde(default = "default_output_fps")]
+    pub output_fps: u8,
 }
 
 impl Default for RecordingConfig {
@@ -212,6 +220,7 @@ impl Default for RecordingConfig {
             format: RecordingFormat::default(),
             auto_record: false,
             fps: default_recording_fps(),
+            output_fps: default_output_fps(),
         }
     }
 }
@@ -710,7 +719,7 @@ user_data_dir = "/tmp/chrome"
         assert_eq!(config.recording.max_size_mb, 0);
         assert_eq!(config.recording.format, RecordingFormat::Mp4);
         assert!(!config.recording.auto_record);
-        assert_eq!(config.recording.fps, 4);
+        assert_eq!(config.recording.fps, 10);
     }
 
     #[test]
@@ -743,7 +752,8 @@ user_data_dir = "/tmp/t"
 "#;
         let cfg: PagerunnerConfig = toml::from_str(toml).unwrap();
         assert!(!cfg.recording.auto_record);
-        assert_eq!(cfg.recording.fps, 2);
+        assert_eq!(cfg.recording.fps, 10);
+        assert_eq!(cfg.recording.output_fps, 30);
     }
 
     #[test]
