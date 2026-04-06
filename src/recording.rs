@@ -37,25 +37,45 @@ impl Default for ZoomState {
 impl ZoomState {
     /// Set zoom target — capture loop smoothly interpolates toward this.
     pub fn zoom_to(&mut self, x: f64, y: f64, scale: f64) {
-        self.target_x = x;
-        self.target_y = y;
         self.target_scale = scale.clamp(1.0, 3.0);
+        // Pre-clamp target position so we don't interpolate toward unreachable coords
+        if self.viewport_w > 0.0 {
+            let s = self.target_scale;
+            let clip_w = self.viewport_w / s;
+            let clip_h = self.viewport_h / s;
+            self.target_x = x.max(clip_w / 2.0).min(self.viewport_w - clip_w / 2.0);
+            self.target_y = y.max(clip_h / 2.0).min(self.viewport_h - clip_h / 2.0);
+        } else {
+            self.target_x = x;
+            self.target_y = y;
+        }
     }
 
     /// Reset to full viewport.
     pub fn zoom_out(&mut self) {
         self.target_scale = 1.0;
+        // Move target to viewport center for smooth zoom-out
+        if self.viewport_w > 0.0 {
+            self.target_x = self.viewport_w / 2.0;
+            self.target_y = self.viewport_h / 2.0;
+        }
     }
 
     /// Interpolate current values toward target (called each frame).
+    /// Uses aggressive lerp (0.35) so zoom settles in ~4 frames at 10fps.
     pub fn step(&mut self) {
-        let lerp = 0.12;
+        let lerp = 0.35;
         self.current_scale += (self.target_scale - self.current_scale) * lerp;
         self.current_x += (self.target_x - self.current_x) * lerp;
         self.current_y += (self.target_y - self.current_y) * lerp;
-        if (self.target_scale - self.current_scale).abs() < 0.01 {
+        // Snap when close — prevents lingering micro-movements
+        if (self.target_scale - self.current_scale).abs() < 0.02 {
             self.current_scale = self.target_scale;
+        }
+        if (self.target_x - self.current_x).abs() < 1.0 {
             self.current_x = self.target_x;
+        }
+        if (self.target_y - self.current_y).abs() < 1.0 {
             self.current_y = self.target_y;
         }
     }
@@ -368,6 +388,11 @@ impl RecordingHandle {
         state.metadata.duration_ms =
             Some((now - state.metadata.started_at).num_milliseconds().max(0) as u64);
 
+        // Reset zoom before stopping
+        if let Ok(mut z) = self.zoom.write() {
+            z.zoom_out();
+        }
+
         // Abort the capture task first — it holds a clone of frame_tx.
         // Without this, dropping our frame_tx doesn't close the channel.
         if let Some(task) = self.capture_task {
@@ -423,26 +448,15 @@ pub fn spawn_frame_capture(
                 break;
             }
 
-            // Step zoom interpolation and build clip params
-            let clip = {
-                let mut z = zoom.write().unwrap_or_else(|e| e.into_inner());
-                z.step();
-                z.clip_params()
-            };
-
-            let mut params = serde_json::json!({
-                "format": "jpeg",
-                "quality": 80,
-            });
-            if let Some(clip_val) = clip {
-                params["clip"] = clip_val;
-            }
-
             let result = cdp
-                .send_on_session(
+                .send_on_session_with_timeout(
                     "Page.captureScreenshot",
-                    params,
+                    serde_json::json!({
+                        "format": "jpeg",
+                        "quality": 80,
+                    }),
                     Some(cdp_session_id.clone()),
+                    std::time::Duration::from_secs(2),
                 )
                 .await;
 
@@ -452,7 +466,7 @@ pub fn spawn_frame_capture(
                     None => continue,
                 },
                 Err(e) => {
-                    tracing::debug!(error = %e, "Screenshot capture failed — skipping frame");
+                    tracing::warn!(error = %e, "Screenshot capture failed — skipping frame");
                     continue;
                 }
             };
@@ -492,9 +506,16 @@ pub fn spawn_frame_capture(
             }
 
             if frame_tx.send(frame_bytes).await.is_err() {
+                tracing::info!("Frame channel closed — stopping capture");
                 break;
             }
         }
+        // Reset CSS zoom before exiting
+        let _ = cdp.send_on_session(
+            "Runtime.evaluate",
+            serde_json::json!({"expression": "document.documentElement.style.transform='';document.documentElement.style.transformOrigin='';", "returnByValue": true}),
+            Some(cdp_session_id.clone()),
+        ).await;
         tracing::info!(frames = frame_count, "Frame capture exiting");
     })
 }

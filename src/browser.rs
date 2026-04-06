@@ -982,6 +982,48 @@ pub async fn animated_fill(
     Ok(())
 }
 
+/// Apply CSS zoom to the page — zooms into (x, y) at the given scale.
+/// Used during recording to auto-zoom into interaction areas.
+pub async fn apply_css_zoom(session: &mut Session, target_id: &str, x: f64, y: f64, scale: f64) {
+    if let Ok(sid) = attach_to_target(session, target_id).await {
+        // Get viewport dimensions
+        let vw_vh = session.cdp.send_on_session(
+            "Runtime.evaluate",
+            json!({"expression": "({w:document.documentElement.clientWidth||window.innerWidth,h:document.documentElement.clientHeight||window.innerHeight})", "returnByValue": true}),
+            Some(sid.clone()),
+        ).await;
+        let (vw, vh) = match vw_vh {
+            Ok(r) => {
+                let v = &r["result"]["value"];
+                (v["w"].as_f64().unwrap_or(1920.0), v["h"].as_f64().unwrap_or(1080.0))
+            }
+            Err(_) => (1920.0, 1080.0),
+        };
+        let ox = (x / vw * 100.0).clamp(0.0, 100.0);
+        let oy = (y / vh * 100.0).clamp(0.0, 100.0);
+        let js = format!(
+            "document.documentElement.style.transition='transform 0.4s cubic-bezier(0.25,0.1,0.25,1)';document.documentElement.style.transformOrigin='{:.1}% {:.1}%';document.documentElement.style.transform='scale({:.2})';",
+            ox, oy, scale
+        );
+        let _ = session.cdp.send_on_session(
+            "Runtime.evaluate",
+            json!({"expression": js, "returnByValue": true}),
+            Some(sid),
+        ).await;
+    }
+}
+
+/// Reset CSS zoom to normal.
+pub async fn reset_css_zoom(session: &mut Session, target_id: &str) {
+    if let Ok(sid) = attach_to_target(session, target_id).await {
+        let _ = session.cdp.send_on_session(
+            "Runtime.evaluate",
+            json!({"expression": "document.documentElement.style.transform='none';setTimeout(()=>{document.documentElement.style.transition='';document.documentElement.style.transform='';document.documentElement.style.transformOrigin='';},500);", "returnByValue": true}),
+            Some(sid),
+        ).await;
+    }
+}
+
 /// Start CDP screencast — Chrome will push frames as events.
 /// Enables the Page domain first (required for screencast events).
 pub async fn start_screencast(
