@@ -818,6 +818,44 @@ pub fn fragility_warning(
     }))
 }
 
+/// Start CDP screencast — Chrome will push frames as events.
+pub async fn start_screencast(
+    session: &mut Session,
+    target_id: &str,
+    format: &str,
+    quality: u8,
+    max_width: u32,
+    max_height: u32,
+    every_nth_frame: u32,
+) -> Result<()> {
+    let session_id = attach_to_target(session, target_id).await?;
+    session
+        .cdp
+        .send_on_session(
+            "Page.startScreencast",
+            json!({
+                "format": format,
+                "quality": quality,
+                "maxWidth": max_width,
+                "maxHeight": max_height,
+                "everyNthFrame": every_nth_frame,
+            }),
+            Some(session_id),
+        )
+        .await?;
+    Ok(())
+}
+
+/// Stop CDP screencast.
+pub async fn stop_screencast(session: &mut Session, target_id: &str) -> Result<()> {
+    let session_id = attach_to_target(session, target_id).await?;
+    session
+        .cdp
+        .send_on_session("Page.stopScreencast", json!({}), Some(session_id))
+        .await?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
