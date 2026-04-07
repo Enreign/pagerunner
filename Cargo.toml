@@ -1,5 +1,5 @@
 [workspace]
-members = [".", "crates/pagerunner-llm", "crates/pagerunner-agent"]
+members = [".", "crates/pagerunner-llm", "crates/pagerunner-agent", "crates/pagerunner-voice"]
 resolver = "2"
 
 [package]

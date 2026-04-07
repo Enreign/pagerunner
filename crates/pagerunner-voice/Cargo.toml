@@ -1,0 +1,16 @@
+[package]
+name = "pagerunner-voice"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.91"
+description = "Voice pipeline with STT, TTS, and VAD traits — standalone, no Pagerunner dependencies"
+license = "Apache-2.0"
+
+[dependencies]
+async-trait = "0.1"
+tokio = { version = "1", features = ["sync"] }
+thiserror = "2"
+tracing = "0.1"
+
+[dev-dependencies]
+tokio = { version = "1", features = ["full", "test-util"] }
