@@ -22,7 +22,16 @@ toml = "0.8"
 
 [[example]]
 name = "demo"
-required-features = []
+
+[[example]]
+name = "demo_live"
 
 [dev-dependencies.async-trait]
 version = "0.1"
+
+[dev-dependencies.dirs]
+version = "6"
+
+[dev-dependencies.uuid]
+version = "1"
+features = ["v4"]
