@@ -99,6 +99,213 @@ public struct DaemonClient: Sendable {
         }
         return innerJSON.mapValues { JSONValue($0) }
     }
+
+    // MARK: - Agent streaming
+
+    /// Enum for events received during an agent stream.
+    public enum AgentStreamEvent: Sendable {
+        case event(DaemonEventWire)
+        case result(AgentRunResult)
+        case error(String)
+    }
+
+    /// Start an agent run and stream events back.
+    ///
+    /// Opens a long-lived socket connection, sends the AgentRun message,
+    /// then reads lines until the final DaemonResponse arrives.
+    /// The caller receives an AsyncThrowingStream of AgentStreamEvent.
+    public func streamAgentRun(
+        goal: String,
+        profile: String?,
+        model: String?,
+        maxSteps: Int?,
+        mode: AgentMode
+    ) -> AsyncThrowingStream<AgentStreamEvent, Error> {
+        let socketPath = self.socketPath
+        let requestId = UUID().uuidString
+
+        // Build the agent config
+        var config: [String: Any] = [:]
+        config["autonomy"] = mode.autonomyArgs
+        if let profile { config["session_profile"] = profile }
+        if let model { config["model"] = model }
+        if let maxSteps { config["budget"] = ["max_steps": maxSteps] }
+
+        let message: [String: Any] = [
+            "type": "agent_run",
+            "id": requestId,
+            "goal": goal,
+            "config": config
+        ]
+
+        // Pre-serialize to Data so the detached closure only captures Sendable types
+        let messageData: Data
+        do {
+            var serialized = try JSONSerialization.data(withJSONObject: message)
+            serialized.append(0x0A)
+            messageData = serialized
+        } catch {
+            return AsyncThrowingStream { $0.finish(throwing: error) }
+        }
+
+        return AsyncThrowingStream { continuation in
+            Task.detached(priority: .utility) {
+                do {
+                    try Self.performStreamingRun(
+                        socketPath: socketPath,
+                        messageData: messageData,
+                        continuation: continuation
+                    )
+                } catch {
+                    continuation.finish(throwing: error)
+                }
+            }
+        }
+    }
+
+    /// Send an approval response on a fresh socket connection.
+    public func sendApproval(runId: String, approved: Bool) async throws {
+        let socketPath = self.socketPath
+        let message: [String: Any] = [
+            "type": "agent_approve",
+            "id": UUID().uuidString,
+            "run_id": runId,
+            "approved": approved
+        ]
+        var lineVar = try JSONSerialization.data(withJSONObject: message)
+        lineVar.append(0x0A)
+        let line = lineVar // immutable copy for capture
+
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            Task.detached(priority: .utility) {
+                do {
+                    try Self.sendOneShotMessage(socketPath: socketPath, line: line)
+                    continuation.resume()
+                } catch {
+                    continuation.resume(throwing: error)
+                }
+            }
+        }
+    }
+
+    /// Send an interrupt on a fresh socket connection.
+    public func sendInterrupt(runId: String) async throws {
+        let socketPath = self.socketPath
+        let message: [String: Any] = [
+            "type": "agent_interrupt",
+            "id": UUID().uuidString,
+            "run_id": runId
+        ]
+        var lineVar = try JSONSerialization.data(withJSONObject: message)
+        lineVar.append(0x0A)
+        let line = lineVar // immutable copy for capture
+
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            Task.detached(priority: .utility) {
+                do {
+                    try Self.sendOneShotMessage(socketPath: socketPath, line: line)
+                    continuation.resume()
+                } catch {
+                    continuation.resume(throwing: error)
+                }
+            }
+        }
+    }
+
+    // MARK: - Shared helpers
+
+    /// Connect to socket, send a single line, close. Used by sendApproval/sendInterrupt.
+    private static func sendOneShotMessage(socketPath: String, line: Data) throws {
+        let fd = socket(AF_UNIX, SOCK_STREAM, 0)
+        guard fd >= 0 else { throw DaemonError.daemonStopped }
+        defer { Darwin.close(fd) }
+
+        var addr = sockaddr_un()
+        addr.sun_family = sa_family_t(AF_UNIX)
+        withUnsafeMutablePointer(to: &addr.sun_path) { ptr in
+            socketPath.withCString { cstr in
+                _ = Darwin.strcpy(
+                    UnsafeMutableRawPointer(ptr).assumingMemoryBound(to: CChar.self),
+                    cstr
+                )
+            }
+        }
+        let connectResult = withUnsafePointer(to: addr) { ptr in
+            Darwin.connect(fd, UnsafeRawPointer(ptr).assumingMemoryBound(to: sockaddr.self), socklen_t(MemoryLayout<sockaddr_un>.size))
+        }
+        guard connectResult == 0 else { throw DaemonError.daemonStopped }
+        _ = line.withUnsafeBytes { Darwin.write(fd, $0.baseAddress!, $0.count) }
+    }
+
+    // MARK: - Streaming internals
+
+    /// Accepts pre-serialized newline-terminated message Data so the closure
+    /// passed to Task.detached only captures Sendable types.
+    private static func performStreamingRun(
+        socketPath: String,
+        messageData: Data,
+        continuation: AsyncThrowingStream<AgentStreamEvent, Error>.Continuation
+    ) throws {
+        let fd = socket(AF_UNIX, SOCK_STREAM, 0)
+        guard fd >= 0 else { throw DaemonError.daemonStopped }
+        defer { Darwin.close(fd) }
+
+        var addr = sockaddr_un()
+        addr.sun_family = sa_family_t(AF_UNIX)
+        withUnsafeMutablePointer(to: &addr.sun_path) { ptr in
+            socketPath.withCString { cstr in
+                _ = Darwin.strcpy(
+                    UnsafeMutableRawPointer(ptr).assumingMemoryBound(to: CChar.self),
+                    cstr
+                )
+            }
+        }
+        let connectResult = withUnsafePointer(to: addr) { ptr in
+            Darwin.connect(fd, UnsafeRawPointer(ptr).assumingMemoryBound(to: sockaddr.self), socklen_t(MemoryLayout<sockaddr_un>.size))
+        }
+        guard connectResult == 0 else { throw DaemonError.daemonStopped }
+
+        // Send the pre-serialized agent_run message
+        _ = messageData.withUnsafeBytes { Darwin.write(fd, $0.baseAddress!, $0.count) }
+
+        // Read lines until socket closes or we get a DaemonResponse
+        var lineBuffer = [UInt8]()
+        var byte = UInt8(0)
+        while Darwin.read(fd, &byte, 1) > 0 {
+            if byte == 0x0A {
+                guard !lineBuffer.isEmpty else { continue }
+                let data = Data(lineBuffer)
+                lineBuffer.removeAll(keepingCapacity: true)
+
+                // Try as DaemonEventWire first
+                if let event = try? JSONDecoder().decode(DaemonEventWire.self, from: data) {
+                    continuation.yield(.event(event))
+                    continue
+                }
+
+                // Try as final DaemonResponse (has "id" + "result"/"error" fields)
+                if let outerJSON = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+                    if let errorStr = outerJSON["error"] as? String, !errorStr.isEmpty {
+                        continuation.yield(.error(errorStr))
+                        continuation.finish()
+                        return
+                    }
+                    if let resultStr = outerJSON["result"] as? String,
+                       let resultData = resultStr.data(using: .utf8),
+                       let result = try? JSONDecoder().decode(AgentRunResult.self, from: resultData) {
+                        continuation.yield(.result(result))
+                        continuation.finish()
+                        return
+                    }
+                }
+
+                // Unknown line — skip
+            } else {
+                lineBuffer.append(byte)
+            }
+        }
+        continuation.finish()
+    }
 }
 
 // MARK: - JSONValue helper (lightweight typed wrapper for inner JSON)

@@ -71,6 +71,8 @@ struct PanelView: View {
                             SettingsView(appState: appState)
                         case .addProfile:
                             AddProfileView(appState: appState)
+                        case .agent:
+                            AgentView(appState: appState)
                         }
                     }
                 }
@@ -227,6 +229,56 @@ struct NavigationStrip: View {
                     }
                 }
             }
+
+            // Agent tab — always last
+            Rectangle().fill(Color.primary.opacity(0.1)).frame(width: 0.5)
+                .padding(.vertical, 6)
+
+            Button {
+                appState.navigation = .agent
+            } label: {
+                VStack(spacing: 3) {
+                    ZStack {
+                        Image(systemName: "cpu")
+                            .font(.system(size: 16))
+                            .foregroundColor(appState.navigation == .agent
+                                             ? Color(red: 0, green: 0.478, blue: 1)
+                                             : Color(red: 0.4, green: 0.4, blue: 0.4))
+                        // Pulsing dot when running
+                        if appState.agentState == .running {
+                            Circle()
+                                .fill(Color(red: 0, green: 0.478, blue: 1))
+                                .frame(width: 6, height: 6)
+                                .offset(x: 10, y: -8)
+                                .opacity(0.9)
+                        } else if appState.agentState == .waitingApproval {
+                            Circle()
+                                .fill(Color(red: 0.961, green: 0.620, blue: 0.043))
+                                .frame(width: 6, height: 6)
+                                .offset(x: 10, y: -8)
+                        }
+                    }
+                    Text("Agent")
+                        .font(.system(size: 10))
+                        .foregroundColor(appState.navigation == .agent
+                                         ? Color(red: 0, green: 0.478, blue: 1)
+                                         : Color(red: 0.4, green: 0.4, blue: 0.4))
+                        .fontWeight(appState.navigation == .agent ? .medium : .regular)
+                }
+                .frame(minWidth: 50)
+                .padding(.vertical, 5)
+                .frame(maxHeight: .infinity)
+                .contentShape(Rectangle())
+                .overlay(alignment: .bottom) {
+                    if appState.navigation == .agent {
+                        Rectangle()
+                            .fill(Color(red: 0, green: 0.478, blue: 1))
+                            .frame(height: 2)
+                    }
+                }
+            }
+            .buttonStyle(.plain)
+            .help("Pagerunner Agent")
         }
         .fixedSize(horizontal: false, vertical: true)
         .background(Color.primary.opacity(0.07))
@@ -393,6 +445,7 @@ struct BottomBar: View {
         switch appState.navigation {
         case .overview: return false
         case .profile: return false
+        case .agent: return false
         case .settings, .addProfile: return true
         }
     }

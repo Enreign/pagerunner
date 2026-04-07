@@ -85,12 +85,44 @@ final class NotificationService: NSObject, UNUserNotificationCenterDelegate {
 
     // MARK: - Categories
 
+    // MARK: - Agent notifications
+
+    func notifyAgentApproval(action: String, description: String, runId: String) {
+        let content = UNMutableNotificationContent()
+        content.title = "Pagerunner Agent"
+        content.body = "Wants to: \(description)"
+        content.sound = .default
+        content.categoryIdentifier = "AGENT_APPROVAL"
+        content.userInfo = ["run_id": runId, "action": action]
+        schedule(content, id: "agent-approval-\(runId)")
+    }
+
+    func notifyAgentDone(summary: String) {
+        let content = UNMutableNotificationContent()
+        content.title = "Agent completed"
+        content.body = String(summary.prefix(200))
+        content.sound = .default
+        content.categoryIdentifier = "AGENT_DONE"
+        schedule(content, id: "agent-done-\(UUID().uuidString)")
+    }
+
+    func notifyAgentError(message: String) {
+        let content = UNMutableNotificationContent()
+        content.title = "Agent failed"
+        content.body = String(message.prefix(200))
+        content.sound = .default
+        content.categoryIdentifier = "AGENT_ERROR"
+        schedule(content, id: "agent-error-\(UUID().uuidString)")
+    }
+
     private func registerCategories() {
         let view = UNNotificationAction(identifier: "VIEW", title: "View", options: .foreground)
         let restart = UNNotificationAction(identifier: "RESTART_SESSION", title: "Restart", options: .foreground)
         let restartDaemon = UNNotificationAction(identifier: "RESTART_DAEMON", title: "Restart Daemon", options: .foreground)
         let closeSession = UNNotificationAction(identifier: "CLOSE_SESSION", title: "Close Session", options: .destructive)
         let dismiss = UNNotificationAction(identifier: "DISMISS", title: "Dismiss", options: .destructive)
+        let approve = UNNotificationAction(identifier: "APPROVE", title: "Approve", options: [])
+        let deny = UNNotificationAction(identifier: "DENY", title: "Deny", options: .destructive)
 
         center.setNotificationCategories([
             UNNotificationCategory(identifier: "NOTIFY_TOOL",     actions: [view],                intentIdentifiers: []),
@@ -99,6 +131,9 @@ final class NotificationService: NSObject, UNUserNotificationCenterDelegate {
             UNNotificationCategory(identifier: "DAEMON_STOPPED",  actions: [restartDaemon, dismiss], intentIdentifiers: []),
             UNNotificationCategory(identifier: "SESSION_STARTED", actions: [],                    intentIdentifiers: []),
             UNNotificationCategory(identifier: "CHECKPOINT_SAVED",actions: [],                    intentIdentifiers: []),
+            UNNotificationCategory(identifier: "AGENT_APPROVAL",  actions: [approve, deny],       intentIdentifiers: []),
+            UNNotificationCategory(identifier: "AGENT_DONE",      actions: [view],                intentIdentifiers: []),
+            UNNotificationCategory(identifier: "AGENT_ERROR",     actions: [view],                intentIdentifiers: []),
         ])
     }
 
@@ -112,6 +147,7 @@ final class NotificationService: NSObject, UNUserNotificationCenterDelegate {
         let userInfo = response.notification.request.content.userInfo
         let profileName = userInfo["notif.profileName"] as? String
         let sessionId = userInfo["notif.sessionId"] as? String
+        let runId = userInfo["run_id"] as? String
         let actionIdentifier = response.actionIdentifier
 
         // Call completionHandler immediately — async side-effects fire in a separate task.
@@ -144,6 +180,12 @@ final class NotificationService: NSObject, UNUserNotificationCenterDelegate {
                 }
             case "RESTART_DAEMON":
                 await self.appState?.restartDaemon()
+            case "APPROVE", "DENY":
+                if let runId {
+                    let approved = actionIdentifier == "APPROVE"
+                    let agentClient = DaemonClient()
+                    try? await agentClient.sendApproval(runId: runId, approved: approved)
+                }
             default:
                 break
             }

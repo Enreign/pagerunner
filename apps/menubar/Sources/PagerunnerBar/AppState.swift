@@ -9,6 +9,7 @@ enum PanelNavigation: Equatable {
     case profile(String)          // profile name
     case settings
     case addProfile
+    case agent
 }
 
 /// Single source of truth for all app state. @Observable triggers SwiftUI re-renders.
@@ -59,6 +60,66 @@ final class AppState {
             }
         }
     }
+
+    // MARK: - Agent state
+
+    /// UI-facing event item for the feed.
+    struct AgentEventItem: Identifiable {
+        let id = UUID()
+        let timestamp = Date()
+        let kind: AgentEventKind
+    }
+
+    enum AgentEventKind {
+        case thinking(String)
+        case toolCall(name: String, argsSummary: String)
+        case toolResult(name: String, ok: Bool, summary: String)
+        case progress(String)
+        case done(String)
+        case error(String)
+    }
+
+    struct ApprovalRequest {
+        let runId: String
+        let action: String
+        let description: String
+    }
+
+    enum AgentRunState: Equatable {
+        case idle
+        case running
+        case waitingApproval
+        case completed
+        case error
+
+        static func == (lhs: AgentRunState, rhs: AgentRunState) -> Bool {
+            switch (lhs, rhs) {
+            case (.idle, .idle), (.running, .running),
+                 (.waitingApproval, .waitingApproval),
+                 (.completed, .completed), (.error, .error):
+                return true
+            default: return false
+            }
+        }
+    }
+
+    var agentState: AgentRunState = .idle
+    var agentGoal: String = ""
+    var agentProfile: String = ""
+    var agentMode: AgentMode = .supervised
+    var agentModel: String = "claude-haiku-4-5-20251001"
+    var agentRunId: String?
+    var agentEvents: [AgentEventItem] = []
+    var agentSteps: Int = 0
+    var agentTokens: Int = 0
+    var agentSummary: String?
+    var agentError: String?
+    var agentApproval: ApprovalRequest?
+    var agentStartTime: Date?
+    var recentGoals: [RecentGoal] = []
+
+    /// Active streaming task — cancelled on stop/new run.
+    var agentStreamTask: Task<Void, Never>?
 
     // MARK: - Private services
     private let daemonClient = DaemonClient()
@@ -272,6 +333,190 @@ final class AppState {
                 navigation = .profile(label)
             } catch {
                 discoveredInstances[idx].attachState = .failed(error.localizedDescription)
+            }
+        }
+    }
+
+    // MARK: - Agent actions
+
+    func startAgentRun(goal: String, client: DaemonClient) {
+        // Cancel any existing run
+        agentStreamTask?.cancel()
+
+        // Reset state
+        agentState = .running
+        agentGoal = goal
+        agentEvents = []
+        agentSteps = 0
+        agentTokens = 0
+        agentSummary = nil
+        agentError = nil
+        agentApproval = nil
+        agentStartTime = Date()
+        agentRunId = nil
+
+        let profile = agentProfile.isEmpty ? profiles.first?.name : agentProfile
+        let mode = agentMode
+
+        agentStreamTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            let stream = client.streamAgentRun(
+                goal: goal,
+                profile: profile,
+                model: nil,
+                maxSteps: 15,
+                mode: mode
+            )
+            do {
+                for try await item in stream {
+                    guard !Task.isCancelled else { break }
+                    switch item {
+                    case .event(let wire):
+                        self.handleAgentEvent(wire.event)
+                        self.agentRunId = wire.runId
+                    case .result(let result):
+                        self.agentSteps = result.totalSteps ?? self.agentSteps
+                        self.agentTokens = (result.inputTokens ?? 0) + (result.outputTokens ?? 0)
+                        if result.outcome == "completed" {
+                            self.agentState = .completed
+                            self.agentSummary = result.summary
+                        } else {
+                            self.agentState = .error
+                            self.agentError = result.summary ?? result.outcome
+                        }
+                        self.saveToHistory(outcome: result.outcome)
+                    case .error(let msg):
+                        self.agentState = .error
+                        self.agentError = msg
+                        self.saveToHistory(outcome: "error")
+                    }
+                }
+            } catch {
+                if !Task.isCancelled {
+                    self.agentState = .error
+                    self.agentError = error.localizedDescription
+                    self.saveToHistory(outcome: "error")
+                }
+            }
+        }
+    }
+
+    private func handleAgentEvent(_ event: AgentEventWire) {
+        switch event.type {
+        case "thinking":
+            if let text = event.text, !text.isEmpty {
+                agentEvents.append(AgentEventItem(kind: .thinking(text)))
+            }
+        case "tool_call":
+            agentSteps += 1
+            let name = event.name ?? "unknown"
+            let argsSummary = event.args?.stringValue ?? ""
+            agentEvents.append(AgentEventItem(kind: .toolCall(name: name, argsSummary: argsSummary)))
+        case "tool_result":
+            let name = event.name ?? "unknown"
+            let ok = !(event.isError ?? false)
+            let summary = event.result.map { s in
+                s.count > 120 ? String(s.prefix(117)) + "..." : s
+            } ?? ""
+            agentEvents.append(AgentEventItem(kind: .toolResult(name: name, ok: ok, summary: summary)))
+        case "progress":
+            if let msg = event.message {
+                agentEvents.append(AgentEventItem(kind: .progress(msg)))
+            }
+        case "approval_required":
+            agentState = .waitingApproval
+            agentApproval = ApprovalRequest(
+                runId: event.runId ?? agentRunId ?? "",
+                action: event.action ?? "unknown",
+                description: event.description ?? ""
+            )
+        case "done":
+            agentSummary = event.summary
+            agentEvents.append(AgentEventItem(kind: .done(event.summary ?? "Done")))
+        case "error":
+            agentEvents.append(AgentEventItem(kind: .error(event.message ?? "Unknown error")))
+        case "budget_exceeded":
+            agentEvents.append(AgentEventItem(kind: .error("Budget: \(event.reason ?? "exceeded")")))
+        case "interrupted":
+            agentEvents.append(AgentEventItem(kind: .error("Interrupted")))
+        default:
+            break
+        }
+    }
+
+    func approveAgent(approved: Bool, client: DaemonClient) {
+        guard let approval = agentApproval else { return }
+        agentApproval = nil
+        agentState = .running
+        Task {
+            try? await client.sendApproval(runId: approval.runId, approved: approved)
+        }
+    }
+
+    func stopAgent(client: DaemonClient) {
+        if let runId = agentRunId {
+            Task { try? await client.sendInterrupt(runId: runId) }
+        }
+        agentStreamTask?.cancel()
+        agentStreamTask = nil
+        agentState = .idle
+    }
+
+    func resetAgent() {
+        agentStreamTask?.cancel()
+        agentStreamTask = nil
+        agentState = .idle
+        agentGoal = ""
+        agentEvents = []
+        agentSteps = 0
+        agentTokens = 0
+        agentSummary = nil
+        agentError = nil
+        agentApproval = nil
+        agentRunId = nil
+    }
+
+    // MARK: - Agent history
+
+    func loadAgentHistory(client: DaemonClient) {
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            do {
+                let result = try await client.call(tool: "kv_get", args: ["namespace": "agent-history", "key": "recent"])
+                if let valueStr = result["value"]?.stringValue,
+                   let data = valueStr.data(using: .utf8),
+                   let goals = try? JSONDecoder().decode([RecentGoal].self, from: data) {
+                    self.recentGoals = goals
+                }
+            } catch {
+                // No history yet — that's fine
+            }
+        }
+    }
+
+    private func saveToHistory(outcome: String) {
+        let duration = agentStartTime.map { Date().timeIntervalSince($0) } ?? 0
+        let entry = RecentGoal(
+            goal: agentGoal,
+            profile: agentProfile,
+            timestamp: Date(),
+            duration: duration,
+            steps: agentSteps,
+            outcome: outcome
+        )
+        recentGoals.insert(entry, at: 0)
+        if recentGoals.count > 20 { recentGoals = Array(recentGoals.prefix(20)) }
+
+        // Persist to KV store (fire-and-forget)
+        if let data = try? JSONEncoder().encode(recentGoals),
+           let json = String(data: data, encoding: .utf8) {
+            let client = DaemonClient()
+            Task {
+                _ = try? await client.call(tool: "kv_set", args: [
+                    "namespace": "agent-history",
+                    "key": "recent",
+                    "value": json
+                ])
             }
         }
     }
