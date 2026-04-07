@@ -1,6 +1,9 @@
 //! LLM provider abstraction for Pagerunner agent system.
 
+pub mod anthropic;
 pub mod error;
+pub mod ollama;
+pub mod openai_compat;
 pub mod provider;
 pub mod types;
 
