@@ -709,6 +709,7 @@ mod tests {
             duration_ms: None,
             format: "mp4".to_string(),
             markers: vec![],
+            zoom_keyframes: vec![],
         };
         let json = serde_json::to_string(&meta).unwrap();
         let parsed: RecordingMetadata = serde_json::from_str(&json).unwrap();
@@ -885,6 +886,7 @@ mod tests {
             duration_ms: None,
             format: "mp4".into(),
             markers: vec![],
+            zoom_keyframes: vec![],
         };
         let json = serde_json::to_string(&meta).unwrap();
         assert!(!json.contains("\"flow\""));
@@ -911,6 +913,7 @@ mod tests {
                 label: "start".into(),
                 description: None,
             }],
+            zoom_keyframes: vec![],
         };
         let json = serde_json::to_string(&meta).unwrap();
         assert!(json.contains("\"flow\""));

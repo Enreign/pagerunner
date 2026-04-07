@@ -1,12 +1,13 @@
 use crate::config::PagerunnerConfig;
 use crate::db::Db;
 use crate::error::Result;
-use crate::ipc::{DaemonRequest, DaemonResponse, SOCKET_SUBPATH};
+use crate::ipc::{DaemonEvent, DaemonMessage, DaemonRequest, DaemonResponse, SOCKET_SUBPATH};
 use crate::session::SessionManager;
+use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::UnixListener;
-use tokio::sync::Mutex;
+use tokio::sync::{broadcast, mpsc, watch, Mutex};
 
 pub async fn run() -> Result<()> {
     let config = PagerunnerConfig::load()?;
@@ -341,12 +342,75 @@ pub async fn run() -> Result<()> {
     Ok(())
 }
 
+// ---------------------------------------------------------------------------
+// DaemonToolExecutor — adapts dispatch_tool for the agent's ToolExecutor trait
+// ---------------------------------------------------------------------------
+
+struct DaemonToolExecutor {
+    config: PagerunnerConfig,
+    sessions: Arc<Mutex<SessionManager>>,
+    db: Arc<Db>,
+}
+
+#[async_trait::async_trait]
+impl pagerunner_agent::ToolExecutor for DaemonToolExecutor {
+    async fn execute(
+        &self,
+        name: &str,
+        args: serde_json::Value,
+    ) -> std::result::Result<pagerunner_agent::ToolResponse, String> {
+        let outcome = crate::mcp_server::dispatch_tool(
+            name,
+            &args,
+            &self.config,
+            Arc::clone(&self.sessions),
+            Arc::clone(&self.db),
+            None,
+        )
+        .await;
+        match outcome {
+            Ok(tool_response) => Ok(pagerunner_agent::ToolResponse::ok(tool_response.result)),
+            Err(e) => Ok(pagerunner_agent::ToolResponse::error(e.to_string())),
+        }
+    }
+
+    fn available_tools(&self) -> Vec<pagerunner_llm::ToolSchema> {
+        crate::mcp_server::all_tools()
+            .into_iter()
+            .filter_map(|v| {
+                let name = v.get("name")?.as_str()?.to_string();
+                let description = v.get("description")?.as_str()?.to_string();
+                let input_schema = v.get("inputSchema").cloned().unwrap_or_else(|| {
+                    serde_json::json!({"type": "object"})
+                });
+                Some(pagerunner_llm::ToolSchema::new(name, description, input_schema))
+            })
+            .collect()
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Active agent run tracking
+// ---------------------------------------------------------------------------
+
+struct ActiveRun {
+    interrupt_tx: watch::Sender<bool>,
+    approval_tx: mpsc::Sender<bool>,
+}
+
+type ActiveRuns = Arc<Mutex<HashMap<String, ActiveRun>>>;
+
+// ---------------------------------------------------------------------------
+// handle_connection — now supports DaemonMessage + legacy DaemonRequest
+// ---------------------------------------------------------------------------
+
 async fn handle_connection(
     stream: tokio::net::UnixStream,
     sessions: Arc<Mutex<SessionManager>>,
     db: Arc<Db>,
     config: PagerunnerConfig,
 ) -> Result<()> {
+    let active_runs: ActiveRuns = Arc::new(Mutex::new(HashMap::new()));
     let (read_half, mut write_half) = stream.into_split();
     let mut reader = BufReader::new(read_half);
     let mut line = String::new();
@@ -356,38 +420,210 @@ async fn handle_connection(
         if n == 0 {
             break;
         }
-        let req: DaemonRequest = match serde_json::from_str(line.trim()) {
-            Ok(r) => r,
-            Err(e) => {
-                tracing::warn!("Invalid JSON request: {}", e);
-                continue;
+        let trimmed = line.trim();
+
+        // Try to parse as DaemonMessage first, fall back to legacy DaemonRequest
+        let parsed: std::result::Result<DaemonMessage, _> = serde_json::from_str(trimmed);
+        let msg = match parsed {
+            Ok(m) => m,
+            Err(_) => {
+                // Fall back to legacy DaemonRequest
+                match serde_json::from_str::<DaemonRequest>(trimmed) {
+                    Ok(req) => DaemonMessage::ToolCall(req),
+                    Err(e) => {
+                        tracing::warn!("Invalid JSON request: {}", e);
+                        continue;
+                    }
+                }
             }
         };
-        let id = req.id.clone();
-        let outcome = crate::mcp_server::dispatch_tool(
-            &req.tool,
-            &req.args,
-            &config,
-            Arc::clone(&sessions),
-            Arc::clone(&db),
-            None,
-        )
-        .await;
-        let resp = match outcome {
-            Ok(tool_response) => DaemonResponse {
-                id,
-                result: Some(tool_response.result),
-                error: None,
-            },
-            Err(e) => DaemonResponse {
-                id,
-                result: None,
-                error: Some(e.to_string()),
-            },
-        };
-        let mut out = serde_json::to_string(&resp)?;
-        out.push('\n');
-        write_half.write_all(out.as_bytes()).await?;
+
+        match msg {
+            DaemonMessage::ToolCall(req) => {
+                let id = req.id.clone();
+                let outcome = crate::mcp_server::dispatch_tool(
+                    &req.tool,
+                    &req.args,
+                    &config,
+                    Arc::clone(&sessions),
+                    Arc::clone(&db),
+                    None,
+                )
+                .await;
+                let resp = match outcome {
+                    Ok(tool_response) => DaemonResponse {
+                        id,
+                        result: Some(tool_response.result),
+                        error: None,
+                    },
+                    Err(e) => DaemonResponse {
+                        id,
+                        result: None,
+                        error: Some(e.to_string()),
+                    },
+                };
+                let mut out = serde_json::to_string(&resp)?;
+                out.push('\n');
+                write_half.write_all(out.as_bytes()).await?;
+            }
+
+            DaemonMessage::AgentRun { id, goal, config: agent_config_override } => {
+                let run_id = uuid::Uuid::new_v4().to_string();
+                let agent_config = agent_config_override.unwrap_or_else(|| config.agent.default_config.clone());
+
+                // Create LLM provider
+                let llm_config = {
+                    let mut c = config.agent.llm.clone();
+                    // Override model from agent_config if different from default
+                    if agent_config.model != "claude-haiku-4-5-20251001" {
+                        c.default_model = agent_config.model.clone();
+                    }
+                    c
+                };
+                let provider = match pagerunner_llm::create_default_provider(&llm_config) {
+                    Ok(p) => p,
+                    Err(e) => {
+                        let resp = DaemonResponse {
+                            id,
+                            result: None,
+                            error: Some(format!("Failed to create LLM provider: {}", e)),
+                        };
+                        let mut out = serde_json::to_string(&resp)?;
+                        out.push('\n');
+                        write_half.write_all(out.as_bytes()).await?;
+                        continue;
+                    }
+                };
+
+                let tool_executor = Arc::new(DaemonToolExecutor {
+                    config: config.clone(),
+                    sessions: Arc::clone(&sessions),
+                    db: Arc::clone(&db),
+                });
+
+                let (event_tx, mut event_rx) = broadcast::channel::<pagerunner_agent::AgentEvent>(256);
+                let (interrupt_tx, interrupt_rx) = watch::channel(false);
+                let (approval_tx, approval_rx) = mpsc::channel(16);
+
+                // Track this run
+                {
+                    let mut runs = active_runs.lock().await;
+                    runs.insert(run_id.clone(), ActiveRun {
+                        interrupt_tx,
+                        approval_tx,
+                    });
+                }
+
+                let run_id_clone = run_id.clone();
+                let agent_config_clone = agent_config.clone();
+
+                // Spawn the agent loop
+                let agent_handle = tokio::spawn(async move {
+                    pagerunner_agent::run_agent(
+                        goal,
+                        agent_config_clone,
+                        provider,
+                        tool_executor,
+                        event_tx,
+                        interrupt_rx,
+                        approval_rx,
+                        run_id_clone,
+                    )
+                    .await
+                });
+
+                // Stream events back to client
+                let active_runs_cleanup = Arc::clone(&active_runs);
+                let run_id_stream = run_id.clone();
+                loop {
+                    match event_rx.recv().await {
+                        Ok(event) => {
+                            let daemon_event = DaemonEvent {
+                                run_id: run_id_stream.clone(),
+                                event,
+                            };
+                            let mut out = serde_json::to_string(&daemon_event)
+                                .unwrap_or_else(|_| "{}".to_string());
+                            out.push('\n');
+                            if write_half.write_all(out.as_bytes()).await.is_err() {
+                                break;
+                            }
+                        }
+                        Err(broadcast::error::RecvError::Closed) => break,
+                        Err(broadcast::error::RecvError::Lagged(n)) => {
+                            tracing::warn!(run_id = %run_id_stream, lagged = n, "Event stream lagged");
+                        }
+                    }
+                }
+
+                // Wait for agent to finish and send final result
+                let agent_result = match agent_handle.await {
+                    Ok(result) => result,
+                    Err(e) => pagerunner_agent::AgentResult {
+                        outcome: pagerunner_agent::AgentOutcome::Error,
+                        summary: Some(format!("Agent task panicked: {}", e)),
+                        total_steps: 0,
+                        usage: pagerunner_llm::Usage {
+                            input_tokens: 0,
+                            output_tokens: 0,
+                        },
+                    },
+                };
+
+                // Cleanup
+                {
+                    let mut runs = active_runs_cleanup.lock().await;
+                    runs.remove(&run_id);
+                }
+
+                let resp = DaemonResponse {
+                    id,
+                    result: Some(serde_json::to_string(&agent_result).unwrap_or_default()),
+                    error: None,
+                };
+                let mut out = serde_json::to_string(&resp)?;
+                out.push('\n');
+                let _ = write_half.write_all(out.as_bytes()).await;
+            }
+
+            DaemonMessage::AgentApprove { id, run_id, approved } => {
+                let sent = {
+                    let runs = active_runs.lock().await;
+                    if let Some(run) = runs.get(&run_id) {
+                        run.approval_tx.send(approved).await.is_ok()
+                    } else {
+                        false
+                    }
+                };
+                let resp = if sent {
+                    DaemonResponse { id, result: Some("ok".into()), error: None }
+                } else {
+                    DaemonResponse { id, result: None, error: Some(format!("No active run: {}", run_id)) }
+                };
+                let mut out = serde_json::to_string(&resp)?;
+                out.push('\n');
+                write_half.write_all(out.as_bytes()).await?;
+            }
+
+            DaemonMessage::AgentInterrupt { id, run_id } => {
+                let sent = {
+                    let runs = active_runs.lock().await;
+                    if let Some(run) = runs.get(&run_id) {
+                        run.interrupt_tx.send(true).is_ok()
+                    } else {
+                        false
+                    }
+                };
+                let resp = if sent {
+                    DaemonResponse { id, result: Some("ok".into()), error: None }
+                } else {
+                    DaemonResponse { id, result: None, error: Some(format!("No active run: {}", run_id)) }
+                };
+                let mut out = serde_json::to_string(&resp)?;
+                out.push('\n');
+                write_half.write_all(out.as_bytes()).await?;
+            }
+        }
     }
     Ok(())
 }
