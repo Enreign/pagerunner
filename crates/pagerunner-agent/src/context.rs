@@ -202,6 +202,38 @@ fn estimate_context_size(messages: &[Message]) -> usize {
         .sum()
 }
 
+/// Summarize tool call arguments for compact display (e.g. "url=https://...")
+fn summarize_tool_args(input: &serde_json::Value) -> String {
+    match input.as_object() {
+        Some(obj) if !obj.is_empty() => {
+            obj.iter()
+                .map(|(k, v)| {
+                    let val_str = match v {
+                        serde_json::Value::String(s) => {
+                            if s.len() > 60 {
+                                format!("{}...", &s[..57])
+                            } else {
+                                s.clone()
+                            }
+                        }
+                        other => {
+                            let s = other.to_string();
+                            if s.len() > 60 {
+                                format!("{}...", &s[..57])
+                            } else {
+                                s
+                            }
+                        }
+                    };
+                    format!("{k}={val_str}")
+                })
+                .collect::<Vec<_>>()
+                .join(", ")
+        }
+        _ => String::new(),
+    }
+}
+
 /// Compact message history by replacing old tool results with short summaries.
 ///
 /// Keeps the first message (user goal) and the last `keep_recent` message
@@ -254,19 +286,54 @@ pub fn compact_messages(messages: &mut Vec<Message>, config: &ContextConfig) {
             }
         }
 
-        // Also compact long assistant thinking text from old turns
+        // Also compact assistant messages from old turns
         if msg.role == Role::Assistant {
-            for block in msg.content.iter_mut() {
-                if let ContentBlock::Text { text } = block {
-                    if text.len() > 300 {
-                        let first_sentence = text
-                            .find(". ")
-                            .map(|i| &text[..=i])
-                            .unwrap_or(&text[..100.min(text.len())]);
-                        *text = format!("{first_sentence} [... compacted]");
+            // Collect ToolUse summaries and replace with a single text block
+            let mut summaries: Vec<String> = Vec::new();
+            let mut kept_blocks: Vec<ContentBlock> = Vec::new();
+
+            for block in msg.content.drain(..) {
+                match block {
+                    ContentBlock::ToolUse { name, input, id } => {
+                        // Summarize tool call as compact text
+                        let args_summary = summarize_tool_args(&input);
+                        summaries.push(format!("Called {name}({args_summary})"));
+                        // Keep a minimal ToolUse so the API still gets
+                        // valid assistant→tool pairing. Replace input with empty obj.
+                        kept_blocks.push(ContentBlock::ToolUse {
+                            id,
+                            name,
+                            input: serde_json::json!({}),
+                        });
                     }
+                    ContentBlock::Text { text } => {
+                        if text.len() > 300 {
+                            let first_sentence = text
+                                .find(". ")
+                                .map(|i| &text[..=i])
+                                .unwrap_or(&text[..100.min(text.len())]);
+                            kept_blocks.push(ContentBlock::Text {
+                                text: format!("{first_sentence} [... compacted]"),
+                            });
+                        } else {
+                            kept_blocks.push(ContentBlock::Text { text });
+                        }
+                    }
+                    other => kept_blocks.push(other),
                 }
             }
+
+            // If we summarized any tool calls, prepend a single summary text
+            if !summaries.is_empty() {
+                kept_blocks.insert(
+                    0,
+                    ContentBlock::Text {
+                        text: format!("[{}]", summaries.join("; ")),
+                    },
+                );
+            }
+
+            msg.content = kept_blocks;
         }
     }
 }
@@ -527,10 +594,85 @@ keep_recent = 2
 
         compact_messages(&mut messages, &config);
 
-        if let ContentBlock::Text { text } = &messages[1].content[0] {
-            assert!(text.contains("compacted"));
-            assert!(text.len() < long_thinking.len());
-        }
+        // First block should be the compacted text (thinking text was long)
+        let has_compacted = messages[1].content.iter().any(|b| {
+            if let ContentBlock::Text { text } = b {
+                text.contains("compacted")
+            } else {
+                false
+            }
+        });
+        assert!(has_compacted, "old thinking text should be compacted");
+    }
+
+    #[test]
+    fn compact_messages_compacts_tool_use_blocks() {
+        let big = "x".repeat(5000);
+        let mut messages = vec![
+            Message::user("goal"),
+            // Old assistant message with ToolUse
+            Message::assistant(vec![ContentBlock::ToolUse {
+                id: "tu-1".into(),
+                name: "navigate".into(),
+                input: serde_json::json!({"url": "https://example.com", "session_id": "s1"}),
+            }]),
+            Message::tool_result("tu-1", &big),
+            // Recent (protected)
+            Message::assistant(vec![ContentBlock::Text { text: "recent".into() }]),
+            Message::tool_result("tu-2", "recent result"),
+        ];
+
+        let config = ContextConfig {
+            max_context_chars: 1000,
+            keep_recent: 1,
+            ..Default::default()
+        };
+
+        compact_messages(&mut messages, &config);
+
+        // The old assistant message should now have a summary text block
+        let has_summary = messages[1].content.iter().any(|b| {
+            if let ContentBlock::Text { text } = b {
+                text.contains("Called navigate") && text.contains("url=")
+            } else {
+                false
+            }
+        });
+        assert!(has_summary, "should have tool call summary text");
+
+        // ToolUse block should still exist (for API pairing) but with empty input
+        let has_empty_tool_use = messages[1].content.iter().any(|b| {
+            if let ContentBlock::ToolUse { input, .. } = b {
+                input == &serde_json::json!({})
+            } else {
+                false
+            }
+        });
+        assert!(has_empty_tool_use, "should keep ToolUse with empty input for API pairing");
+    }
+
+    #[test]
+    fn summarize_tool_args_formats_key_value_pairs() {
+        let args = serde_json::json!({"url": "https://example.com", "timeout": 30});
+        let summary = summarize_tool_args(&args);
+        assert!(summary.contains("url=https://example.com"));
+        assert!(summary.contains("timeout=30"));
+    }
+
+    #[test]
+    fn summarize_tool_args_truncates_long_values() {
+        let long_url = "https://example.com/".to_string() + &"x".repeat(100);
+        let args = serde_json::json!({"url": long_url});
+        let summary = summarize_tool_args(&args);
+        assert!(summary.len() < 80);
+        assert!(summary.contains("..."));
+    }
+
+    #[test]
+    fn summarize_tool_args_empty_object() {
+        let args = serde_json::json!({});
+        let summary = summarize_tool_args(&args);
+        assert!(summary.is_empty());
     }
 
     // --- filter_tools tests ---
