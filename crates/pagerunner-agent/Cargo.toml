@@ -19,3 +19,10 @@ uuid = { version = "1", features = ["v4"] }
 [dev-dependencies]
 tokio = { version = "1", features = ["full", "test-util"] }
 toml = "0.8"
+
+[[example]]
+name = "demo"
+required-features = []
+
+[dev-dependencies.async-trait]
+version = "0.1"
