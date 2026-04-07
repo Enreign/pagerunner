@@ -43,7 +43,8 @@ pub fn build_zoom_filter(
         // During transition: interpolate
         parts.push(format!(
             "if(between(t,{t0:.2},{t1:.2}),{from:.3}+{delta:.3}*(t-{t0:.2})/{dur:.2},0)",
-            t0 = t0, t1 = t1,
+            t0 = t0,
+            t1 = t1,
             from = from_scale,
             delta = to_scale - from_scale,
             dur = transition,
@@ -51,7 +52,9 @@ pub fn build_zoom_filter(
         // After transition until next keyframe: hold
         parts.push(format!(
             "if(between(t,{t1:.2},{next:.2}),{val:.3},0)",
-            t1 = t1, next = next_t, val = to_scale
+            t1 = t1,
+            next = next_t,
+            val = to_scale
         ));
     }
 
@@ -104,13 +107,7 @@ async fn apply_zoom_keyframes(
             } else {
                 kf.ts_ms as f64 / 1000.0 + 3.0
             };
-            zoom_segments.push((
-                kf.ts_ms as f64 / 1000.0,
-                zoom_out_t,
-                kf.x,
-                kf.y,
-                kf.scale,
-            ));
+            zoom_segments.push((kf.ts_ms as f64 / 1000.0, zoom_out_t, kf.x, kf.y, kf.scale));
             i += 2; // skip the zoom-out keyframe
         } else {
             i += 1;
@@ -131,37 +128,57 @@ async fn apply_zoom_keyframes(
     let mut filter_parts = Vec::new();
     // Split the input into n+1 streams
     let split_labels: Vec<String> = (0..=n).map(|j| format!("[s{}]", j)).collect();
-    filter_parts.push(format!(
-        "[0:v]split={}{}",
-        n + 1,
-        split_labels.join("")
-    ));
+    filter_parts.push(format!("[0:v]split={}{}", n + 1, split_labels.join("")));
 
     // For each zoom segment, create a cropped+scaled version
     for (j, (start, end, x, y, scale)) in zoom_segments.iter().enumerate() {
         // Use static pixel values to avoid expression parsing issues
         let probe2 = tokio::process::Command::new("ffprobe")
-            .args(&["-v", "error", "-select_streams", "v:0",
-                "-show_entries", "stream=width,height",
-                "-of", "default=noprint_wrappers=1:nokey=1",
-                input_path.to_str()?])
-            .output().await.ok()?;
+            .args(&[
+                "-v",
+                "error",
+                "-select_streams",
+                "v:0",
+                "-show_entries",
+                "stream=width,height",
+                "-of",
+                "default=noprint_wrappers=1:nokey=1",
+                input_path.to_str()?,
+            ])
+            .output()
+            .await
+            .ok()?;
         let dims2: Vec<f64> = String::from_utf8_lossy(&probe2.stdout)
-            .lines().filter_map(|l| l.trim().parse().ok()).collect();
-        if dims2.len() < 2 { return None; }
+            .lines()
+            .filter_map(|l| l.trim().parse().ok())
+            .collect();
+        if dims2.len() < 2 {
+            return None;
+        }
         let (vw_f, vh_f) = (dims2[0], dims2[1]);
 
         let crop_w = ((vw_f / scale) as u32 / 2 * 2) as u32;
         let crop_h = ((vh_f / scale) as u32 / 2 * 2) as u32;
-        let crop_x = ((*x - crop_w as f64 / 2.0).max(0.0).min(vw_f - crop_w as f64)) as u32;
-        let crop_y = ((*y - crop_h as f64 / 2.0).max(0.0).min(vh_f - crop_h as f64)) as u32;
+        let crop_x = ((*x - crop_w as f64 / 2.0)
+            .max(0.0)
+            .min(vw_f - crop_w as f64)) as u32;
+        let crop_y = ((*y - crop_h as f64 / 2.0)
+            .max(0.0)
+            .min(vh_f - crop_h as f64)) as u32;
         let out_w = vw_f as u32;
         let out_h = vh_f as u32;
 
         // All values are static pixels — no ffmpeg expressions needed
         filter_parts.push(format!(
             "[s{}]crop={}:{}:{}:{},scale={}:{}:flags=lanczos[z{}]",
-            j + 1, crop_w, crop_h, crop_x, crop_y, out_w, out_h, j
+            j + 1,
+            crop_w,
+            crop_h,
+            crop_x,
+            crop_y,
+            out_w,
+            out_h,
+            j
         ));
     }
 
@@ -171,10 +188,11 @@ async fn apply_zoom_keyframes(
         let out = format!("[v{}]", j);
         let enable_start = start + transition; // fade in complete
         let enable_end = end; // fade out starts at zoom-out keyframe
-        // Show the zoomed overlay during the zoom period
+                              // Show the zoomed overlay during the zoom period
         filter_parts.push(format!(
             "{}[z{}]overlay=0:0:enable='between(t,{:.2},{:.2})'{}",
-            prev, j,
+            prev,
+            j,
             start + 0.1, // slight delay for transition feel
             end - 0.1,
             out
@@ -188,11 +206,20 @@ async fn apply_zoom_keyframes(
     tracing::info!(filter = %filter_complex, "Zoom filter_complex");
     let output = tokio::process::Command::new("ffmpeg")
         .args(&[
-            "-i", input_path.to_str()?,
-            "-filter_complex", &filter_complex,
-            "-map", &last_label,
-            "-c:v", "libx264", "-pix_fmt", "yuv420p", "-preset", "fast",
-            "-y", output_path.to_str()?,
+            "-i",
+            input_path.to_str()?,
+            "-filter_complex",
+            &filter_complex,
+            "-map",
+            &last_label,
+            "-c:v",
+            "libx264",
+            "-pix_fmt",
+            "yuv420p",
+            "-preset",
+            "fast",
+            "-y",
+            output_path.to_str()?,
         ])
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::piped())
@@ -202,7 +229,14 @@ async fn apply_zoom_keyframes(
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        let tail: String = stderr.chars().rev().take(300).collect::<Vec<_>>().into_iter().rev().collect();
+        let tail: String = stderr
+            .chars()
+            .rev()
+            .take(300)
+            .collect::<Vec<_>>()
+            .into_iter()
+            .rev()
+            .collect();
         tracing::warn!(stderr = %tail, "Zoom filter_complex failed");
     }
 
@@ -215,23 +249,22 @@ async fn apply_zoom_keyframes(
 
 /// Apply motion interpolation to upscale frame rate for smooth playback.
 /// Uses ffmpeg minterpolate with blend mode (fast, good quality for UI content).
-async fn apply_minterpolate(
-    input_path: &Path,
-    output_path: &Path,
-    target_fps: u8,
-) -> bool {
-    let filter = format!(
-        "minterpolate=fps={}:mi_mode=blend",
-        target_fps
-    );
+async fn apply_minterpolate(input_path: &Path, output_path: &Path, target_fps: u8) -> bool {
+    let filter = format!("minterpolate=fps={}:mi_mode=blend", target_fps);
     let status = tokio::process::Command::new("ffmpeg")
         .args(&[
-            "-i", input_path.to_str().unwrap_or(""),
-            "-vf", &filter,
-            "-c:v", "libx264",
-            "-pix_fmt", "yuv420p",
-            "-preset", "fast",
-            "-y", output_path.to_str().unwrap_or(""),
+            "-i",
+            input_path.to_str().unwrap_or(""),
+            "-vf",
+            &filter,
+            "-c:v",
+            "libx264",
+            "-pix_fmt",
+            "yuv420p",
+            "-preset",
+            "fast",
+            "-y",
+            output_path.to_str().unwrap_or(""),
         ])
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
@@ -258,10 +291,14 @@ pub async fn apply_window_chrome(
     // Get video dimensions
     let probe = tokio::process::Command::new("ffprobe")
         .args(&[
-            "-v", "error",
-            "-select_streams", "v:0",
-            "-show_entries", "stream=width,height",
-            "-of", "default=noprint_wrappers=1:nokey=1",
+            "-v",
+            "error",
+            "-select_streams",
+            "v:0",
+            "-show_entries",
+            "stream=width,height",
+            "-of",
+            "default=noprint_wrappers=1:nokey=1",
             input_path.to_str()?,
         ])
         .output()
@@ -283,10 +320,19 @@ pub async fn apply_window_chrome(
     let mask_path = tmp.join("__pr_mask.png");
     let mask_status = tokio::process::Command::new("magick")
         .args(&[
-            "-size", &format!("{}x{}", vid_w, vid_h),
+            "-size",
+            &format!("{}x{}", vid_w, vid_h),
             "xc:none",
-            "-fill", "white",
-            "-draw", &format!("roundrectangle 0,0 {},{} {},{}", vid_w - 1, vid_h - 1, corner_radius, corner_radius),
+            "-fill",
+            "white",
+            "-draw",
+            &format!(
+                "roundrectangle 0,0 {},{} {},{}",
+                vid_w - 1,
+                vid_h - 1,
+                corner_radius,
+                corner_radius
+            ),
             mask_path.to_str().unwrap(),
         ])
         .stdout(std::process::Stdio::null())
@@ -303,7 +349,8 @@ pub async fn apply_window_chrome(
     let bg_path = tmp.join("__pr_bg.png");
     let bg_status = tokio::process::Command::new("magick")
         .args(&[
-            "-size", &format!("{}x{}", canvas_w, canvas_h),
+            "-size",
+            &format!("{}x{}", canvas_w, canvas_h),
             &format!("gradient:{}-{}", bg_color_start, bg_color_end),
             bg_path.to_str().unwrap(),
         ])
@@ -326,14 +373,22 @@ pub async fn apply_window_chrome(
 
     let status = tokio::process::Command::new("ffmpeg")
         .args(&[
-            "-i", input_path.to_str()?,
-            "-i", mask_path.to_str().unwrap(),
-            "-i", bg_path.to_str().unwrap(),
-            "-filter_complex", &filter,
-            "-c:v", "libx264",
-            "-pix_fmt", "yuv420p",
-            "-preset", "fast",
-            "-y", output_path.to_str()?,
+            "-i",
+            input_path.to_str()?,
+            "-i",
+            mask_path.to_str().unwrap(),
+            "-i",
+            bg_path.to_str().unwrap(),
+            "-filter_complex",
+            &filter,
+            "-c:v",
+            "libx264",
+            "-pix_fmt",
+            "yuv420p",
+            "-preset",
+            "fast",
+            "-y",
+            output_path.to_str()?,
         ])
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
@@ -432,7 +487,11 @@ pub fn generate_srt(markers: &[Marker], total_duration_ms: u64) -> String {
             markers[i + 1].ts_ms
         } else {
             let end = start_ms + 5000;
-            if end > total_duration_ms { total_duration_ms } else { end }
+            if end > total_duration_ms {
+                total_duration_ms
+            } else {
+                end
+            }
         };
 
         let text = if let Some(desc) = &marker.description {
@@ -468,10 +527,14 @@ async fn burn_subtitles_overlay(
     // Get video dimensions
     let probe = tokio::process::Command::new("ffprobe")
         .args(&[
-            "-v", "error",
-            "-select_streams", "v:0",
-            "-show_entries", "stream=width,height",
-            "-of", "default=noprint_wrappers=1:nokey=1",
+            "-v",
+            "error",
+            "-select_streams",
+            "v:0",
+            "-show_entries",
+            "stream=width,height",
+            "-of",
+            "default=noprint_wrappers=1:nokey=1",
             video_path.to_str()?,
         ])
         .output()
@@ -505,15 +568,24 @@ async fn burn_subtitles_overlay(
         let out = tmp.join(format!("pagerunner_sub_{}.png", i));
         let status = tokio::process::Command::new("magick")
             .args(&[
-                "-size", &format!("{}x{}", w, bar_height),
+                "-size",
+                &format!("{}x{}", w, bar_height),
                 "xc:none",
-                "-fill", &style.bg_color,
-                "-draw", &format!("rectangle 0,0 {},{}", w, bar_height),
-                "-fill", &style.text_color,
-                "-font", &style.font,
-                "-pointsize", &pointsize.to_string(),
-                "-gravity", "West",
-                "-annotate", "+20+0", &text,
+                "-fill",
+                &style.bg_color,
+                "-draw",
+                &format!("rectangle 0,0 {},{}", w, bar_height),
+                "-fill",
+                &style.text_color,
+                "-font",
+                &style.font,
+                "-pointsize",
+                &pointsize.to_string(),
+                "-gravity",
+                "West",
+                "-annotate",
+                "+20+0",
+                &text,
                 out.to_str().unwrap(),
             ])
             .stdout(std::process::Stdio::null())
@@ -523,7 +595,9 @@ async fn burn_subtitles_overlay(
             .ok()?;
 
         if !status.success() {
-            tracing::warn!("magick failed to generate subtitle overlay — is ImageMagick installed?");
+            tracing::warn!(
+                "magick failed to generate subtitle overlay — is ImageMagick installed?"
+            );
             return None;
         }
     }
@@ -532,7 +606,11 @@ async fn burn_subtitles_overlay(
     let mut inputs = vec!["-i".to_string(), video_path.to_str()?.to_string()];
     for i in 0..markers.len() {
         inputs.push("-i".to_string());
-        inputs.push(tmp.join(format!("pagerunner_sub_{}.png", i)).to_str()?.to_string());
+        inputs.push(
+            tmp.join(format!("pagerunner_sub_{}.png", i))
+                .to_str()?
+                .to_string(),
+        );
     }
 
     let mut filter_parts = Vec::new();
@@ -544,9 +622,17 @@ async fn burn_subtitles_overlay(
         } else {
             let end = start_s + 5.0;
             let total = total_duration_ms as f64 / 1000.0;
-            if end > total { total } else { end }
+            if end > total {
+                total
+            } else {
+                end
+            }
         };
-        let y_pos = if style.position == "top" { 0 } else { h - bar_height };
+        let y_pos = if style.position == "top" {
+            0
+        } else {
+            h - bar_height
+        };
         let out_label = format!("[v{}]", i);
         filter_parts.push(format!(
             "{}[{}:v]overlay=0:{}:enable='between(t,{:.2},{:.2})'{}",
@@ -564,11 +650,16 @@ async fn burn_subtitles_overlay(
 
     let mut args = inputs;
     args.extend_from_slice(&[
-        "-filter_complex".to_string(), filter_complex,
-        "-map".to_string(), last_label,
-        "-c:v".to_string(), "libx264".to_string(),
-        "-pix_fmt".to_string(), "yuv420p".to_string(),
-        "-y".to_string(), output_path.to_str()?.to_string(),
+        "-filter_complex".to_string(),
+        filter_complex,
+        "-map".to_string(),
+        last_label,
+        "-c:v".to_string(),
+        "libx264".to_string(),
+        "-pix_fmt".to_string(),
+        "yuv420p".to_string(),
+        "-y".to_string(),
+        output_path.to_str()?.to_string(),
     ]);
 
     let status = tokio::process::Command::new("ffmpeg")
@@ -663,14 +754,7 @@ pub async fn render_annotated(
     // Step 1: Burn subtitles into the video if requested
     let subtitled_path = if with_overlays && !metadata.markers.is_empty() {
         let path = dir.join(format!("subtitled.{}", entry.format));
-        burn_subtitles_overlay(
-            &zoom_source,
-            &metadata.markers,
-            total_ms,
-            &path,
-            style,
-        )
-        .await
+        burn_subtitles_overlay(&zoom_source, &metadata.markers, total_ms, &path, style).await
     } else {
         None
     };
@@ -684,10 +768,10 @@ pub async fn render_annotated(
     let polished = apply_window_chrome(
         &source,
         &polished_path,
-        40,   // padding
-        16,   // corner radius
-        "#1e1e2e",  // dark gradient start (catppuccin mocha)
-        "#313244",  // dark gradient end
+        40,        // padding
+        16,        // corner radius
+        "#1e1e2e", // dark gradient start (catppuccin mocha)
+        "#313244", // dark gradient end
     )
     .await;
 
@@ -700,9 +784,7 @@ pub async fn render_annotated(
         }
     }
 
-    let final_video = polished
-        .as_deref()
-        .or(subtitled_path.as_deref());
+    let final_video = polished.as_deref().or(subtitled_path.as_deref());
 
     Ok(serde_json::json!({
         "srt_path": srt_path.to_str().unwrap(),
@@ -782,8 +864,16 @@ mod tests {
     fn test_filter_marker_timing_boundaries() {
         // Marker A at 1s, B at 5s. A should show from 1-5, B from 5-10 (or end)
         let markers = vec![
-            Marker { ts_ms: 1000, label: "A".into(), description: None },
-            Marker { ts_ms: 5000, label: "B".into(), description: None },
+            Marker {
+                ts_ms: 1000,
+                label: "A".into(),
+                description: None,
+            },
+            Marker {
+                ts_ms: 5000,
+                label: "B".into(),
+                description: None,
+            },
         ];
         let filter = build_subtitle_filter(&markers, 30000).unwrap();
         // A: between(t,1.00,5.00)
@@ -795,9 +885,11 @@ mod tests {
     #[test]
     fn test_filter_last_marker_clamps_to_video_duration() {
         // Marker at 28s, video is 30s — last marker should show until 30s, not 33s
-        let markers = vec![
-            Marker { ts_ms: 28000, label: "End".into(), description: None },
-        ];
+        let markers = vec![Marker {
+            ts_ms: 28000,
+            label: "End".into(),
+            description: None,
+        }];
         let filter = build_subtitle_filter(&markers, 30000).unwrap();
         // Should clamp to 30.00, not 33.00
         assert!(filter.contains("between(t,28.00,30.00)"));
@@ -806,31 +898,33 @@ mod tests {
     #[test]
     fn test_filter_last_marker_within_5s() {
         // Marker at 10s, video is 30s — last marker shows for 5s
-        let markers = vec![
-            Marker { ts_ms: 10000, label: "Mid".into(), description: None },
-        ];
+        let markers = vec![Marker {
+            ts_ms: 10000,
+            label: "Mid".into(),
+            description: None,
+        }];
         let filter = build_subtitle_filter(&markers, 30000).unwrap();
         assert!(filter.contains("between(t,10.00,15.00)"));
     }
 
     #[test]
     fn test_filter_with_description() {
-        let markers = vec![
-            Marker {
-                ts_ms: 0,
-                label: "Start".into(),
-                description: Some("Beginning of recording".into()),
-            },
-        ];
+        let markers = vec![Marker {
+            ts_ms: 0,
+            label: "Start".into(),
+            description: Some("Beginning of recording".into()),
+        }];
         let filter = build_subtitle_filter(&markers, 10000).unwrap();
         assert!(filter.contains("Start\\: Beginning of recording"));
     }
 
     #[test]
     fn test_filter_without_description() {
-        let markers = vec![
-            Marker { ts_ms: 0, label: "Just a label".into(), description: None },
-        ];
+        let markers = vec![Marker {
+            ts_ms: 0,
+            label: "Just a label".into(),
+            description: None,
+        }];
         let filter = build_subtitle_filter(&markers, 10000).unwrap();
         assert!(filter.contains("Just a label"));
         // Without description, text is just the label — no "label: desc" colon separator
@@ -839,13 +933,11 @@ mod tests {
 
     #[test]
     fn test_filter_special_chars_in_label() {
-        let markers = vec![
-            Marker {
-                ts_ms: 0,
-                label: "Step [1]: it's a test".into(),
-                description: None,
-            },
-        ];
+        let markers = vec![Marker {
+            ts_ms: 0,
+            label: "Step [1]: it's a test".into(),
+            description: None,
+        }];
         let filter = build_subtitle_filter(&markers, 10000).unwrap();
         // Special chars should be escaped
         assert!(filter.contains("\\[1\\]"));
@@ -854,9 +946,11 @@ mod tests {
 
     #[test]
     fn test_filter_zero_duration_video() {
-        let markers = vec![
-            Marker { ts_ms: 0, label: "X".into(), description: None },
-        ];
+        let markers = vec![Marker {
+            ts_ms: 0,
+            label: "X".into(),
+            description: None,
+        }];
         // Video duration 0ms — marker should still appear briefly
         let filter = build_subtitle_filter(&markers, 0).unwrap();
         assert!(filter.contains("drawtext"));
@@ -881,8 +975,16 @@ mod tests {
     fn test_filter_consecutive_markers_same_timestamp() {
         // Edge case: two markers at the same time
         let markers = vec![
-            Marker { ts_ms: 5000, label: "A".into(), description: None },
-            Marker { ts_ms: 5000, label: "B".into(), description: None },
+            Marker {
+                ts_ms: 5000,
+                label: "A".into(),
+                description: None,
+            },
+            Marker {
+                ts_ms: 5000,
+                label: "B".into(),
+                description: None,
+            },
         ];
         let filter = build_subtitle_filter(&markers, 10000).unwrap();
         // Both should appear; A shows from 5-5 (zero duration), B from 5-10

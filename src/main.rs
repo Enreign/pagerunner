@@ -1767,8 +1767,7 @@ async fn run() -> anyhow::Result<()> {
             tags,
         } => {
             let config = config::PagerunnerConfig::load()?;
-            let mut args =
-                serde_json::json!({"session_id": session_id, "target_id": target_id});
+            let mut args = serde_json::json!({"session_id": session_id, "target_id": target_id});
             if let Some(v) = name {
                 args["name"] = serde_json::json!(v);
             }

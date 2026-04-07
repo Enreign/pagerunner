@@ -7,7 +7,7 @@ const { get } = require("https");
 const { join } = require("path");
 const { pipeline } = require("stream/promises");
 
-const VERSION = "0.7.1";
+const VERSION = "0.8.0";
 const REPO = "Enreign/pagerunner";
 
 const PLATFORMS = {

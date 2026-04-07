@@ -7,6 +7,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.0] — Video Recording
+
+### Added
+
+**Video Recording (Phase 1 — Record + Organize)**
+- 8 new MCP tools: `start_recording`, `stop_recording`, `add_marker`, `list_recordings`, `get_recording`, `delete_recording`, `render_recording`
+- 8 matching CLI subcommands
+- Recording storage organized by profile and flow: `~/.pagerunner/recordings/<profile>/<date>_<flow>/`
+- Metadata JSON sidecar with markers, timestamps, tags, and zoom keyframes
+- DB index with filtering by profile, flow, or tag
+- Audit events: `RecordingStarted`, `RecordingStopped`
+- Auto-record mode: `[recording] auto_record = true` starts recording on `open_session`
+- Recording retention: `retention_days` auto-deletes old recordings on daemon startup
+- Anonymization guard: recording blocked when PII anonymization is active
+
+**Video Recording (Phase 2 — Render + Polish)**
+- Motion interpolation: 10fps capture → 30fps output via ffmpeg `minterpolate`
+- Physics-based cursor overlay: spring animation via `requestAnimationFrame`, glow effect, click ripple
+- Auto-zoom: 1.8x zoom into click/fill targets via post-processing crop+scale
+- Animated typing: character-by-character `fill` with visible caret when recording
+- Page transition fades: white fade-out/fade-in on navigation
+- Cursor tracking on all interactions: click, fill, type_text, scroll
+- Window chrome: gradient background, rounded corners, padding via ImageMagick + ffmpeg
+- Configurable text overlays: position, font, size, colors via CLI or `[overlay]` config
+- SRT subtitle generation from markers
+- Burned-in text overlays via ImageMagick + ffmpeg overlay filter
+
+**Configuration**
+- `[recording]` section: `fps`, `output_fps`, `format`, `auto_record`, `storage_dir`, `retention_days`, `max_size_mb`
+- `[overlay]` section: `position`, `font`, `font_size`, `text_color`, `bg_color`, `bar_height`
+
+### Fixed
+
+- `get_content`: added 15-second timeout and `textContent` fallback when `innerText` crashes on heavy SPAs
+
 ## [0.7.1] — Secret Store Fix
 
 ### Fixed

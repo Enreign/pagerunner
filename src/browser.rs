@@ -995,7 +995,10 @@ pub async fn apply_css_zoom(session: &mut Session, target_id: &str, x: f64, y: f
         let (vw, vh) = match vw_vh {
             Ok(r) => {
                 let v = &r["result"]["value"];
-                (v["w"].as_f64().unwrap_or(1920.0), v["h"].as_f64().unwrap_or(1080.0))
+                (
+                    v["w"].as_f64().unwrap_or(1920.0),
+                    v["h"].as_f64().unwrap_or(1080.0),
+                )
             }
             Err(_) => (1920.0, 1080.0),
         };
@@ -1005,11 +1008,14 @@ pub async fn apply_css_zoom(session: &mut Session, target_id: &str, x: f64, y: f
             "document.documentElement.style.transition='transform 0.8s cubic-bezier(0.16,1,0.3,1)';document.documentElement.style.transformOrigin='{:.1}% {:.1}%';document.documentElement.style.transform='scale({:.2})';",
             ox, oy, scale
         );
-        let _ = session.cdp.send_on_session(
-            "Runtime.evaluate",
-            json!({"expression": js, "returnByValue": true}),
-            Some(sid),
-        ).await;
+        let _ = session
+            .cdp
+            .send_on_session(
+                "Runtime.evaluate",
+                json!({"expression": js, "returnByValue": true}),
+                Some(sid),
+            )
+            .await;
     }
 }
 

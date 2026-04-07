@@ -7,7 +7,7 @@
     "url": "https://github.com/Enreign/pagerunner.git",
     "source": "github"
   },
-  "version": "0.6.1",
+  "version": "0.8.0",
   "websiteUrl": "https://github.com/Enreign/pagerunner",
   "icons": [
     {
@@ -27,7 +27,7 @@
     {
       "registryType": "npm",
       "identifier": "pagerunner",
-      "version": "0.6.1",
+      "version": "0.8.0",
       "transport": {
         "type": "stdio",
         "args": [

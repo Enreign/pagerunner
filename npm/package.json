@@ -1,6 +1,6 @@
 {
   "name": "pagerunner",
-  "version": "0.7.1",
+  "version": "0.8.0",
   "description": "Persistent browser layer for AI agents. Connects any MCP client to your real Chrome profiles \u2014 already logged in, with site intelligence that compounds over time. Sessions survive daemon restarts. PII anonymization, encrypted state, auto-checkpoints, macOS menu bar.",
   "license": "MIT",
   "repository": {

@@ -70,7 +70,8 @@ pub fn move_cursor_js(x: f64, y: f64) -> String {
                 requestAnimationFrame(p.animate);
             }}
         }})()"#,
-        x = x, y = y
+        x = x,
+        y = y
     )
 }
 
@@ -116,7 +117,8 @@ pub fn click_ripple_js(x: f64, y: f64) -> String {
 
             setTimeout(() => {{ r.remove(); d.remove(); }}, 600);
         }})()"#,
-        x = x, y = y
+        x = x,
+        y = y
     )
 }
 

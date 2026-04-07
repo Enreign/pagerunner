@@ -2158,12 +2158,10 @@ async fn dispatch_tool_inner(
                             )
                             .await
                             {
-                                let cdp_sid = crate::browser::attach_to_target(
-                                    session,
-                                    &tab.target_id,
-                                )
-                                .await
-                                .unwrap_or_default();
+                                let cdp_sid =
+                                    crate::browser::attach_to_target(session, &tab.target_id)
+                                        .await
+                                        .unwrap_or_default();
                                 let frame_tx = handle.frame_tx_clone();
                                 let capture = crate::recording::spawn_frame_capture(
                                     session.cdp.clone(),
@@ -2485,7 +2483,9 @@ async fn dispatch_tool_inner(
             // Fade out before navigation if recording
             let is_recording = session.recording.is_some();
             if is_recording {
-                let sid_cdp = browser::attach_to_target(session, tid).await.unwrap_or_default();
+                let sid_cdp = browser::attach_to_target(session, tid)
+                    .await
+                    .unwrap_or_default();
                 let _ = session.cdp.send_on_session(
                     "Runtime.evaluate",
                     json!({"expression": crate::recording_cursor::FADE_OUT_JS, "returnByValue": true}),
@@ -2504,7 +2504,9 @@ async fn dispatch_tool_inner(
                 tokio::time::sleep(std::time::Duration::from_millis(800)).await;
                 let _ = browser::inject_recording_cursor(session, tid).await;
                 // Fade in
-                let sid_cdp = browser::attach_to_target(session, tid).await.unwrap_or_default();
+                let sid_cdp = browser::attach_to_target(session, tid)
+                    .await
+                    .unwrap_or_default();
                 let _ = session.cdp.send_on_session(
                     "Runtime.evaluate",
                     json!({"expression": crate::recording_cursor::FADE_IN_JS, "returnByValue": true}),
@@ -2989,12 +2991,18 @@ async fn dispatch_tool_inner(
             let is_recording = session.recording.is_some();
             if is_recording {
                 let js = browser::build_selector_chain_js(selector);
-                let sid_cdp = browser::attach_to_target(session, tid).await.unwrap_or_default();
-                if let Ok(r) = session.cdp.send_on_session(
-                    "Runtime.evaluate",
-                    json!({"expression": &js, "returnByValue": true}),
-                    Some(sid_cdp),
-                ).await {
+                let sid_cdp = browser::attach_to_target(session, tid)
+                    .await
+                    .unwrap_or_default();
+                if let Ok(r) = session
+                    .cdp
+                    .send_on_session(
+                        "Runtime.evaluate",
+                        json!({"expression": &js, "returnByValue": true}),
+                        Some(sid_cdp),
+                    )
+                    .await
+                {
                     let v = &r["result"]["value"];
                     if let (Some(x), Some(y)) = (v["x"].as_f64(), v["y"].as_f64()) {
                         // Store zoom-in keyframe — applied during render
@@ -3089,12 +3097,18 @@ async fn dispatch_tool_inner(
             if session.recording.is_some() {
                 if let Some(sel) = selector {
                     let js = browser::build_selector_chain_js(sel);
-                    let sid_cdp = browser::attach_to_target(session, tid).await.unwrap_or_default();
-                    if let Ok(r) = session.cdp.send_on_session(
-                        "Runtime.evaluate",
-                        json!({"expression": &js, "returnByValue": true}),
-                        Some(sid_cdp),
-                    ).await {
+                    let sid_cdp = browser::attach_to_target(session, tid)
+                        .await
+                        .unwrap_or_default();
+                    if let Ok(r) = session
+                        .cdp
+                        .send_on_session(
+                            "Runtime.evaluate",
+                            json!({"expression": &js, "returnByValue": true}),
+                            Some(sid_cdp),
+                        )
+                        .await
+                    {
                         let v = &r["result"]["value"];
                         if let (Some(x), Some(y)) = (v["x"].as_f64(), v["y"].as_f64()) {
                             let _ = browser::move_recording_cursor(session, tid, x, y, false).await;
@@ -3256,12 +3270,18 @@ async fn dispatch_tool_inner(
             let is_recording = session.recording.is_some();
             if is_recording {
                 let js = browser::build_selector_chain_js(selector);
-                let sid_cdp = browser::attach_to_target(session, tid).await.unwrap_or_default();
-                if let Ok(r) = session.cdp.send_on_session(
-                    "Runtime.evaluate",
-                    json!({"expression": &js, "returnByValue": true}),
-                    Some(sid_cdp),
-                ).await {
+                let sid_cdp = browser::attach_to_target(session, tid)
+                    .await
+                    .unwrap_or_default();
+                if let Ok(r) = session
+                    .cdp
+                    .send_on_session(
+                        "Runtime.evaluate",
+                        json!({"expression": &js, "returnByValue": true}),
+                        Some(sid_cdp),
+                    )
+                    .await
+                {
                     let v = &r["result"]["value"];
                     if let (Some(x), Some(y)) = (v["x"].as_f64(), v["y"].as_f64()) {
                         // Store zoom-in keyframe — applied during render
@@ -3398,21 +3418,30 @@ async fn dispatch_tool_inner(
                 if let Some(sel) = selector {
                     // Scroll to element — move cursor there
                     let js = browser::build_selector_chain_js(sel);
-                    let sid_cdp = browser::attach_to_target(session, tid).await.unwrap_or_default();
-                    if let Ok(r) = session.cdp.send_on_session(
-                        "Runtime.evaluate",
-                        json!({"expression": &js, "returnByValue": true}),
-                        Some(sid_cdp),
-                    ).await {
+                    let sid_cdp = browser::attach_to_target(session, tid)
+                        .await
+                        .unwrap_or_default();
+                    if let Ok(r) = session
+                        .cdp
+                        .send_on_session(
+                            "Runtime.evaluate",
+                            json!({"expression": &js, "returnByValue": true}),
+                            Some(sid_cdp),
+                        )
+                        .await
+                    {
                         let v = &r["result"]["value"];
                         if let (Some(cx), Some(cy)) = (v["x"].as_f64(), v["y"].as_f64()) {
-                            let _ = browser::move_recording_cursor(session, tid, cx, cy, false).await;
+                            let _ =
+                                browser::move_recording_cursor(session, tid, cx, cy, false).await;
                             tokio::time::sleep(std::time::Duration::from_millis(400)).await;
                         }
                     }
                 } else {
                     // Scroll by offset — move cursor to center of viewport
-                    let sid_cdp = browser::attach_to_target(session, tid).await.unwrap_or_default();
+                    let sid_cdp = browser::attach_to_target(session, tid)
+                        .await
+                        .unwrap_or_default();
                     if let Ok(r) = session.cdp.send_on_session(
                         "Runtime.evaluate",
                         json!({"expression": "({x: window.innerWidth/2, y: window.innerHeight/2})", "returnByValue": true}),
@@ -4323,11 +4352,9 @@ async fn dispatch_tool_inner(
                 .unwrap_or_default();
 
             let mut mgr = sessions.lock().await;
-            let session = mgr
-                .get_mut(&session_id_str)
-                .ok_or_else(|| {
-                    PagerunnerError::Config(format!("Session {} not found", session_id_str))
-                })?;
+            let session = mgr.get_mut(&session_id_str).ok_or_else(|| {
+                PagerunnerError::Config(format!("Session {} not found", session_id_str))
+            })?;
 
             if session.recording.is_some() {
                 return Err(PagerunnerError::Config(
@@ -4351,11 +4378,9 @@ async fn dispatch_tool_inner(
                 .or_else(|| name.clone())
                 .unwrap_or_else(|| recording_id.clone());
 
-            let base_dir = crate::recording::resolve_recordings_dir(
-                config.recording.storage_dir.as_deref(),
-            );
-            let rec_dir =
-                crate::recording::recording_dir_path(&base_dir, &profile, &flow_label);
+            let base_dir =
+                crate::recording::resolve_recordings_dir(config.recording.storage_dir.as_deref());
+            let rec_dir = crate::recording::recording_dir_path(&base_dir, &profile, &flow_label);
 
             let format_str = match config.recording.format {
                 crate::config::RecordingFormat::Webm => "webm",
@@ -4373,19 +4398,17 @@ async fn dispatch_tool_inner(
             );
 
             let fps = config.recording.fps.max(1).min(10);
-            let mut handle =
-                crate::recording::RecordingHandle::start(
-                    state,
-                    rec_dir,
-                    format_str,
-                    fps,
-                    config.recording.output_fps.max(fps),
-                )
-                .await?;
+            let mut handle = crate::recording::RecordingHandle::start(
+                state,
+                rec_dir,
+                format_str,
+                fps,
+                config.recording.output_fps.max(fps),
+            )
+            .await?;
 
             // Get the CDP session ID used for this target
-            let cdp_session_id =
-                crate::browser::attach_to_target(session, &target_id).await?;
+            let cdp_session_id = crate::browser::attach_to_target(session, &target_id).await?;
 
             tracing::info!(
                 cdp_session = %cdp_session_id,
@@ -4512,9 +4535,7 @@ async fn dispatch_tool_inner(
             })?;
 
             let ts_ms = handle.state.elapsed_ms();
-            handle
-                .state
-                .add_marker(label.clone(), description, ts_ms);
+            handle.state.add_marker(label.clone(), description, ts_ms);
 
             Ok(serde_json::json!({
                 "ok": true,
@@ -4560,13 +4581,12 @@ async fn dispatch_tool_inner(
                 .as_str()
                 .ok_or_else(|| PagerunnerError::Config("Missing recording_id".into()))?;
 
-            let entry = crate::recording::get_recording_index(&db, recording_id)?
-                .ok_or_else(|| {
+            let entry =
+                crate::recording::get_recording_index(&db, recording_id)?.ok_or_else(|| {
                     PagerunnerError::Config(format!("Recording {} not found", recording_id))
                 })?;
 
-            let metadata_path =
-                std::path::PathBuf::from(&entry.dir_path).join("metadata.json");
+            let metadata_path = std::path::PathBuf::from(&entry.dir_path).join("metadata.json");
             let markers: Vec<serde_json::Value> = if metadata_path.exists() {
                 match std::fs::read_to_string(&metadata_path) {
                     Ok(json) => {
@@ -4593,8 +4613,8 @@ async fn dispatch_tool_inner(
                 vec![]
             };
 
-            let video_path = std::path::PathBuf::from(&entry.dir_path)
-                .join(format!("video.{}", entry.format));
+            let video_path =
+                std::path::PathBuf::from(&entry.dir_path).join(format!("video.{}", entry.format));
 
             Ok(serde_json::json!({
                 "ok": true,
@@ -4619,8 +4639,8 @@ async fn dispatch_tool_inner(
                 .as_str()
                 .ok_or_else(|| PagerunnerError::Config("Missing recording_id".into()))?;
 
-            let entry = crate::recording::get_recording_index(&db, recording_id)?
-                .ok_or_else(|| {
+            let entry =
+                crate::recording::get_recording_index(&db, recording_id)?.ok_or_else(|| {
                     PagerunnerError::Config(format!("Recording {} not found", recording_id))
                 })?;
 

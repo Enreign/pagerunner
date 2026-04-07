@@ -27,9 +27,14 @@ pub struct ZoomState {
 impl Default for ZoomState {
     fn default() -> Self {
         Self {
-            target_scale: 1.0, target_x: 0.0, target_y: 0.0,
-            current_scale: 1.0, current_x: 0.0, current_y: 0.0,
-            viewport_w: 0.0, viewport_h: 0.0,
+            target_scale: 1.0,
+            target_x: 0.0,
+            target_y: 0.0,
+            current_scale: 1.0,
+            current_x: 0.0,
+            current_y: 0.0,
+            viewport_w: 0.0,
+            viewport_h: 0.0,
         }
     }
 }
@@ -89,8 +94,12 @@ impl ZoomState {
         let s = self.current_scale;
         let clip_w = self.viewport_w / s;
         let clip_h = self.viewport_h / s;
-        let clip_x = (self.current_x - clip_w / 2.0).max(0.0).min(self.viewport_w - clip_w);
-        let clip_y = (self.current_y - clip_h / 2.0).max(0.0).min(self.viewport_h - clip_h);
+        let clip_x = (self.current_x - clip_w / 2.0)
+            .max(0.0)
+            .min(self.viewport_w - clip_w);
+        let clip_y = (self.current_y - clip_h / 2.0)
+            .max(0.0)
+            .min(self.viewport_h - clip_h);
         Some(serde_json::json!({
             "x": clip_x, "y": clip_y,
             "width": clip_w, "height": clip_h,
@@ -157,7 +166,13 @@ pub fn recording_dir_path(base: &std::path::Path, profile: &str, name_or_flow: &
     let date = chrono::Utc::now().format("%Y-%m-%d");
     let sanitized: String = name_or_flow
         .chars()
-        .map(|c| if c.is_alphanumeric() || c == '-' || c == '_' { c } else { '-' })
+        .map(|c| {
+            if c.is_alphanumeric() || c == '-' || c == '_' {
+                c
+            } else {
+                '-'
+            }
+        })
         .collect();
     base.join(profile).join(format!("{}_{}", date, sanitized))
 }
@@ -295,16 +310,38 @@ impl RecordingHandle {
         // Encode at capture fps — motion interpolation applied during render_recording
         let ffmpeg_args: Vec<String> = match format {
             "webm" => vec![
-                "-f", "image2pipe", "-c:v", "mjpeg", "-framerate", &fps_str,
-                "-i", "pipe:0",
-                "-c:v", "libvpx-vp9", "-pix_fmt", "yuv420p",
-                "-y", &video_path_str,
+                "-f",
+                "image2pipe",
+                "-c:v",
+                "mjpeg",
+                "-framerate",
+                &fps_str,
+                "-i",
+                "pipe:0",
+                "-c:v",
+                "libvpx-vp9",
+                "-pix_fmt",
+                "yuv420p",
+                "-y",
+                &video_path_str,
             ],
             _ => vec![
-                "-f", "image2pipe", "-c:v", "mjpeg", "-framerate", &fps_str,
-                "-i", "pipe:0",
-                "-c:v", "libx264", "-pix_fmt", "yuv420p", "-preset", "fast",
-                "-y", &video_path_str,
+                "-f",
+                "image2pipe",
+                "-c:v",
+                "mjpeg",
+                "-framerate",
+                &fps_str,
+                "-i",
+                "pipe:0",
+                "-c:v",
+                "libx264",
+                "-pix_fmt",
+                "yuv420p",
+                "-preset",
+                "fast",
+                "-y",
+                &video_path_str,
             ],
         }
         .into_iter()
@@ -359,7 +396,10 @@ impl RecordingHandle {
                     }
                 }
             }
-            tracing::info!(bytes_written, "Closing ffmpeg stdin, waiting for finalization");
+            tracing::info!(
+                bytes_written,
+                "Closing ffmpeg stdin, waiting for finalization"
+            );
             drop(stdin);
             let status = child
                 .wait()
@@ -502,14 +542,17 @@ pub fn spawn_frame_capture(
             // On first frame, detect viewport dimensions for zoom calculations
             if frame_count == 0 {
                 // Get viewport size
-                if let Ok(r) = cdp.send_on_session(
-                    "Runtime.evaluate",
-                    serde_json::json!({
-                        "expression": "({w:window.innerWidth,h:window.innerHeight})",
-                        "returnByValue": true
-                    }),
-                    Some(cdp_session_id.clone()),
-                ).await {
+                if let Ok(r) = cdp
+                    .send_on_session(
+                        "Runtime.evaluate",
+                        serde_json::json!({
+                            "expression": "({w:window.innerWidth,h:window.innerHeight})",
+                            "returnByValue": true
+                        }),
+                        Some(cdp_session_id.clone()),
+                    )
+                    .await
+                {
                     let v = &r["result"]["value"];
                     if let (Some(w), Some(h)) = (v["w"].as_f64(), v["h"].as_f64()) {
                         let mut z = zoom.write().unwrap_or_else(|e| e.into_inner());
@@ -821,7 +864,10 @@ mod tests {
         assert_eq!(state.metadata.markers.len(), 3);
         assert_eq!(state.metadata.markers[0].label, "A");
         assert!(state.metadata.markers[0].description.is_none());
-        assert_eq!(state.metadata.markers[1].description.as_deref(), Some("desc B"));
+        assert_eq!(
+            state.metadata.markers[1].description.as_deref(),
+            Some("desc B")
+        );
         assert_eq!(state.metadata.markers[2].ts_ms, 5000);
     }
 
@@ -1050,7 +1096,9 @@ mod tests {
         let mut handle = handle.unwrap();
 
         // Add markers
-        handle.state.add_marker("Step 1".into(), Some("First step".into()), 0);
+        handle
+            .state
+            .add_marker("Step 1".into(), Some("First step".into()), 0);
         handle.state.add_marker("Step 2".into(), None, 1000);
 
         let metadata = handle.stop().await.unwrap();
@@ -1096,11 +1144,8 @@ mod tests {
     fn test_recording_index_get() {
         let dir = tempfile::tempdir().unwrap();
         let key = crate::db::Db::generate_key();
-        let db = crate::db::Db::open_with_key(
-            dir.path().join("test.db").to_str().unwrap(),
-            key,
-        )
-        .unwrap();
+        let db = crate::db::Db::open_with_key(dir.path().join("test.db").to_str().unwrap(), key)
+            .unwrap();
 
         // get nonexistent
         assert!(get_recording_index(&db, "nonexistent").unwrap().is_none());
@@ -1129,11 +1174,8 @@ mod tests {
     fn test_recording_index_tag_filter() {
         let dir = tempfile::tempdir().unwrap();
         let key = crate::db::Db::generate_key();
-        let db = crate::db::Db::open_with_key(
-            dir.path().join("test.db").to_str().unwrap(),
-            key,
-        )
-        .unwrap();
+        let db = crate::db::Db::open_with_key(dir.path().join("test.db").to_str().unwrap(), key)
+            .unwrap();
 
         let e1 = RecordingIndexEntry {
             recording_id: "rec_1".into(),
@@ -1178,11 +1220,8 @@ mod tests {
     fn test_recording_index_combined_filters() {
         let dir = tempfile::tempdir().unwrap();
         let key = crate::db::Db::generate_key();
-        let db = crate::db::Db::open_with_key(
-            dir.path().join("test.db").to_str().unwrap(),
-            key,
-        )
-        .unwrap();
+        let db = crate::db::Db::open_with_key(dir.path().join("test.db").to_str().unwrap(), key)
+            .unwrap();
 
         let e1 = RecordingIndexEntry {
             recording_id: "rec_a".into(),
@@ -1227,11 +1266,8 @@ mod tests {
     fn test_recording_index_ordering() {
         let dir = tempfile::tempdir().unwrap();
         let key = crate::db::Db::generate_key();
-        let db = crate::db::Db::open_with_key(
-            dir.path().join("test.db").to_str().unwrap(),
-            key,
-        )
-        .unwrap();
+        let db = crate::db::Db::open_with_key(dir.path().join("test.db").to_str().unwrap(), key)
+            .unwrap();
 
         let now = chrono::Utc::now();
         let earlier = now - chrono::Duration::hours(1);
@@ -1276,11 +1312,8 @@ mod tests {
     fn test_delete_recording_index_nonexistent() {
         let dir = tempfile::tempdir().unwrap();
         let key = crate::db::Db::generate_key();
-        let db = crate::db::Db::open_with_key(
-            dir.path().join("test.db").to_str().unwrap(),
-            key,
-        )
-        .unwrap();
+        let db = crate::db::Db::open_with_key(dir.path().join("test.db").to_str().unwrap(), key)
+            .unwrap();
 
         // Should not error
         delete_recording_index(&db, "nonexistent").unwrap();
@@ -1290,11 +1323,8 @@ mod tests {
     fn test_recording_index_update() {
         let dir = tempfile::tempdir().unwrap();
         let key = crate::db::Db::generate_key();
-        let db = crate::db::Db::open_with_key(
-            dir.path().join("test.db").to_str().unwrap(),
-            key,
-        )
-        .unwrap();
+        let db = crate::db::Db::open_with_key(dir.path().join("test.db").to_str().unwrap(), key)
+            .unwrap();
 
         let entry = RecordingIndexEntry {
             recording_id: "rec_upd".into(),
@@ -1363,11 +1393,8 @@ mod tests {
     fn test_recording_index_roundtrip() {
         let dir = tempfile::tempdir().unwrap();
         let key = crate::db::Db::generate_key();
-        let db = crate::db::Db::open_with_key(
-            dir.path().join("test.db").to_str().unwrap(),
-            key,
-        )
-        .unwrap();
+        let db = crate::db::Db::open_with_key(dir.path().join("test.db").to_str().unwrap(), key)
+            .unwrap();
 
         let entry = RecordingIndexEntry {
             recording_id: "rec_123".to_string(),

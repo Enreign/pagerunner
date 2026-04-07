@@ -734,7 +734,10 @@ auto_record = true
 fps = 5
 "#;
         let config: PagerunnerConfig = toml::from_str(toml).unwrap();
-        assert_eq!(config.recording.storage_dir.as_deref(), Some("/tmp/recordings"));
+        assert_eq!(
+            config.recording.storage_dir.as_deref(),
+            Some("/tmp/recordings")
+        );
         assert_eq!(config.recording.retention_days, 30);
         assert_eq!(config.recording.max_size_mb, 500);
         assert_eq!(config.recording.format, RecordingFormat::Webm);
@@ -795,7 +798,10 @@ auto_record = true
 fps = 5
 "#;
         let cfg: PagerunnerConfig = toml::from_str(toml).unwrap();
-        assert_eq!(cfg.recording.storage_dir.as_deref(), Some("/data/recordings"));
+        assert_eq!(
+            cfg.recording.storage_dir.as_deref(),
+            Some("/data/recordings")
+        );
         assert_eq!(cfg.recording.retention_days, 90);
         assert_eq!(cfg.recording.max_size_mb, 1024);
         assert_eq!(cfg.recording.format, RecordingFormat::Webm);
