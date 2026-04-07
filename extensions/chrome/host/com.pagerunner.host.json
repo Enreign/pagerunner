@@ -1,0 +1,9 @@
+{
+  "name": "com.pagerunner.host",
+  "description": "Pagerunner native messaging host — bridges Chrome extension to the Pagerunner daemon",
+  "path": "INSTALL_PATH_PLACEHOLDER",
+  "type": "stdio",
+  "allowed_origins": [
+    "chrome-extension://EXTENSION_ID_PLACEHOLDER/"
+  ]
+}

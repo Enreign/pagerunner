@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Pagerunner</title>
+  <link rel="stylesheet" href="popup.css" />
+</head>
+<body>
+  <div class="container">
+    <!-- Header -->
+    <header class="header">
+      <span class="logo">Pagerunner</span>
+      <span class="status-badge" id="statusBadge">
+        <span class="dot" id="statusDot"></span>
+        <span id="statusText">Checking…</span>
+      </span>
+    </header>
+
+    <!-- Profile selector -->
+    <div class="field" id="profileField">
+      <label class="label" for="profileSelect">Profile</label>
+      <select class="select" id="profileSelect">
+        <option value="">Loading profiles…</option>
+      </select>
+    </div>
+
+    <!-- Goal input -->
+    <div class="field">
+      <label class="label" for="goalInput">Goal</label>
+      <textarea
+        class="textarea"
+        id="goalInput"
+        rows="3"
+        placeholder="What should the agent do?"
+        maxlength="2000"
+      ></textarea>
+    </div>
+
+    <!-- Run / Stop button -->
+    <button class="btn btn-primary" id="runBtn" disabled>Run</button>
+
+    <!-- Output feed -->
+    <div class="feed" id="feed" hidden>
+      <div class="feed-inner" id="feedInner"></div>
+    </div>
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+</html>
