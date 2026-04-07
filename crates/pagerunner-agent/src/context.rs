@@ -27,6 +27,12 @@ pub struct ContextConfig {
     /// Default: 4 (keeps the last 4 assistant+tool exchanges intact).
     #[serde(default = "default_keep_recent")]
     pub keep_recent: usize,
+
+    /// Tools to expose to the agent. If empty, all tools are exposed.
+    /// When non-empty, only these tools are sent to the LLM as schemas.
+    /// Recommended default covers browsing-essential tools.
+    #[serde(default = "default_core_tools")]
+    pub core_tools: Vec<String>,
 }
 
 fn default_max_result_chars() -> usize {
@@ -41,14 +47,55 @@ fn default_keep_recent() -> usize {
     4
 }
 
+fn default_core_tools() -> Vec<String> {
+    vec![
+        "navigate",
+        "get_content",
+        "screenshot",
+        "click",
+        "fill",
+        "scroll",
+        "select",
+        "type_text",
+        "wait_for",
+        "evaluate",
+        "list_tabs",
+        "new_tab",
+        "close_tab",
+        "list_sessions",
+        "open_session",
+        "close_session",
+        "list_profiles",
+    ]
+    .into_iter()
+    .map(String::from)
+    .collect()
+}
+
 impl Default for ContextConfig {
     fn default() -> Self {
         Self {
             max_result_chars: default_max_result_chars(),
             max_context_chars: default_max_context_chars(),
             keep_recent: default_keep_recent(),
+            core_tools: default_core_tools(),
         }
     }
+}
+
+/// Filter tools to only include those in the `core_tools` list.
+/// If the list is empty, all tools are returned unchanged.
+pub fn filter_tools(
+    tools: Vec<pagerunner_llm::ToolSchema>,
+    core_tools: &[String],
+) -> Vec<pagerunner_llm::ToolSchema> {
+    if core_tools.is_empty() {
+        return tools;
+    }
+    tools
+        .into_iter()
+        .filter(|t| core_tools.contains(&t.name))
+        .collect()
 }
 
 // ---------------------------------------------------------------------------
@@ -221,6 +268,10 @@ mod tests {
         assert_eq!(c.max_result_chars, 4000);
         assert_eq!(c.max_context_chars, 24000);
         assert_eq!(c.keep_recent, 4);
+        assert!(!c.core_tools.is_empty());
+        assert!(c.core_tools.contains(&"navigate".to_string()));
+        assert!(c.core_tools.contains(&"get_content".to_string()));
+        assert!(c.core_tools.contains(&"screenshot".to_string()));
     }
 
     #[test]
@@ -366,6 +417,58 @@ keep_recent = 2
         if let ContentBlock::Text { text } = &messages[1].content[0] {
             assert!(text.contains("compacted"));
             assert!(text.len() < long_thinking.len());
+        }
+    }
+
+    // --- filter_tools tests ---
+
+    #[test]
+    fn filter_tools_empty_list_returns_all() {
+        let tools = vec![
+            pagerunner_llm::ToolSchema::new("navigate", "nav", serde_json::json!({})),
+            pagerunner_llm::ToolSchema::new("kv_set", "set kv", serde_json::json!({})),
+        ];
+        let filtered = filter_tools(tools.clone(), &[]);
+        assert_eq!(filtered.len(), 2);
+    }
+
+    #[test]
+    fn filter_tools_keeps_only_listed() {
+        let tools = vec![
+            pagerunner_llm::ToolSchema::new("navigate", "nav", serde_json::json!({})),
+            pagerunner_llm::ToolSchema::new("kv_set", "set kv", serde_json::json!({})),
+            pagerunner_llm::ToolSchema::new("screenshot", "ss", serde_json::json!({})),
+        ];
+        let core = vec!["navigate".to_string(), "screenshot".to_string()];
+        let filtered = filter_tools(tools, &core);
+        assert_eq!(filtered.len(), 2);
+        assert_eq!(filtered[0].name, "navigate");
+        assert_eq!(filtered[1].name, "screenshot");
+    }
+
+    #[test]
+    fn filter_tools_nonexistent_names_ignored() {
+        let tools = vec![
+            pagerunner_llm::ToolSchema::new("navigate", "nav", serde_json::json!({})),
+        ];
+        let core = vec!["navigate".to_string(), "nonexistent".to_string()];
+        let filtered = filter_tools(tools, &core);
+        assert_eq!(filtered.len(), 1);
+        assert_eq!(filtered[0].name, "navigate");
+    }
+
+    #[test]
+    fn default_core_tools_contains_essential_browsing_tools() {
+        let defaults = default_core_tools();
+        for expected in &[
+            "navigate", "get_content", "screenshot", "click", "fill",
+            "scroll", "select", "type_text", "wait_for", "evaluate",
+            "list_tabs", "new_tab", "close_tab",
+        ] {
+            assert!(
+                defaults.contains(&expected.to_string()),
+                "missing expected tool: {expected}"
+            );
         }
     }
 }

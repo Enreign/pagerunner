@@ -14,7 +14,7 @@ use pagerunner_llm::{
 use crate::autonomy::ToolDecision;
 use crate::budget::{BudgetExceeded, BudgetTracker};
 use crate::config::{AgentConfig, SessionContext};
-use crate::context::{compact_messages, truncate_result};
+use crate::context::{compact_messages, filter_tools, truncate_result};
 use crate::events::{AgentEvent, AgentOutcome, AgentResult};
 use crate::executor::{ToolExecutor, ToolResponse};
 
@@ -169,7 +169,8 @@ pub async fn run_agent(
 ) -> AgentResult {
     // Keep original tools for session param injection checks.
     let original_tools: Vec<ToolSchema> = tool_executor.available_tools();
-    let mut tools: Vec<ToolSchema> = original_tools.clone();
+    // Filter to core tools if configured (reduces schema tokens sent to LLM).
+    let mut tools: Vec<ToolSchema> = filter_tools(original_tools.clone(), &config.context.core_tools);
 
     // If session context is set, strip session_id/target_id from schemas.
     if config.session_context.is_some() {
