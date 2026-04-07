@@ -330,11 +330,16 @@ async fn main() {
         "personal".to_string()
     });
 
-    // Provider selection: OPENROUTER_API_KEY or OPENAI_API_KEY → OpenAI-compat, else Ollama
+    // Provider selection priority: Anthropic → OpenRouter → OpenAI → Ollama
     let (provider, provider_name, model): (Arc<dyn LlmProvider>, String, String) =
-        if let Ok(api_key) = std::env::var("OPENROUTER_API_KEY") {
+        if let Ok(api_key) = std::env::var("ANTHROPIC_API_KEY") {
             let model = std::env::var("LLM_MODEL")
-                .unwrap_or_else(|_| "google/gemma-3-4b-it:free".into());
+                .unwrap_or_else(|_| "claude-haiku-4-5-20251001".into());
+            let p = pagerunner_llm::anthropic::AnthropicProvider::new(api_key, model.clone());
+            (Arc::new(p), "Anthropic".into(), model)
+        } else if let Ok(api_key) = std::env::var("OPENROUTER_API_KEY") {
+            let model = std::env::var("LLM_MODEL")
+                .unwrap_or_else(|_| "nvidia/nemotron-nano-9b-v2:free".into());
             let p = pagerunner_llm::openai_compat::OpenAiCompatProvider::new(
                 api_key,
                 "https://openrouter.ai/api/v1",
