@@ -17,6 +17,27 @@ pub async fn run() -> Result<()> {
         crate::error::PagerunnerError::Config("home directory not accessible".into())
     })?;
 
+    // Load API keys from ~/.pagerunner/.env if present (for agent LLM providers).
+    let env_path = home.join(".pagerunner/.env");
+    if env_path.exists() {
+        if let Ok(content) = std::fs::read_to_string(&env_path) {
+            for line in content.lines() {
+                let line = line.trim();
+                if line.is_empty() || line.starts_with('#') {
+                    continue;
+                }
+                if let Some((key, value)) = line.split_once('=') {
+                    let key = key.trim();
+                    let value = value.trim();
+                    if !key.is_empty() && !value.is_empty() && std::env::var(key).is_err() {
+                        std::env::set_var(key, value);
+                    }
+                }
+            }
+            tracing::debug!("Loaded env from {:?}", env_path);
+        }
+    }
+
     let db_path_str = std::env::var("PAGERUNNER_DB_PATH").unwrap_or_else(|_| {
         home.join(".pagerunner/state.db")
             .to_str()
