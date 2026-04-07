@@ -102,21 +102,77 @@ pub fn filter_tools(
 // Truncation
 // ---------------------------------------------------------------------------
 
+/// Strip the `<<<UNTRUSTED_WEB_CONTENT ...>>>` / `<<<END_UNTRUSTED_WEB_CONTENT>>>`
+/// wrapper that the MCP server adds for the Claude Code client. The agent's
+/// inner LLM doesn't need these security markers.
+fn strip_untrusted_wrapper(text: &str) -> &str {
+    let mut s = text;
+
+    // Strip opening tag: <<<UNTRUSTED_WEB_CONTENT domain="...">>>
+    if let Some(start) = s.find("<<<UNTRUSTED_WEB_CONTENT") {
+        if let Some(end) = s[start..].find(">>>") {
+            let after = start + end + 3;
+            s = s[after..].trim_start_matches('\n');
+        }
+    }
+
+    // Strip closing tag: <<<END_UNTRUSTED_WEB_CONTENT>>>
+    if let Some(pos) = s.rfind("<<<END_UNTRUSTED_WEB_CONTENT>>>") {
+        s = s[..pos].trim_end_matches('\n');
+    }
+
+    s
+}
+
+/// Normalize whitespace: collapse runs of 3+ blank lines to 2, trim each line.
+fn normalize_whitespace(text: &str) -> String {
+    let mut result = String::with_capacity(text.len());
+    let mut consecutive_blanks = 0;
+
+    for line in text.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            consecutive_blanks += 1;
+            if consecutive_blanks <= 2 {
+                result.push('\n');
+            }
+        } else {
+            consecutive_blanks = 0;
+            if !result.is_empty() && !result.ends_with('\n') {
+                result.push('\n');
+            }
+            result.push_str(trimmed);
+        }
+    }
+
+    result
+}
+
 /// Truncate a tool result string if it exceeds the configured limit.
-/// Appends a note about the truncation so the LLM knows content was cut.
+///
+/// Before measuring, strips the `<<<UNTRUSTED_WEB_CONTENT>>>` wrapper
+/// (which is for the MCP client, not the agent's LLM) and normalizes
+/// excessive whitespace. The full, unmodified result is still emitted
+/// via `AgentEvent::ToolResult`.
 pub fn truncate_result(result: &str, max_chars: usize) -> String {
-    if max_chars == 0 || result.len() <= max_chars {
-        return result.to_string();
+    // 1. Strip untrusted wrapper
+    let stripped = strip_untrusted_wrapper(result);
+
+    // 2. Normalize whitespace
+    let cleaned = normalize_whitespace(stripped);
+
+    if max_chars == 0 || cleaned.len() <= max_chars {
+        return cleaned;
     }
 
     // Find a clean break point — prefer line boundary
-    let cut = result[..max_chars]
+    let cut = cleaned[..max_chars]
         .rfind('\n')
         .unwrap_or(max_chars);
     let cut = cut.max(max_chars / 2); // don't cut more than half
 
-    let truncated = &result[..cut];
-    let remaining = result.len() - cut;
+    let truncated = &cleaned[..cut];
+    let remaining = cleaned.len() - cut;
     format!(
         "{truncated}\n\n[... truncated — {remaining} more characters. \
          Use get_content or scroll for more detail.]"
@@ -260,6 +316,63 @@ mod tests {
         let text = "x".repeat(100);
         let r = truncate_result(&text, 100);
         assert_eq!(r, text);
+    }
+
+    // --- Untrusted wrapper stripping tests ---
+
+    #[test]
+    fn strip_untrusted_wrapper_removes_tags() {
+        let input = "<<<UNTRUSTED_WEB_CONTENT domain=\"example.com\">>>\nHello world\n<<<END_UNTRUSTED_WEB_CONTENT>>>";
+        let result = strip_untrusted_wrapper(input);
+        assert_eq!(result, "Hello world");
+        assert!(!result.contains("UNTRUSTED"));
+    }
+
+    #[test]
+    fn strip_untrusted_wrapper_no_tags_passthrough() {
+        let input = "Just plain content";
+        let result = strip_untrusted_wrapper(input);
+        assert_eq!(result, "Just plain content");
+    }
+
+    #[test]
+    fn strip_untrusted_wrapper_only_opening() {
+        let input = "<<<UNTRUSTED_WEB_CONTENT domain=\"x\">>>\nContent here";
+        let result = strip_untrusted_wrapper(input);
+        assert_eq!(result, "Content here");
+    }
+
+    #[test]
+    fn truncate_result_strips_wrapper_before_measuring() {
+        let wrapper = "<<<UNTRUSTED_WEB_CONTENT domain=\"example.com\">>>\nshort\n<<<END_UNTRUSTED_WEB_CONTENT>>>";
+        // The inner content "short" is well under the limit
+        let r = truncate_result(wrapper, 100);
+        assert!(!r.contains("UNTRUSTED"));
+        assert!(r.contains("short"));
+        assert!(!r.contains("truncated"));
+    }
+
+    // --- Whitespace normalization tests ---
+
+    #[test]
+    fn normalize_whitespace_collapses_blank_lines() {
+        let input = "line 1\n\n\n\n\nline 2";
+        let result = normalize_whitespace(input);
+        assert_eq!(result, "line 1\n\nline 2");
+    }
+
+    #[test]
+    fn normalize_whitespace_trims_lines() {
+        let input = "  hello  \n  world  ";
+        let result = normalize_whitespace(input);
+        assert_eq!(result, "hello\nworld");
+    }
+
+    #[test]
+    fn truncate_result_normalizes_whitespace() {
+        let input = "  line 1  \n\n\n\n\n  line 2  ";
+        let r = truncate_result(input, 1000);
+        assert_eq!(r, "line 1\n\nline 2");
     }
 
     #[test]
