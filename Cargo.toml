@@ -1,3 +1,7 @@
+[workspace]
+members = [".", "crates/pagerunner-llm", "crates/pagerunner-agent"]
+resolver = "2"
+
 [package]
 name = "pagerunner"
 version = "0.8.0"
