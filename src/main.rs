@@ -431,6 +431,21 @@ enum Commands {
         #[arg(long)]
         session_id: Option<String>,
     },
+    /// Run an autonomous agent with a goal
+    #[command(name = "agent-run")]
+    AgentRun {
+        /// The goal for the agent
+        goal: String,
+        /// LLM model to use (overrides config)
+        #[arg(long)]
+        model: Option<String>,
+        /// Chrome profile to use
+        #[arg(long)]
+        profile: Option<String>,
+        /// Max steps
+        #[arg(long)]
+        max_steps: Option<u32>,
+    },
     /// Download the NER model for PERSON/ORG name detection (requires --features ner build)
     DownloadModel,
     /// Start recording a tab as video
@@ -1748,6 +1763,123 @@ async fn run() -> anyhow::Result<()> {
             let config = config::PagerunnerConfig::load()?;
             crate::cli_tools::run_generate_adapter(&origin, &name, description.as_deref(), &config)
                 .await?;
+        }
+        Commands::AgentRun {
+            goal,
+            model,
+            profile,
+            max_steps,
+        } => {
+            let config = config::PagerunnerConfig::load()?;
+            let mut agent_config = config.agent.default_config.clone();
+            if let Some(m) = model {
+                agent_config.model = m;
+            }
+            if let Some(p) = profile {
+                agent_config.session_profile = Some(p);
+            }
+            if let Some(s) = max_steps {
+                agent_config.budget.max_steps = s;
+            }
+
+            // Build the DaemonMessage
+            let msg = ipc::DaemonMessage::AgentRun {
+                id: uuid::Uuid::new_v4().to_string(),
+                goal,
+                config: Some(agent_config),
+            };
+            let mut client = daemon_client::DaemonClient::connect().await?;
+
+            // Send the message
+            let msg_json = serde_json::to_string(&msg)?;
+            client.send_raw(&format!("{}\n", msg_json)).await?;
+
+            // Read events until we get the final DaemonResponse
+            loop {
+                let line = client.read_line().await?;
+                let trimmed = line.trim();
+                if trimmed.is_empty() {
+                    continue;
+                }
+                // Try as DaemonEvent first
+                if let Ok(event) = serde_json::from_str::<ipc::DaemonEvent>(trimmed) {
+                    match &event.event {
+                        pagerunner_agent::AgentEvent::Thinking { text } => {
+                            eprintln!("[thinking] {}", text);
+                        }
+                        pagerunner_agent::AgentEvent::ToolCall { name, args } => {
+                            eprintln!("[tool] {} {}", name, args);
+                        }
+                        pagerunner_agent::AgentEvent::ToolResult {
+                            name,
+                            result,
+                            is_error,
+                        } => {
+                            let status = if *is_error { "ERR" } else { "OK" };
+                            eprintln!(
+                                "[result] {} {} {}",
+                                name,
+                                status,
+                                if result.len() > 200 {
+                                    format!("{}...", &result[..200])
+                                } else {
+                                    result.clone()
+                                }
+                            );
+                        }
+                        pagerunner_agent::AgentEvent::Progress { message } => {
+                            eprintln!("[progress] {}", message);
+                        }
+                        pagerunner_agent::AgentEvent::ApprovalRequired {
+                            action,
+                            description,
+                            ..
+                        } => {
+                            eprintln!("[approval needed] {} — {}", action, description);
+                            // TODO: interactive approval
+                        }
+                        pagerunner_agent::AgentEvent::Done { summary, .. } => {
+                            println!("{}", summary);
+                        }
+                        pagerunner_agent::AgentEvent::Error {
+                            message,
+                            recoverable,
+                        } => {
+                            eprintln!(
+                                "[error{}] {}",
+                                if *recoverable { " (recoverable)" } else { "" },
+                                message
+                            );
+                        }
+                        pagerunner_agent::AgentEvent::Interrupted => {
+                            eprintln!("[interrupted]");
+                        }
+                        pagerunner_agent::AgentEvent::BudgetExceeded { reason } => {
+                            eprintln!("[budget exceeded] {}", reason);
+                        }
+                        pagerunner_agent::AgentEvent::ApprovalResponse { approved, .. } => {
+                            eprintln!(
+                                "[approval] {}",
+                                if *approved { "approved" } else { "denied" }
+                            );
+                        }
+                    }
+                    continue;
+                }
+                // Try as DaemonResponse (final result)
+                if let Ok(resp) = serde_json::from_str::<ipc::DaemonResponse>(trimmed) {
+                    if let Some(result) = resp.result {
+                        println!("{}", result);
+                    }
+                    if let Some(error) = resp.error {
+                        eprintln!("Error: {}", error);
+                        std::process::exit(1);
+                    }
+                    break;
+                }
+                // Unknown line — log and continue
+                eprintln!("[daemon] {}", trimmed);
+            }
         }
         Commands::DownloadModel => {
             #[cfg(not(feature = "ner"))]

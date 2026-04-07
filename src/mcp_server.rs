@@ -801,6 +801,32 @@ pub fn all_tools() -> Vec<Value> {
                 "required": ["recording_id"]
             }
         }),
+        json!({
+            "name": "agent_run",
+            "description": "Run an autonomous browsing agent that accomplishes a goal using the browser. The agent uses a smaller, cheaper LLM (e.g. Haiku) to drive Chrome — navigating pages, clicking, filling forms, extracting content — and returns a summary when done. Use this to delegate browsing tasks instead of calling navigate/click/get_content yourself. Requires an LLM API key configured in ~/.pagerunner/.env.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "goal": {
+                        "type": "string",
+                        "description": "What the agent should accomplish, e.g. 'Go to news.ycombinator.com and summarize the top 3 stories'"
+                    },
+                    "profile": {
+                        "type": "string",
+                        "description": "Chrome profile name (from list_profiles). If omitted, agent will pick one."
+                    },
+                    "model": {
+                        "type": "string",
+                        "description": "LLM model to use (default: from config, typically claude-haiku-4-5-20251001)"
+                    },
+                    "max_steps": {
+                        "type": "integer",
+                        "description": "Maximum tool-call iterations (default: 15)"
+                    }
+                },
+                "required": ["goal"]
+            }
+        }),
     ]
 }
 
@@ -1296,7 +1322,18 @@ async fn handle_request(
     }
 }
 
-pub async fn dispatch_tool(
+pub fn dispatch_tool<'a>(
+    tool: &'a str,
+    args: &'a Value,
+    config: &'a PagerunnerConfig,
+    sessions: Arc<Mutex<SessionManager>>,
+    db: Arc<crate::db::Db>,
+    audit: Option<Arc<crate::audit::AuditLog>>,
+) -> std::pin::Pin<Box<dyn std::future::Future<Output = crate::error::Result<ToolResponse>> + Send + 'a>> {
+    Box::pin(dispatch_tool_impl(tool, args, config, sessions, db, audit))
+}
+
+async fn dispatch_tool_impl(
     tool: &str,
     args: &Value,
     config: &PagerunnerConfig,
@@ -4715,6 +4752,105 @@ async fn dispatch_tool_inner(
                 "video_path": result["video_path"],
             })
             .to_string())
+        }
+
+        "agent_run" => {
+            let goal = args["goal"]
+                .as_str()
+                .ok_or_else(|| PagerunnerError::Config("Missing 'goal' parameter".into()))?
+                .to_string();
+
+            // Build agent config
+            let mut agent_config = config.agent.default_config.clone();
+            if let Some(model) = args["model"].as_str() {
+                agent_config.model = model.to_string();
+            }
+            if let Some(profile) = args["profile"].as_str() {
+                agent_config.session_profile = Some(profile.to_string());
+            }
+            if let Some(max_steps) = args["max_steps"].as_u64() {
+                agent_config.budget.max_steps = max_steps as u32;
+            }
+            // Default to 15 steps for MCP calls (keep it focused)
+            if args["max_steps"].is_null() && agent_config.budget.max_steps > 15 {
+                agent_config.budget.max_steps = 15;
+            }
+
+            // Create LLM provider
+            let mut llm_config = config.agent.llm.clone();
+            if agent_config.model != "claude-haiku-4-5-20251001" {
+                llm_config.default_model = agent_config.model.clone();
+            }
+            let provider = pagerunner_llm::create_default_provider(&llm_config)
+                .map_err(|e| PagerunnerError::Config(format!("LLM provider: {}", e)))?;
+
+            // Pre-inject session context if profile specified
+            let enriched_goal = if let Some(profile_name) = &agent_config.session_profile {
+                match crate::daemon::prepare_session_context(
+                    profile_name,
+                    config,
+                    Arc::clone(&sessions),
+                    Arc::clone(&db),
+                ).await {
+                    Ok(ctx) => {
+                        agent_config.system_prompt_extra = Some(format!(
+                            "SESSION CONTEXT (use these IDs directly):\n\
+                             - session_id: {}\n- target_id: {}\n- profile: {}",
+                            ctx.session_id, ctx.target_id, ctx.profile,
+                        ));
+                        format!(
+                            "You already have a browser session open. \
+                             session_id={}, target_id={}. \
+                             Do NOT call open_session or list_tabs.\n\n{}",
+                            ctx.session_id, ctx.target_id, goal
+                        )
+                    }
+                    Err(_) => goal,
+                }
+            } else {
+                goal
+            };
+
+            // Create tool executor with audit logging
+            let agent_audit: Option<Arc<crate::audit::AuditLog>> = {
+                let home = dirs::home_dir();
+                home.map(|h| {
+                    let audit_path = h.join(".pagerunner/audit.log");
+                    Arc::new(crate::audit::AuditLog::new(audit_path, Arc::clone(&db)))
+                })
+            };
+            let tool_executor: std::sync::Arc<dyn pagerunner_agent::ToolExecutor> =
+                std::sync::Arc::new(crate::daemon::DaemonToolExecutor {
+                    config: config.clone(),
+                    sessions: Arc::clone(&sessions),
+                    db: Arc::clone(&db),
+                    audit: agent_audit,
+                });
+
+            let (event_tx, _event_rx) = tokio::sync::broadcast::channel(256);
+            let (_interrupt_tx, interrupt_rx) = tokio::sync::watch::channel(false);
+            let (_approval_tx, approval_rx) = tokio::sync::mpsc::channel(16);
+
+            let run_id = uuid::Uuid::new_v4().to_string();
+            let result = pagerunner_agent::run_agent(
+                enriched_goal,
+                agent_config,
+                provider,
+                tool_executor,
+                event_tx,
+                interrupt_rx,
+                approval_rx,
+                run_id,
+            ).await;
+
+            let response = serde_json::json!({
+                "outcome": format!("{:?}", result.outcome),
+                "summary": result.summary.unwrap_or_default(),
+                "total_steps": result.total_steps,
+                "input_tokens": result.usage.input_tokens,
+                "output_tokens": result.usage.output_tokens,
+            });
+            Ok(response.to_string())
         }
 
         _ => Err(crate::error::PagerunnerError::Cdp(format!(

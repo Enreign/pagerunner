@@ -1,1 +1,1 @@
-Recovering state for auto-recovery from Chrome crashes + dead code cleanup
+Phase 2: Wire agent crates into daemon (IPC, DaemonToolExecutor, CLI subcommand)

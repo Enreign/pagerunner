@@ -281,6 +281,16 @@ impl Default for OverlayConfig {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, Default)]
+pub struct AgentDaemonConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default)]
+    pub llm: pagerunner_llm::AgentLlmConfig,
+    #[serde(default)]
+    pub default_config: pagerunner_agent::AgentConfig,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, Default)]
 pub struct PagerunnerConfig {
     #[serde(default)]
     pub profiles: Vec<ChromeProfile>,
@@ -300,6 +310,8 @@ pub struct PagerunnerConfig {
     pub recording: RecordingConfig,
     #[serde(default)]
     pub overlay: OverlayConfig,
+    #[serde(default)]
+    pub agent: AgentDaemonConfig,
 }
 
 impl PagerunnerConfig {
@@ -784,6 +796,59 @@ auto_record = true
         assert_eq!(webm, RecordingFormat::Webm);
         let json = serde_json::to_string(&RecordingFormat::Webm).unwrap();
         assert_eq!(json, r#""webm""#);
+    }
+
+    #[test]
+    fn test_agent_config_absent_gives_defaults() {
+        let toml = r#"
+[[profiles]]
+name = "test"
+display_name = "Test"
+user_data_dir = "/tmp/t"
+"#;
+        let cfg: PagerunnerConfig = toml::from_str(toml).unwrap();
+        assert!(!cfg.agent.enabled);
+        assert_eq!(cfg.agent.llm.default_provider, "anthropic");
+        assert_eq!(cfg.agent.default_config.provider, "anthropic");
+    }
+
+    #[test]
+    fn test_agent_config_from_toml() {
+        let toml = r#"
+[agent]
+enabled = true
+
+[agent.llm]
+default_provider = "ollama"
+default_model = "llama3"
+
+[agent.default_config]
+provider = "ollama"
+model = "llama3"
+
+[agent.default_config.budget]
+max_steps = 20
+"#;
+        let cfg: PagerunnerConfig = toml::from_str(toml).unwrap();
+        assert!(cfg.agent.enabled);
+        assert_eq!(cfg.agent.llm.default_provider, "ollama");
+        assert_eq!(cfg.agent.llm.default_model, "llama3");
+        assert_eq!(cfg.agent.default_config.provider, "ollama");
+        assert_eq!(cfg.agent.default_config.model, "llama3");
+        assert_eq!(cfg.agent.default_config.budget.max_steps, 20);
+    }
+
+    #[test]
+    fn test_agent_config_partial() {
+        let toml = r#"
+[agent]
+enabled = true
+"#;
+        let cfg: PagerunnerConfig = toml::from_str(toml).unwrap();
+        assert!(cfg.agent.enabled);
+        // LLM and agent config should use defaults
+        assert_eq!(cfg.agent.llm.default_provider, "anthropic");
+        assert_eq!(cfg.agent.default_config.budget.max_steps, 50);
     }
 
     #[test]

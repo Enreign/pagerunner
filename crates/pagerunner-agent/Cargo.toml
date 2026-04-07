@@ -1,0 +1,37 @@
+[package]
+name = "pagerunner-agent"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.91"
+description = "Autonomous agent loop for Pagerunner"
+license = "Apache-2.0"
+
+[dependencies]
+pagerunner-llm = { path = "../pagerunner-llm" }
+async-trait = "0.1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["sync", "macros"] }
+thiserror = "2"
+tracing = "0.1"
+uuid = { version = "1", features = ["v4"] }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["full", "test-util"] }
+toml = "0.8"
+
+[[example]]
+name = "demo"
+
+[[example]]
+name = "demo_live"
+
+[dev-dependencies.async-trait]
+version = "0.1"
+
+[dev-dependencies.dirs]
+version = "6"
+
+[dev-dependencies.uuid]
+version = "1"
+features = ["v4"]
