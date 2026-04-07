@@ -4811,12 +4811,20 @@ async fn dispatch_tool_inner(
                 goal
             };
 
-            // Create tool executor
+            // Create tool executor with audit logging
+            let agent_audit: Option<Arc<crate::audit::AuditLog>> = {
+                let home = dirs::home_dir();
+                home.map(|h| {
+                    let audit_path = h.join(".pagerunner/audit.log");
+                    Arc::new(crate::audit::AuditLog::new(audit_path, Arc::clone(&db)))
+                })
+            };
             let tool_executor: std::sync::Arc<dyn pagerunner_agent::ToolExecutor> =
                 std::sync::Arc::new(crate::daemon::DaemonToolExecutor {
                     config: config.clone(),
                     sessions: Arc::clone(&sessions),
                     db: Arc::clone(&db),
+                    audit: agent_audit,
                 });
 
             let (event_tx, _event_rx) = tokio::sync::broadcast::channel(256);

@@ -371,6 +371,7 @@ pub struct DaemonToolExecutor {
     pub config: PagerunnerConfig,
     pub sessions: Arc<Mutex<SessionManager>>,
     pub db: Arc<Db>,
+    pub audit: Option<Arc<crate::audit::AuditLog>>,
 }
 
 #[async_trait::async_trait]
@@ -386,7 +387,7 @@ impl pagerunner_agent::ToolExecutor for DaemonToolExecutor {
             &self.config,
             Arc::clone(&self.sessions),
             Arc::clone(&self.db),
-            None,
+            self.audit.clone(),
         )
         .await;
         match outcome {
@@ -621,10 +622,20 @@ async fn handle_connection(
                     }
                 };
 
+                // Create audit log for agent tool calls
+                let audit: Option<Arc<crate::audit::AuditLog>> = {
+                    let home = dirs::home_dir();
+                    home.map(|h| {
+                        let audit_path = h.join(".pagerunner/audit.log");
+                        Arc::new(crate::audit::AuditLog::new(audit_path, Arc::clone(&db)))
+                    })
+                };
+
                 let tool_executor = Arc::new(DaemonToolExecutor {
                     config: config.clone(),
                     sessions: Arc::clone(&sessions),
                     db: Arc::clone(&db),
+                    audit,
                 });
 
                 // Pre-inject session context: if a profile is specified, open/reuse
