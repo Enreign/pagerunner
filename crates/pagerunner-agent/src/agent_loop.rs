@@ -182,6 +182,7 @@ pub async fn run_agent(
             info!(run_id = %run_id, "agent completed");
             emit(AgentEvent::Done {
                 summary: summary.clone(),
+                artifacts: vec![],
             });
             return AgentResult {
                 outcome: AgentOutcome::Completed,

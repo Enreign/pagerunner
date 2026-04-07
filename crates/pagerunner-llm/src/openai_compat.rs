@@ -476,7 +476,7 @@ impl LlmProvider for OpenAiCompatProvider {
     }
 
     fn name(&self) -> &str {
-        "openai"
+        "openai-compat"
     }
 
     fn supports_tools(&self) -> bool {

@@ -9,6 +9,15 @@ use pagerunner_llm::Usage;
 // AgentEvent
 // ---------------------------------------------------------------------------
 
+/// An artifact produced by the agent (screenshot, text, file).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum Artifact {
+    Screenshot { data: Vec<u8> },
+    Text { content: String },
+    File { name: String, data: Vec<u8> },
+}
+
 /// Events emitted by the agent loop to inform callers of progress.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -36,8 +45,18 @@ pub enum AgentEvent {
         description: String,
     },
 
+    /// User responded to an approval request.
+    ApprovalResponse {
+        run_id: String,
+        approved: bool,
+    },
+
     /// The agent completed successfully.
-    Done { summary: String },
+    Done {
+        summary: String,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        artifacts: Vec<Artifact>,
+    },
 
     /// An error occurred.
     Error { message: String, recoverable: bool },
@@ -166,10 +185,37 @@ mod tests {
     fn done_event_serialization() {
         let ev = AgentEvent::Done {
             summary: "Task completed successfully".to_string(),
+            artifacts: vec![],
         };
         let v: serde_json::Value = serde_json::to_value(&ev).unwrap();
         assert_eq!(v["type"], "done");
         assert_eq!(v["summary"], "Task completed successfully");
+        // Empty artifacts should be omitted
+        assert!(v.get("artifacts").is_none());
+    }
+
+    #[test]
+    fn done_event_with_artifacts() {
+        let ev = AgentEvent::Done {
+            summary: "Done".to_string(),
+            artifacts: vec![
+                Artifact::Text { content: "hello".into() },
+                Artifact::Screenshot { data: vec![1, 2, 3] },
+            ],
+        };
+        let v: serde_json::Value = serde_json::to_value(&ev).unwrap();
+        assert_eq!(v["artifacts"].as_array().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn approval_response_event_serialization() {
+        let ev = AgentEvent::ApprovalResponse {
+            run_id: "run-1".to_string(),
+            approved: true,
+        };
+        let v: serde_json::Value = serde_json::to_value(&ev).unwrap();
+        assert_eq!(v["type"], "approval_response");
+        assert_eq!(v["approved"], true);
     }
 
     #[test]
@@ -227,6 +273,11 @@ mod tests {
             },
             AgentEvent::Done {
                 summary: "done".to_string(),
+                artifacts: vec![],
+            },
+            AgentEvent::ApprovalResponse {
+                run_id: "r1".to_string(),
+                approved: false,
             },
             AgentEvent::Error {
                 message: "oops".to_string(),

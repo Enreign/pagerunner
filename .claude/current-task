@@ -1,1 +1,1 @@
-Recovering state for auto-recovery from Chrome crashes + dead code cleanup
+Agent architecture Phase 1: workspace setup, LLM types, LlmProvider trait

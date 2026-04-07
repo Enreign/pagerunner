@@ -11,7 +11,7 @@ pagerunner-llm = { path = "../pagerunner-llm" }
 async-trait = "0.1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-tokio = { version = "1", features = ["sync"] }
+tokio = { version = "1", features = ["sync", "macros"] }
 thiserror = "2"
 tracing = "0.1"
 uuid = { version = "1", features = ["v4"] }
