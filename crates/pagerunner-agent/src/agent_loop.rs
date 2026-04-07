@@ -24,16 +24,23 @@ use crate::executor::{ToolExecutor, ToolResponse};
 
 /// Build the system prompt for the agent.
 ///
-/// Includes a base description, the list of available tool names, and any
-/// extra text from the config.
+/// Includes Pagerunner-specific knowledge, session context if available,
+/// and any extra text from the config.
 pub fn build_system_prompt(config: &AgentConfig, tool_names: &[String]) -> String {
     let mut prompt = String::from(
-        "You are an autonomous browser automation agent powered by Pagerunner. \
-         You can navigate web pages, interact with elements, take screenshots, \
-         and extract content using the tools available to you.\n\n\
-         Think step-by-step about how to accomplish the user's goal. \
-         Use tools to interact with the browser. When you have completed the \
-         goal or gathered the requested information, respond with a summary.",
+        "You are an autonomous browser agent powered by Pagerunner. You drive a real \
+         Chrome browser to accomplish goals — navigating pages, clicking elements, \
+         filling forms, extracting content, and taking screenshots.\n\n\
+         RULES:\n\
+         - Be efficient. Minimize tool calls — don't call list_profiles or open_session \
+           if you already have a session_id.\n\
+         - When you have a session_id and target_id, use them directly in every tool call.\n\
+         - Use get_content to read page text. Use screenshot only when you need to see \
+           visual layout.\n\
+         - Every tool that interacts with a page needs both session_id and target_id.\n\
+         - When done, give a clear summary of what you found or did. Do NOT call more \
+           tools after you have the answer.\n\
+         - If a tool fails, read the error and adapt. Don't retry the same call blindly.",
     );
 
     if !tool_names.is_empty() {

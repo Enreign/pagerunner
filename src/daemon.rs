@@ -411,6 +411,108 @@ impl pagerunner_agent::ToolExecutor for DaemonToolExecutor {
 }
 
 // ---------------------------------------------------------------------------
+// Session context preparation — opens/reuses a session for the agent
+// ---------------------------------------------------------------------------
+
+struct SessionContext {
+    session_id: String,
+    target_id: String,
+    profile: String,
+    current_url: Option<String>,
+}
+
+/// Open or reuse a session for the given profile, return session_id + target_id.
+async fn prepare_session_context(
+    profile_name: &str,
+    config: &PagerunnerConfig,
+    sessions: Arc<Mutex<SessionManager>>,
+    db: Arc<Db>,
+) -> std::result::Result<SessionContext, String> {
+    // Check for an existing alive session for this profile
+    let existing = {
+        let mut mgr = sessions.lock().await;
+        let list = mgr.list();
+        list.into_iter().find(|s| s.profile_name == profile_name && s.alive)
+    };
+
+    let session_id = if let Some(s) = existing {
+        tracing::debug!(profile = %profile_name, session = %s.id, "Reusing existing session for agent");
+        s.id
+    } else {
+        // Open a new session
+        let result = crate::mcp_server::dispatch_tool(
+            "open_session",
+            &serde_json::json!({"profile": profile_name}),
+            config,
+            Arc::clone(&sessions),
+            Arc::clone(&db),
+            None,
+        ).await.map_err(|e| format!("open_session failed: {e}"))?;
+
+        let parsed: serde_json::Value = serde_json::from_str(&result.result)
+            .map_err(|e| format!("parse open_session response: {e}"))?;
+        parsed["session_id"]
+            .as_str()
+            .ok_or("no session_id in open_session response")?
+            .to_string()
+    };
+
+    // Get a tab — poll briefly if needed (Chrome might still be starting)
+    let mut target_id = None;
+    let mut current_url = None;
+    for attempt in 0..10 {
+        if attempt > 0 {
+            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+        }
+        let tabs_result = crate::mcp_server::dispatch_tool(
+            "list_tabs",
+            &serde_json::json!({"session_id": &session_id}),
+            config,
+            Arc::clone(&sessions),
+            Arc::clone(&db),
+            None,
+        ).await;
+
+        if let Ok(tr) = tabs_result {
+            if let Ok(tabs) = serde_json::from_str::<serde_json::Value>(&tr.result) {
+                if let Some(first) = tabs["data"].as_array().or(tabs.as_array()).and_then(|a| a.first()) {
+                    target_id = first["target_id"].as_str().map(|s| s.to_string());
+                    current_url = first["url"].as_str().map(|s| s.to_string());
+                    if target_id.is_some() {
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
+    // If still no tab, open one
+    if target_id.is_none() {
+        let new_tab = crate::mcp_server::dispatch_tool(
+            "new_tab",
+            &serde_json::json!({"session_id": &session_id}),
+            config,
+            Arc::clone(&sessions),
+            Arc::clone(&db),
+            None,
+        ).await.map_err(|e| format!("new_tab failed: {e}"))?;
+
+        let parsed: serde_json::Value = serde_json::from_str(&new_tab.result)
+            .unwrap_or_default();
+        target_id = parsed["target_id"].as_str().map(|s| s.to_string());
+    }
+
+    let target_id = target_id.ok_or("could not get a browser tab")?;
+
+    Ok(SessionContext {
+        session_id,
+        target_id,
+        profile: profile_name.to_string(),
+        current_url,
+    })
+}
+
+// ---------------------------------------------------------------------------
 // Active agent run tracking
 // ---------------------------------------------------------------------------
 
@@ -490,12 +592,11 @@ async fn handle_connection(
 
             DaemonMessage::AgentRun { id, goal, config: agent_config_override } => {
                 let run_id = uuid::Uuid::new_v4().to_string();
-                let agent_config = agent_config_override.unwrap_or_else(|| config.agent.default_config.clone());
+                let mut agent_config = agent_config_override.unwrap_or_else(|| config.agent.default_config.clone());
 
                 // Create LLM provider
                 let llm_config = {
                     let mut c = config.agent.llm.clone();
-                    // Override model from agent_config if different from default
                     if agent_config.model != "claude-haiku-4-5-20251001" {
                         c.default_model = agent_config.model.clone();
                     }
@@ -522,6 +623,57 @@ async fn handle_connection(
                     db: Arc::clone(&db),
                 });
 
+                // Pre-inject session context: if a profile is specified, open/reuse
+                // a session and get a tab so the agent doesn't waste steps bootstrapping.
+                let session_context = if let Some(profile_name) = &agent_config.session_profile {
+                    match prepare_session_context(
+                        profile_name,
+                        &config,
+                        Arc::clone(&sessions),
+                        Arc::clone(&db),
+                    ).await {
+                        Ok(ctx) => Some(ctx),
+                        Err(e) => {
+                            tracing::warn!(profile = %profile_name, error = %e, "Failed to prepare session context, agent will bootstrap itself");
+                            None
+                        }
+                    }
+                } else {
+                    None
+                };
+
+                // Build the enriched goal with session context
+                let enriched_goal = if let Some(ref ctx) = session_context {
+                    // Inject session info so the agent doesn't need to call
+                    // list_profiles → open_session → list_tabs
+                    let mut extra = format!(
+                        "SESSION CONTEXT (use these IDs directly — do NOT call open_session or list_tabs):\n\
+                         - session_id: {}\n\
+                         - target_id: {}\n\
+                         - profile: {}\n",
+                        ctx.session_id, ctx.target_id, ctx.profile,
+                    );
+                    if let Some(url) = &ctx.current_url {
+                        extra.push_str(&format!("- current page: {}\n", url));
+                    }
+                    extra.push_str(&format!("\nGOAL: {}", goal));
+
+                    // Also inject into system prompt extra
+                    agent_config.system_prompt_extra = Some(
+                        agent_config.system_prompt_extra
+                            .map(|s| format!("{}\n\n{}", extra, s))
+                            .unwrap_or(extra.clone()),
+                    );
+
+                    format!(
+                        "You already have a browser session open. session_id={}, target_id={}. \
+                         Do NOT call open_session or list_tabs — use these IDs directly.\n\n{}",
+                        ctx.session_id, ctx.target_id, goal
+                    )
+                } else {
+                    goal
+                };
+
                 let (event_tx, mut event_rx) = broadcast::channel::<pagerunner_agent::AgentEvent>(256);
                 let (interrupt_tx, interrupt_rx) = watch::channel(false);
                 let (approval_tx, approval_rx) = mpsc::channel(16);
@@ -541,7 +693,7 @@ async fn handle_connection(
                 // Spawn the agent loop
                 let agent_handle = tokio::spawn(async move {
                     pagerunner_agent::run_agent(
-                        goal,
+                        enriched_goal,
                         agent_config_clone,
                         provider,
                         tool_executor,
