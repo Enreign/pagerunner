@@ -14,6 +14,7 @@ use pagerunner_llm::{
 use crate::autonomy::ToolDecision;
 use crate::budget::{BudgetExceeded, BudgetTracker};
 use crate::config::AgentConfig;
+use crate::context::{compact_messages, truncate_result};
 use crate::events::{AgentEvent, AgentOutcome, AgentResult};
 use crate::executor::{ToolExecutor, ToolResponse};
 
@@ -272,11 +273,11 @@ pub async fn run_agent(
                     };
 
                     if approved {
-                        let tool_result =
-                            execute_tool(&tool_executor, tool_name, tool_args, &emit).await;
+                        let (_full, truncated) =
+                            execute_tool(&tool_executor, tool_name, tool_args, config.context.max_result_chars, &emit).await;
                         messages.push(make_tool_result_message(
                             tool_use_id,
-                            &tool_result,
+                            &truncated,
                         ));
                     } else {
                         let denied_msg =
@@ -297,15 +298,18 @@ pub async fn run_agent(
                     }
                 }
                 ToolDecision::AutoApprove => {
-                    let tool_result =
-                        execute_tool(&tool_executor, tool_name, tool_args, &emit).await;
+                    let (_full, truncated) =
+                        execute_tool(&tool_executor, tool_name, tool_args, config.context.max_result_chars, &emit).await;
                     messages.push(make_tool_result_message(
                         tool_use_id,
-                        &tool_result,
+                        &truncated,
                     ));
                 }
             }
         }
+
+        // 10. Compact context if it's grown too large
+        compact_messages(&mut messages, &config.context);
     }
 }
 
@@ -314,36 +318,40 @@ pub async fn run_agent(
 // ---------------------------------------------------------------------------
 
 /// Execute a tool and emit the appropriate events.
+///
+/// Returns `(full_response, truncated_response)` — the full response goes to
+/// the event stream, the truncated one goes into the LLM's message history.
 async fn execute_tool(
     executor: &Arc<dyn ToolExecutor>,
     name: &str,
     args: &Value,
+    max_result_chars: usize,
     emit: &impl Fn(AgentEvent),
-) -> ToolResponse {
+) -> (ToolResponse, ToolResponse) {
     emit(AgentEvent::ToolCall {
         name: name.to_string(),
         args: args.clone(),
     });
 
-    match executor.execute(name, args.clone()).await {
-        Ok(response) => {
-            emit(AgentEvent::ToolResult {
-                name: name.to_string(),
-                result: response.content.clone(),
-                is_error: response.is_error,
-            });
-            response
-        }
-        Err(err) => {
-            let response = ToolResponse::error(format!("Executor error: {err}"));
-            emit(AgentEvent::ToolResult {
-                name: name.to_string(),
-                result: response.content.clone(),
-                is_error: true,
-            });
-            response
-        }
-    }
+    let response = match executor.execute(name, args.clone()).await {
+        Ok(r) => r,
+        Err(err) => ToolResponse::error(format!("Executor error: {err}")),
+    };
+
+    // Emit full result to event stream
+    emit(AgentEvent::ToolResult {
+        name: name.to_string(),
+        result: response.content.clone(),
+        is_error: response.is_error,
+    });
+
+    // Truncate for LLM context
+    let truncated = ToolResponse {
+        content: truncate_result(&response.content, max_result_chars),
+        is_error: response.is_error,
+    };
+
+    (response, truncated)
 }
 
 /// Build a tool result message from a ToolResponse.

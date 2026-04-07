@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::autonomy::AutonomyPolicy;
 use crate::budget::BudgetConfig;
+use crate::context::ContextConfig;
 
 // ---------------------------------------------------------------------------
 // Default helpers
@@ -40,6 +41,10 @@ pub struct AgentConfig {
     #[serde(default)]
     pub autonomy: AutonomyPolicy,
 
+    /// Context management — truncation and compaction limits.
+    #[serde(default)]
+    pub context: ContextConfig,
+
     /// Optional Chrome session profile name to attach to.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub session_profile: Option<String>,
@@ -56,6 +61,7 @@ impl Default for AgentConfig {
             model: default_model(),
             budget: BudgetConfig::default(),
             autonomy: AutonomyPolicy::default(),
+            context: ContextConfig::default(),
             session_profile: None,
             system_prompt_extra: None,
         }
@@ -130,6 +136,7 @@ mod tests {
                 block: vec!["exec".to_string()],
                 ..AutonomyPolicy::default()
             },
+            context: ContextConfig::default(),
             session_profile: Some("work".to_string()),
             system_prompt_extra: None,
         };
