@@ -314,7 +314,7 @@ const SEP: &str = "────────────────────�
 async fn main() {
     println!();
     println!("{BOLD}{CYAN}╔═══════════════════════════════════════════════════════════╗{RESET}");
-    println!("{BOLD}{CYAN}║  Pagerunner Agent · Live Demo · Ollama + Real Chrome      ║{RESET}");
+    println!("{BOLD}{CYAN}║  Pagerunner Agent · Live Demo · LLM + Real Chrome         ║{RESET}");
     println!("{BOLD}{CYAN}╚═══════════════════════════════════════════════════════════╝{RESET}");
     println!();
 
@@ -330,10 +330,33 @@ async fn main() {
         "personal".to_string()
     });
 
-    let model = std::env::var("OLLAMA_MODEL").unwrap_or_else(|_| "qwen2.5:7b".into());
+    // Provider selection: OPENROUTER_API_KEY or OPENAI_API_KEY → OpenAI-compat, else Ollama
+    let (provider, provider_name, model): (Arc<dyn LlmProvider>, String, String) =
+        if let Ok(api_key) = std::env::var("OPENROUTER_API_KEY") {
+            let model = std::env::var("LLM_MODEL")
+                .unwrap_or_else(|_| "google/gemma-3-4b-it:free".into());
+            let p = pagerunner_llm::openai_compat::OpenAiCompatProvider::new(
+                api_key,
+                "https://openrouter.ai/api/v1",
+                model.clone(),
+            );
+            (Arc::new(p), "OpenRouter".into(), model)
+        } else if let Ok(api_key) = std::env::var("OPENAI_API_KEY") {
+            let model = std::env::var("LLM_MODEL").unwrap_or_else(|_| "gpt-4o-mini".into());
+            let p = pagerunner_llm::openai_compat::OpenAiCompatProvider::new(
+                api_key,
+                "https://api.openai.com/v1",
+                model.clone(),
+            );
+            (Arc::new(p), "OpenAI".into(), model)
+        } else {
+            let model = std::env::var("LLM_MODEL").unwrap_or_else(|_| "qwen2.5:3b".into());
+            let p = pagerunner_llm::ollama::OllamaProvider::new(None::<String>, model.clone());
+            (Arc::new(p), "Ollama".into(), model)
+        };
 
     println!("{BOLD}Goal:{RESET} {goal}");
-    println!("{DIM}Model: {model} via Ollama | Profile: {profile} | Real Chrome{RESET}");
+    println!("{DIM}Model: {model} via {provider_name} | Profile: {profile} | Real Chrome{RESET}");
     println!();
     println!("{DIM}{SEP}{RESET}");
     println!();
@@ -350,12 +373,7 @@ async fn main() {
             std::process::exit(1);
         }
     };
-
-    // Connect to Ollama
-    let provider: Arc<dyn LlmProvider> = Arc::new(
-        pagerunner_llm::ollama::OllamaProvider::new(None::<String>, model.clone()),
-    );
-    println!("{GREEN}Using {model} via Ollama{RESET}");
+    println!("{GREEN}Using {model} via {provider_name}{RESET}");
     println!();
 
     let (event_tx, mut event_rx) = broadcast::channel(64);
@@ -363,8 +381,8 @@ async fn main() {
     let (_approval_tx, approval_rx) = mpsc::channel(16);
 
     let config = AgentConfig {
-        provider: "ollama".into(),
-        model,
+        provider: provider_name.to_lowercase(),
+        model: model.clone(),
         budget: BudgetConfig {
             max_steps: 15,
             max_tokens_per_step: 4096,
