@@ -175,6 +175,111 @@ pub struct NerConfig {
     pub enabled: Option<bool>,
 }
 
+fn default_recording_fps() -> u8 {
+    10
+}
+
+fn default_output_fps() -> u8 {
+    30
+}
+
+#[derive(Debug, Clone, PartialEq, Default, Deserialize, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum RecordingFormat {
+    #[default]
+    Mp4,
+    Webm,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct RecordingConfig {
+    #[serde(default)]
+    pub storage_dir: Option<String>,
+    #[serde(default)]
+    pub retention_days: u64,
+    #[serde(default)]
+    pub max_size_mb: u64,
+    #[serde(default)]
+    pub format: RecordingFormat,
+    #[serde(default)]
+    pub auto_record: bool,
+    /// Capture frames per second (1-15, default 10)
+    #[serde(default = "default_recording_fps")]
+    pub fps: u8,
+    /// Output frame rate after motion interpolation (default 30)
+    #[serde(default = "default_output_fps")]
+    pub output_fps: u8,
+}
+
+impl Default for RecordingConfig {
+    fn default() -> Self {
+        Self {
+            storage_dir: None,
+            retention_days: 0,
+            max_size_mb: 0,
+            format: RecordingFormat::default(),
+            auto_record: false,
+            fps: default_recording_fps(),
+            output_fps: default_output_fps(),
+        }
+    }
+}
+
+fn default_overlay_position() -> String {
+    "bottom".to_string()
+}
+fn default_overlay_font() -> String {
+    "Helvetica".to_string()
+}
+fn default_overlay_font_size() -> u32 {
+    36
+}
+fn default_overlay_text_color() -> String {
+    "white".to_string()
+}
+fn default_overlay_bg_color() -> String {
+    "#000000AA".to_string()
+}
+fn default_overlay_bar_height() -> u32 {
+    120
+}
+
+/// Configuration for text overlays rendered by `render_recording`.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct OverlayConfig {
+    /// Position: "top" or "bottom" (default: "bottom")
+    #[serde(default = "default_overlay_position")]
+    pub position: String,
+    /// Font name (default: "Helvetica"). Must be available to ImageMagick.
+    #[serde(default = "default_overlay_font")]
+    pub font: String,
+    /// Font size in points (default: 36)
+    #[serde(default = "default_overlay_font_size")]
+    pub font_size: u32,
+    /// Text color — any ImageMagick color name or hex (default: "white")
+    #[serde(default = "default_overlay_text_color")]
+    pub text_color: String,
+    /// Background color with optional alpha (default: "#000000AA")
+    #[serde(default = "default_overlay_bg_color")]
+    pub bg_color: String,
+    /// Bar height in pixels (default: 120). Capped at 10% of video height.
+    #[serde(default = "default_overlay_bar_height")]
+    pub bar_height: u32,
+}
+
+impl Default for OverlayConfig {
+    fn default() -> Self {
+        Self {
+            position: default_overlay_position(),
+            font: default_overlay_font(),
+            font_size: default_overlay_font_size(),
+            text_color: default_overlay_text_color(),
+            bg_color: default_overlay_bg_color(),
+            bar_height: default_overlay_bar_height(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize, Default)]
 pub struct PagerunnerConfig {
     #[serde(default)]
@@ -191,6 +296,10 @@ pub struct PagerunnerConfig {
     pub checkpoints: CheckpointConfig,
     #[serde(default)]
     pub retention: RetentionConfig,
+    #[serde(default)]
+    pub recording: RecordingConfig,
+    #[serde(default)]
+    pub overlay: OverlayConfig,
 }
 
 impl PagerunnerConfig {
@@ -600,5 +709,97 @@ user_data_dir = "/tmp/chrome"
             Some("/tmp/chrome")
         );
         assert!(cfg.profiles[0].debug_port.is_none());
+    }
+
+    #[test]
+    fn test_recording_config_defaults() {
+        let config = PagerunnerConfig::default();
+        assert!(config.recording.storage_dir.is_none());
+        assert_eq!(config.recording.retention_days, 0);
+        assert_eq!(config.recording.max_size_mb, 0);
+        assert_eq!(config.recording.format, RecordingFormat::Mp4);
+        assert!(!config.recording.auto_record);
+        assert_eq!(config.recording.fps, 10);
+    }
+
+    #[test]
+    fn test_recording_config_from_toml() {
+        let toml = r#"
+[recording]
+storage_dir = "/tmp/recordings"
+retention_days = 30
+max_size_mb = 500
+format = "webm"
+auto_record = true
+fps = 5
+"#;
+        let config: PagerunnerConfig = toml::from_str(toml).unwrap();
+        assert_eq!(config.recording.storage_dir.as_deref(), Some("/tmp/recordings"));
+        assert_eq!(config.recording.retention_days, 30);
+        assert_eq!(config.recording.max_size_mb, 500);
+        assert_eq!(config.recording.format, RecordingFormat::Webm);
+        assert!(config.recording.auto_record);
+        assert_eq!(config.recording.fps, 5);
+    }
+
+    #[test]
+    fn test_recording_config_absent_gives_defaults() {
+        let toml = r#"
+[[profiles]]
+name = "test"
+display_name = "Test"
+user_data_dir = "/tmp/t"
+"#;
+        let cfg: PagerunnerConfig = toml::from_str(toml).unwrap();
+        assert!(!cfg.recording.auto_record);
+        assert_eq!(cfg.recording.fps, 10);
+        assert_eq!(cfg.recording.output_fps, 30);
+    }
+
+    #[test]
+    fn test_recording_config_partial_overrides() {
+        let toml = r#"
+[recording]
+fps = 10
+auto_record = true
+"#;
+        let cfg: PagerunnerConfig = toml::from_str(toml).unwrap();
+        assert!(cfg.recording.auto_record);
+        assert_eq!(cfg.recording.fps, 10);
+        // Rest should be defaults
+        assert_eq!(cfg.recording.format, RecordingFormat::Mp4);
+        assert!(cfg.recording.storage_dir.is_none());
+        assert_eq!(cfg.recording.retention_days, 0);
+        assert_eq!(cfg.recording.max_size_mb, 0);
+    }
+
+    #[test]
+    fn test_recording_format_serialization_roundtrip() {
+        let mp4: RecordingFormat = serde_json::from_str(r#""mp4""#).unwrap();
+        assert_eq!(mp4, RecordingFormat::Mp4);
+        let webm: RecordingFormat = serde_json::from_str(r#""webm""#).unwrap();
+        assert_eq!(webm, RecordingFormat::Webm);
+        let json = serde_json::to_string(&RecordingFormat::Webm).unwrap();
+        assert_eq!(json, r#""webm""#);
+    }
+
+    #[test]
+    fn test_recording_config_with_all_fields() {
+        let toml = r#"
+[recording]
+storage_dir = "/data/recordings"
+retention_days = 90
+max_size_mb = 1024
+format = "webm"
+auto_record = true
+fps = 5
+"#;
+        let cfg: PagerunnerConfig = toml::from_str(toml).unwrap();
+        assert_eq!(cfg.recording.storage_dir.as_deref(), Some("/data/recordings"));
+        assert_eq!(cfg.recording.retention_days, 90);
+        assert_eq!(cfg.recording.max_size_mb, 1024);
+        assert_eq!(cfg.recording.format, RecordingFormat::Webm);
+        assert!(cfg.recording.auto_record);
+        assert_eq!(cfg.recording.fps, 5);
     }
 }

@@ -195,18 +195,48 @@ pub async fn navigate(session: &mut Session, target_id: &str, url: &str) -> Resu
 
 pub async fn get_content(session: &mut Session, target_id: &str) -> Result<String> {
     let session_id = attach_to_target(session, target_id).await?;
+    let timeout = std::time::Duration::from_secs(15);
+
+    // Try innerText first (better formatting, but forces layout reflow which can
+    // crash the renderer on heavy SPAs).
     let result = session
         .cdp
-        .send_on_session(
+        .send_on_session_with_timeout(
             "Runtime.evaluate",
             json!({
                 "expression": "document.body.innerText",
                 "returnByValue": true
             }),
-            Some(session_id),
+            Some(session_id.clone()),
+            timeout,
         )
-        .await?;
-    Ok(result["result"]["value"].as_str().unwrap_or("").into())
+        .await;
+
+    match result {
+        Ok(val) => Ok(val["result"]["value"].as_str().unwrap_or("").into()),
+        Err(e) => {
+            tracing::warn!(
+                target_id = %target_id,
+                error = %e,
+                "innerText extraction failed, falling back to textContent"
+            );
+            // Re-attach in case the CDP session died during the failed attempt.
+            let session_id = attach_to_target(session, target_id).await?;
+            let val = session
+                .cdp
+                .send_on_session_with_timeout(
+                    "Runtime.evaluate",
+                    json!({
+                        "expression": "document.body.textContent",
+                        "returnByValue": true
+                    }),
+                    Some(session_id),
+                    timeout,
+                )
+                .await?;
+            Ok(val["result"]["value"].as_str().unwrap_or("").into())
+        }
+    }
 }
 
 pub async fn evaluate(session: &mut Session, target_id: &str, expression: &str) -> Result<Value> {
@@ -786,6 +816,258 @@ pub fn fragility_warning(
         ),
         "_hint": format!("Use get_site_knowledge('{}') to see alternative selectors with better reliability", origin)
     }))
+}
+
+/// Inject the recording cursor overlay into the page.
+/// Call this when recording starts and after each navigation.
+pub async fn inject_recording_cursor(session: &mut Session, target_id: &str) -> Result<()> {
+    let session_id = attach_to_target(session, target_id).await?;
+    let _ = session
+        .cdp
+        .send_on_session(
+            "Runtime.evaluate",
+            json!({
+                "expression": crate::recording_cursor::INJECT_CURSOR_JS,
+                "returnByValue": true
+            }),
+            Some(session_id),
+        )
+        .await;
+    Ok(())
+}
+
+/// Move the recording cursor to (x, y) and optionally show a click ripple.
+pub async fn move_recording_cursor(
+    session: &mut Session,
+    target_id: &str,
+    x: f64,
+    y: f64,
+    click: bool,
+) -> Result<()> {
+    let session_id = attach_to_target(session, target_id).await?;
+    // Move cursor
+    let _ = session
+        .cdp
+        .send_on_session(
+            "Runtime.evaluate",
+            json!({
+                "expression": crate::recording_cursor::move_cursor_js(x, y),
+                "returnByValue": true
+            }),
+            Some(session_id.clone()),
+        )
+        .await;
+
+    if click {
+        let _ = session
+            .cdp
+            .send_on_session(
+                "Runtime.evaluate",
+                json!({
+                    "expression": crate::recording_cursor::click_ripple_js(x, y),
+                    "returnByValue": true
+                }),
+                Some(session_id),
+            )
+            .await;
+    }
+    Ok(())
+}
+
+/// Remove the recording cursor overlay.
+pub async fn remove_recording_cursor(session: &mut Session, target_id: &str) -> Result<()> {
+    let session_id = attach_to_target(session, target_id).await?;
+    let _ = session
+        .cdp
+        .send_on_session(
+            "Runtime.evaluate",
+            json!({
+                "expression": crate::recording_cursor::REMOVE_CURSOR_JS,
+                "returnByValue": true
+            }),
+            Some(session_id),
+        )
+        .await;
+    Ok(())
+}
+
+/// Fill an input with animated typing — focuses the element (shows caret),
+/// clears existing value, then types characters one at a time with delays
+/// so each keystroke is captured in the recording.
+pub async fn animated_fill(
+    session: &mut Session,
+    target_id: &str,
+    selector: &str,
+    value: &str,
+) -> Result<()> {
+    let session_id = attach_to_target(session, target_id).await?;
+    let sel_json = serde_json::to_string(selector)
+        .unwrap_or_else(|_| format!("\"{}\"", selector.replace('"', "\\\"")));
+
+    // Focus + select all existing text
+    let focus_js = format!(
+        r#"(() => {{
+            const el = document.querySelector({sel});
+            if (!el) return false;
+            el.focus();
+            el.select();
+            return true;
+        }})()"#,
+        sel = sel_json
+    );
+    let result = session
+        .cdp
+        .send_on_session(
+            "Runtime.evaluate",
+            json!({"expression": focus_js, "returnByValue": true}),
+            Some(session_id.clone()),
+        )
+        .await?;
+
+    if result["result"]["value"].as_bool() != Some(true) {
+        return Err(PagerunnerError::Cdp(format!(
+            "Selector not found: {}",
+            selector
+        )));
+    }
+
+    // Brief pause to show the focused/selected state
+    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+
+    // Clear existing text
+    session
+        .cdp
+        .send_on_session(
+            "Input.insertText",
+            json!({"text": ""}),
+            Some(session_id.clone()),
+        )
+        .await?;
+
+    // Delete any selected content via backspace
+    session
+        .cdp
+        .send_on_session(
+            "Input.dispatchKeyEvent",
+            json!({"type": "keyDown", "key": "Backspace", "code": "Backspace", "windowsVirtualKeyCode": 8}),
+            Some(session_id.clone()),
+        )
+        .await?;
+    session
+        .cdp
+        .send_on_session(
+            "Input.dispatchKeyEvent",
+            json!({"type": "keyUp", "key": "Backspace", "code": "Backspace", "windowsVirtualKeyCode": 8}),
+            Some(session_id.clone()),
+        )
+        .await?;
+
+    // Type characters one at a time with ~80ms delay between each
+    for ch in value.chars() {
+        session
+            .cdp
+            .send_on_session(
+                "Input.insertText",
+                json!({"text": ch.to_string()}),
+                Some(session_id.clone()),
+            )
+            .await?;
+        // ~120ms per character — at 10fps capture, each char gets its own frame
+        tokio::time::sleep(std::time::Duration::from_millis(120)).await;
+    }
+
+    // Brief pause to show the completed text
+    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+
+    Ok(())
+}
+
+/// Apply CSS zoom to the page — zooms into (x, y) at the given scale.
+/// Used during recording to auto-zoom into interaction areas.
+pub async fn apply_css_zoom(session: &mut Session, target_id: &str, x: f64, y: f64, scale: f64) {
+    if let Ok(sid) = attach_to_target(session, target_id).await {
+        // Get viewport dimensions
+        let vw_vh = session.cdp.send_on_session(
+            "Runtime.evaluate",
+            json!({"expression": "({w:document.documentElement.clientWidth||window.innerWidth,h:document.documentElement.clientHeight||window.innerHeight})", "returnByValue": true}),
+            Some(sid.clone()),
+        ).await;
+        let (vw, vh) = match vw_vh {
+            Ok(r) => {
+                let v = &r["result"]["value"];
+                (v["w"].as_f64().unwrap_or(1920.0), v["h"].as_f64().unwrap_or(1080.0))
+            }
+            Err(_) => (1920.0, 1080.0),
+        };
+        let ox = (x / vw * 100.0).clamp(0.0, 100.0);
+        let oy = (y / vh * 100.0).clamp(0.0, 100.0);
+        let js = format!(
+            "document.documentElement.style.transition='transform 0.8s cubic-bezier(0.16,1,0.3,1)';document.documentElement.style.transformOrigin='{:.1}% {:.1}%';document.documentElement.style.transform='scale({:.2})';",
+            ox, oy, scale
+        );
+        let _ = session.cdp.send_on_session(
+            "Runtime.evaluate",
+            json!({"expression": js, "returnByValue": true}),
+            Some(sid),
+        ).await;
+    }
+}
+
+/// Reset CSS zoom to normal.
+pub async fn reset_css_zoom(session: &mut Session, target_id: &str) {
+    if let Ok(sid) = attach_to_target(session, target_id).await {
+        let _ = session.cdp.send_on_session(
+            "Runtime.evaluate",
+            json!({"expression": "document.documentElement.style.transition='transform 1s cubic-bezier(0.16,1,0.3,1)';document.documentElement.style.transform='scale(1)';setTimeout(()=>{document.documentElement.style.transition='';document.documentElement.style.transform='';document.documentElement.style.transformOrigin='';},1200);", "returnByValue": true}),
+            Some(sid),
+        ).await;
+    }
+}
+
+/// Start CDP screencast — Chrome will push frames as events.
+/// Enables the Page domain first (required for screencast events).
+pub async fn start_screencast(
+    session: &mut Session,
+    target_id: &str,
+    format: &str,
+    quality: u8,
+    max_width: u32,
+    max_height: u32,
+    every_nth_frame: u32,
+) -> Result<()> {
+    let session_id = attach_to_target(session, target_id).await?;
+
+    // Page domain must be enabled for screencastFrame events to fire
+    session
+        .cdp
+        .send_on_session("Page.enable", json!({}), Some(session_id.clone()))
+        .await?;
+
+    session
+        .cdp
+        .send_on_session(
+            "Page.startScreencast",
+            json!({
+                "format": format,
+                "quality": quality,
+                "maxWidth": max_width,
+                "maxHeight": max_height,
+                "everyNthFrame": every_nth_frame,
+            }),
+            Some(session_id),
+        )
+        .await?;
+    Ok(())
+}
+
+/// Stop CDP screencast.
+pub async fn stop_screencast(session: &mut Session, target_id: &str) -> Result<()> {
+    let session_id = attach_to_target(session, target_id).await?;
+    session
+        .cdp
+        .send_on_session("Page.stopScreencast", json!({}), Some(session_id))
+        .await?;
+    Ok(())
 }
 
 #[cfg(test)]

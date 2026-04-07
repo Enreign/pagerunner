@@ -695,6 +695,112 @@ pub fn all_tools() -> Vec<Value> {
                 "required": ["title"]
             }
         }),
+        json!({
+            "name": "start_recording",
+            "description": "Start recording the current tab as video. Uses CDP screencast to capture frames and ffmpeg to encode. Requires ffmpeg on PATH. Blocked when anonymization is active.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "session_id": { "type": "string", "description": "Session to record" },
+                    "target_id": { "type": "string", "description": "Tab to record" },
+                    "name": { "type": "string", "description": "Optional recording name" },
+                    "tags": {
+                        "type": "array", "items": { "type": "string" },
+                        "description": "Optional tags for organization"
+                    },
+                    "flow": { "type": "string", "description": "Optional flow label (e.g. 'deploy-v2.3.1', 'people-hub-demo')" }
+                },
+                "required": ["session_id", "target_id"]
+            }
+        }),
+        json!({
+            "name": "stop_recording",
+            "description": "Stop the active recording on a session. Finalizes the video file and saves metadata.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "session_id": { "type": "string", "description": "Session with active recording" }
+                },
+                "required": ["session_id"]
+            }
+        }),
+        json!({
+            "name": "add_marker",
+            "description": "Add a timestamped marker/annotation to the active recording. Markers are saved in the metadata sidecar and can be rendered as text overlays via render_recording.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "session_id": { "type": "string", "description": "Session with active recording" },
+                    "label": { "type": "string", "description": "Short label for this marker" },
+                    "description": { "type": "string", "description": "Optional longer description" }
+                },
+                "required": ["session_id", "label"]
+            }
+        }),
+        json!({
+            "name": "list_recordings",
+            "description": "List saved recordings, optionally filtered by profile, flow, or tag.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "profile": { "type": "string", "description": "Filter by profile name" },
+                    "flow": { "type": "string", "description": "Filter by flow label" },
+                    "tag": { "type": "string", "description": "Filter by tag" }
+                }
+            }
+        }),
+        json!({
+            "name": "get_recording",
+            "description": "Get details about a specific recording including path, duration, and markers.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "recording_id": { "type": "string", "description": "Recording ID" }
+                },
+                "required": ["recording_id"]
+            }
+        }),
+        json!({
+            "name": "delete_recording",
+            "description": "Delete a recording and its files from disk.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "recording_id": { "type": "string", "description": "Recording ID to delete" }
+                },
+                "required": ["recording_id"]
+            }
+        }),
+        json!({
+            "name": "render_recording",
+            "description": "Render a recording with optional marker text overlays burned into the video. Always generates an SRT subtitle file. Overlay appearance is configurable per-call or via [overlay] in config.toml. Requires ffmpeg (and ImageMagick for overlays) on PATH.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "recording_id": { "type": "string", "description": "Recording to render" },
+                    "format": {
+                        "type": "string",
+                        "enum": ["mp4", "webm"],
+                        "description": "Output format (defaults to recording's original format)"
+                    },
+                    "with_overlays": {
+                        "type": "boolean",
+                        "description": "Burn text overlays into the video (default: true). Set false for clean video + SRT only."
+                    },
+                    "position": {
+                        "type": "string",
+                        "enum": ["top", "bottom"],
+                        "description": "Overlay position (default: from config or 'bottom')"
+                    },
+                    "font": { "type": "string", "description": "Font name (default: from config or 'Helvetica')" },
+                    "font_size": { "type": "integer", "description": "Font size in points (default: from config or 36)" },
+                    "text_color": { "type": "string", "description": "Text color — name or hex (default: from config or 'white')" },
+                    "bg_color": { "type": "string", "description": "Background color with alpha (default: from config or '#000000AA')" },
+                    "bar_height": { "type": "integer", "description": "Overlay bar height in pixels (default: from config or 120)" }
+                },
+                "required": ["recording_id"]
+            }
+        }),
     ]
 }
 
@@ -2010,6 +2116,80 @@ async fn dispatch_tool_inner(
                 .await;
             }
 
+            // Auto-record: start recording automatically if configured
+            if config.recording.auto_record && !anonymize {
+                let mut mgr = sessions.lock().await;
+                if let Some(session) = mgr.get_mut(&id) {
+                    // Get the first tab
+                    if let Ok(tabs) = crate::browser::list_tabs(&session.cdp).await {
+                        if let Some(tab) = tabs.first() {
+                            let rec_id = format!(
+                                "rec_{}",
+                                &uuid::Uuid::new_v4().to_string().replace('-', "")[..12]
+                            );
+                            let base_dir = crate::recording::resolve_recordings_dir(
+                                config.recording.storage_dir.as_deref(),
+                            );
+                            let rec_dir = crate::recording::recording_dir_path(
+                                &base_dir,
+                                &profile.name,
+                                &format!("auto-{}", rec_id),
+                            );
+                            let format_str = match config.recording.format {
+                                crate::config::RecordingFormat::Webm => "webm",
+                                crate::config::RecordingFormat::Mp4 => "mp4",
+                            };
+                            let state = crate::recording::RecordingState::new(
+                                rec_id.clone(),
+                                id.clone(),
+                                profile.name.clone(),
+                                Some("auto".into()),
+                                vec!["auto-record".into()],
+                                None,
+                                format_str.to_string(),
+                            );
+                            let fps = config.recording.fps.max(1).min(15);
+                            if let Ok(mut handle) = crate::recording::RecordingHandle::start(
+                                state,
+                                rec_dir,
+                                format_str,
+                                fps,
+                                config.recording.output_fps.max(fps),
+                            )
+                            .await
+                            {
+                                let cdp_sid = crate::browser::attach_to_target(
+                                    session,
+                                    &tab.target_id,
+                                )
+                                .await
+                                .unwrap_or_default();
+                                let frame_tx = handle.frame_tx_clone();
+                                let capture = crate::recording::spawn_frame_capture(
+                                    session.cdp.clone(),
+                                    cdp_sid,
+                                    frame_tx,
+                                    fps,
+                                    handle.zoom.clone(),
+                                );
+                                handle.set_capture_task(capture);
+                                let _ = crate::browser::inject_recording_cursor(
+                                    session,
+                                    &tab.target_id,
+                                )
+                                .await;
+                                session.recording = Some(handle);
+                                tracing::info!(
+                                    recording_id = %rec_id,
+                                    profile = %profile.name,
+                                    "Auto-recording started"
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+
             Ok(
                 serde_json::json!({"ok": true, "session_id": id, "stealth": stealth_val})
                     .to_string(),
@@ -2302,10 +2482,35 @@ async fn dispatch_tool_inner(
             }
             session.nav_count += 1;
 
+            // Fade out before navigation if recording
+            let is_recording = session.recording.is_some();
+            if is_recording {
+                let sid_cdp = browser::attach_to_target(session, tid).await.unwrap_or_default();
+                let _ = session.cdp.send_on_session(
+                    "Runtime.evaluate",
+                    json!({"expression": crate::recording_cursor::FADE_OUT_JS, "returnByValue": true}),
+                    Some(sid_cdp),
+                ).await;
+                tokio::time::sleep(std::time::Duration::from_millis(350)).await;
+            }
+
             browser::navigate(session, tid, url).await?;
             // Record URL after successful navigation for untrusted-content domain labeling.
             if let Ok(mut map) = session.tab_urls.write() {
                 map.insert(tid.to_string(), url.to_string());
+            }
+            // Re-inject cursor + fade in after navigation
+            if is_recording {
+                tokio::time::sleep(std::time::Duration::from_millis(800)).await;
+                let _ = browser::inject_recording_cursor(session, tid).await;
+                // Fade in
+                let sid_cdp = browser::attach_to_target(session, tid).await.unwrap_or_default();
+                let _ = session.cdp.send_on_session(
+                    "Runtime.evaluate",
+                    json!({"expression": crate::recording_cursor::FADE_IN_JS, "returnByValue": true}),
+                    Some(sid_cdp),
+                ).await;
+                tokio::time::sleep(std::time::Duration::from_millis(500)).await;
             }
             Ok(serde_json::json!({"ok": true, "url": url, "target_id": tid}).to_string())
         }
@@ -2780,7 +2985,39 @@ async fn dispatch_tool_inner(
                 .read()
                 .ok()
                 .and_then(|m| m.get(tid).cloned());
+            // Move cursor to target if recording (before click for visual feedback)
+            let is_recording = session.recording.is_some();
+            if is_recording {
+                let js = browser::build_selector_chain_js(selector);
+                let sid_cdp = browser::attach_to_target(session, tid).await.unwrap_or_default();
+                if let Ok(r) = session.cdp.send_on_session(
+                    "Runtime.evaluate",
+                    json!({"expression": &js, "returnByValue": true}),
+                    Some(sid_cdp),
+                ).await {
+                    let v = &r["result"]["value"];
+                    if let (Some(x), Some(y)) = (v["x"].as_f64(), v["y"].as_f64()) {
+                        // Store zoom-in keyframe — applied during render
+                        if let Some(rec) = &mut session.recording {
+                            rec.state.add_zoom(x, y, 1.8);
+                        }
+                        let _ = browser::move_recording_cursor(session, tid, x, y, false).await;
+                        tokio::time::sleep(std::time::Duration::from_millis(600)).await;
+                        let _ = browser::move_recording_cursor(session, tid, x, y, true).await;
+                        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+                    }
+                }
+            }
+
             let click_result = browser::click(session, tid, selector).await;
+
+            // Zoom out after click
+            if is_recording {
+                tokio::time::sleep(std::time::Duration::from_millis(800)).await;
+                if let Some(rec) = &mut session.recording {
+                    rec.state.add_zoom(0.0, 0.0, 1.0);
+                }
+            }
             // Track selector stability — best-effort, never fails the tool call
             if let Some(ref tab_url) = tab_url {
                 if let Some(origin) = crate::network_log::url_to_origin(tab_url) {
@@ -2848,6 +3085,27 @@ async fn dispatch_tool_inner(
             } else {
                 text.to_string()
             };
+            // Move cursor to selector if recording and selector is provided
+            if session.recording.is_some() {
+                if let Some(sel) = selector {
+                    let js = browser::build_selector_chain_js(sel);
+                    let sid_cdp = browser::attach_to_target(session, tid).await.unwrap_or_default();
+                    if let Ok(r) = session.cdp.send_on_session(
+                        "Runtime.evaluate",
+                        json!({"expression": &js, "returnByValue": true}),
+                        Some(sid_cdp),
+                    ).await {
+                        let v = &r["result"]["value"];
+                        if let (Some(x), Some(y)) = (v["x"].as_f64(), v["y"].as_f64()) {
+                            let _ = browser::move_recording_cursor(session, tid, x, y, false).await;
+                            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                            let _ = browser::move_recording_cursor(session, tid, x, y, true).await;
+                            tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+                        }
+                    }
+                }
+            }
+
             browser::type_text(session, tid, &type_text_value, selector).await?;
             Ok(serde_json::json!({"ok": true}).to_string())
         }
@@ -2993,7 +3251,44 @@ async fn dispatch_tool_inner(
                 .read()
                 .ok()
                 .and_then(|m| m.get(tid).cloned());
-            let fill_result = browser::fill(session, tid, selector, &fill_value).await;
+            // When recording: animate cursor to field, focus it (shows caret),
+            // then type character by character so each keystroke is captured.
+            let is_recording = session.recording.is_some();
+            if is_recording {
+                let js = browser::build_selector_chain_js(selector);
+                let sid_cdp = browser::attach_to_target(session, tid).await.unwrap_or_default();
+                if let Ok(r) = session.cdp.send_on_session(
+                    "Runtime.evaluate",
+                    json!({"expression": &js, "returnByValue": true}),
+                    Some(sid_cdp),
+                ).await {
+                    let v = &r["result"]["value"];
+                    if let (Some(x), Some(y)) = (v["x"].as_f64(), v["y"].as_f64()) {
+                        // Store zoom-in keyframe — applied during render
+                        if let Some(rec) = &mut session.recording {
+                            rec.state.add_zoom(x, y, 1.8);
+                        }
+                        let _ = browser::move_recording_cursor(session, tid, x, y, false).await;
+                        tokio::time::sleep(std::time::Duration::from_millis(600)).await;
+                        let _ = browser::move_recording_cursor(session, tid, x, y, true).await;
+                        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+                    }
+                }
+            }
+
+            let fill_result = if is_recording {
+                browser::animated_fill(session, tid, selector, &fill_value).await
+            } else {
+                browser::fill(session, tid, selector, &fill_value).await
+            };
+
+            // Zoom out after fill
+            if is_recording {
+                tokio::time::sleep(std::time::Duration::from_millis(600)).await;
+                if let Some(rec) = &mut session.recording {
+                    rec.state.add_zoom(0.0, 0.0, 1.0);
+                }
+            }
             // Track selector stability — best-effort, never fails the tool call
             if let Some(ref tab_url) = tab_url {
                 if let Some(origin) = crate::network_log::url_to_origin(tab_url) {
@@ -3097,6 +3392,41 @@ async fn dispatch_tool_inner(
             let selector = args["selector"].as_str();
             let mut mgr = sessions.lock().await;
             let session = mgr.get_live(sid)?;
+
+            // Move cursor to scroll target if recording
+            if session.recording.is_some() {
+                if let Some(sel) = selector {
+                    // Scroll to element — move cursor there
+                    let js = browser::build_selector_chain_js(sel);
+                    let sid_cdp = browser::attach_to_target(session, tid).await.unwrap_or_default();
+                    if let Ok(r) = session.cdp.send_on_session(
+                        "Runtime.evaluate",
+                        json!({"expression": &js, "returnByValue": true}),
+                        Some(sid_cdp),
+                    ).await {
+                        let v = &r["result"]["value"];
+                        if let (Some(cx), Some(cy)) = (v["x"].as_f64(), v["y"].as_f64()) {
+                            let _ = browser::move_recording_cursor(session, tid, cx, cy, false).await;
+                            tokio::time::sleep(std::time::Duration::from_millis(400)).await;
+                        }
+                    }
+                } else {
+                    // Scroll by offset — move cursor to center of viewport
+                    let sid_cdp = browser::attach_to_target(session, tid).await.unwrap_or_default();
+                    if let Ok(r) = session.cdp.send_on_session(
+                        "Runtime.evaluate",
+                        json!({"expression": "({x: window.innerWidth/2, y: window.innerHeight/2})", "returnByValue": true}),
+                        Some(sid_cdp),
+                    ).await {
+                        let v = &r["result"]["value"];
+                        if let (Some(cx), Some(cy)) = (v["x"].as_f64(), v["y"].as_f64()) {
+                            let _ = browser::move_recording_cursor(session, tid, cx, cy, false).await;
+                            tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+                        }
+                    }
+                }
+            }
+
             browser::scroll(session, tid, x, y, selector).await?;
             Ok(serde_json::json!({"ok": true}).to_string())
         }
@@ -3972,6 +4302,401 @@ async fn dispatch_tool_inner(
 
         "list_notifications" => handle_list_notifications(&db),
 
+        "start_recording" => {
+            let session_id_str = args["session_id"]
+                .as_str()
+                .ok_or_else(|| PagerunnerError::Config("Missing session_id".into()))?
+                .to_string();
+            let target_id = args["target_id"]
+                .as_str()
+                .ok_or_else(|| PagerunnerError::Config("Missing target_id".into()))?
+                .to_string();
+            let name = args["name"].as_str().map(|s| s.to_string());
+            let flow = args["flow"].as_str().map(|s| s.to_string());
+            let tags: Vec<String> = args["tags"]
+                .as_array()
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                        .collect()
+                })
+                .unwrap_or_default();
+
+            let mut mgr = sessions.lock().await;
+            let session = mgr
+                .get_mut(&session_id_str)
+                .ok_or_else(|| {
+                    PagerunnerError::Config(format!("Session {} not found", session_id_str))
+                })?;
+
+            if session.recording.is_some() {
+                return Err(PagerunnerError::Config(
+                    "Recording already active on this session".into(),
+                ));
+            }
+
+            if session.anon_config.is_some() {
+                return Err(PagerunnerError::Config(
+                    "Recording is blocked when anonymization is active (would capture PII)".into(),
+                ));
+            }
+
+            let recording_id = format!(
+                "rec_{}",
+                &uuid::Uuid::new_v4().to_string().replace('-', "")[..12]
+            );
+            let profile = session.profile_name.clone();
+            let flow_label = flow
+                .clone()
+                .or_else(|| name.clone())
+                .unwrap_or_else(|| recording_id.clone());
+
+            let base_dir = crate::recording::resolve_recordings_dir(
+                config.recording.storage_dir.as_deref(),
+            );
+            let rec_dir =
+                crate::recording::recording_dir_path(&base_dir, &profile, &flow_label);
+
+            let format_str = match config.recording.format {
+                crate::config::RecordingFormat::Webm => "webm",
+                crate::config::RecordingFormat::Mp4 => "mp4",
+            };
+
+            let state = crate::recording::RecordingState::new(
+                recording_id.clone(),
+                session_id_str.clone(),
+                profile.clone(),
+                flow,
+                tags,
+                name,
+                format_str.to_string(),
+            );
+
+            let fps = config.recording.fps.max(1).min(10);
+            let mut handle =
+                crate::recording::RecordingHandle::start(
+                    state,
+                    rec_dir,
+                    format_str,
+                    fps,
+                    config.recording.output_fps.max(fps),
+                )
+                .await?;
+
+            // Get the CDP session ID used for this target
+            let cdp_session_id =
+                crate::browser::attach_to_target(session, &target_id).await?;
+
+            tracing::info!(
+                cdp_session = %cdp_session_id,
+                target = %target_id,
+                "Starting frame capture"
+            );
+
+            // Inject cursor overlay into the page
+            let _ = crate::browser::inject_recording_cursor(session, &target_id).await;
+
+            // Spawn periodic screenshot capture task
+            let frame_tx = handle.frame_tx_clone();
+            let capture_task = crate::recording::spawn_frame_capture(
+                session.cdp.clone(),
+                cdp_session_id.clone(),
+                frame_tx,
+                fps,
+                handle.zoom.clone(),
+            );
+            handle.set_capture_task(capture_task);
+
+            session.recording = Some(handle);
+
+            if let Some(audit) = audit {
+                audit
+                    .record(crate::audit::AuditEvent::new(
+                        crate::audit::AuditEventKind::RecordingStarted {
+                            session_id: session_id_str.clone(),
+                            recording_id: recording_id.clone(),
+                            profile: profile.clone(),
+                        },
+                    ))
+                    .await;
+            }
+
+            Ok(serde_json::json!({
+                "ok": true,
+                "recording_id": recording_id,
+                "message": format!("Recording started for session {}", session_id_str)
+            })
+            .to_string())
+        }
+
+        "stop_recording" => {
+            let session_id_str = args["session_id"]
+                .as_str()
+                .ok_or_else(|| PagerunnerError::Config("Missing session_id".into()))?
+                .to_string();
+
+            let mut mgr = sessions.lock().await;
+            let session = mgr.get_mut(&session_id_str).ok_or_else(|| {
+                PagerunnerError::Config(format!("Session {} not found", session_id_str))
+            })?;
+
+            let handle = session.recording.take().ok_or_else(|| {
+                PagerunnerError::Config("No active recording on this session".into())
+            })?;
+
+            // Capture dir path before stop() consumes the handle
+            let recording_dir = handle
+                .state
+                .recording_dir
+                .to_str()
+                .unwrap_or("")
+                .to_string();
+
+            let metadata = handle.stop().await?;
+
+            // Save to DB index
+            let entry = crate::recording::RecordingIndexEntry {
+                recording_id: metadata.recording_id.clone(),
+                session_id: metadata.session_id.clone(),
+                profile: metadata.profile.clone(),
+                flow: metadata.flow.clone(),
+                tags: metadata.tags.clone(),
+                name: metadata.name.clone(),
+                started_at: metadata.started_at,
+                duration_ms: metadata.duration_ms,
+                format: metadata.format.clone(),
+                dir_path: recording_dir,
+            };
+            let _ = crate::recording::save_recording_index(&db, &entry);
+
+            if let Some(audit) = audit {
+                audit
+                    .record(crate::audit::AuditEvent::new(
+                        crate::audit::AuditEventKind::RecordingStopped {
+                            session_id: session_id_str.clone(),
+                            recording_id: metadata.recording_id.clone(),
+                            duration_ms: metadata.duration_ms,
+                            markers_count: metadata.markers.len(),
+                        },
+                    ))
+                    .await;
+            }
+
+            Ok(serde_json::json!({
+                "ok": true,
+                "recording_id": metadata.recording_id,
+                "duration_ms": metadata.duration_ms,
+                "markers": metadata.markers.len(),
+            })
+            .to_string())
+        }
+
+        "add_marker" => {
+            let session_id_str = args["session_id"]
+                .as_str()
+                .ok_or_else(|| PagerunnerError::Config("Missing session_id".into()))?
+                .to_string();
+            let label = args["label"]
+                .as_str()
+                .ok_or_else(|| PagerunnerError::Config("Missing label".into()))?
+                .to_string();
+            let description = args["description"].as_str().map(|s| s.to_string());
+
+            let mut mgr = sessions.lock().await;
+            let session = mgr.get_mut(&session_id_str).ok_or_else(|| {
+                PagerunnerError::Config(format!("Session {} not found", session_id_str))
+            })?;
+
+            let handle = session.recording.as_mut().ok_or_else(|| {
+                PagerunnerError::Config("No active recording on this session".into())
+            })?;
+
+            let ts_ms = handle.state.elapsed_ms();
+            handle
+                .state
+                .add_marker(label.clone(), description, ts_ms);
+
+            Ok(serde_json::json!({
+                "ok": true,
+                "ts_ms": ts_ms,
+                "label": label,
+                "total_markers": handle.state.metadata.markers.len(),
+            })
+            .to_string())
+        }
+
+        "list_recordings" => {
+            let profile = args["profile"].as_str();
+            let flow = args["flow"].as_str();
+            let tag = args["tag"].as_str();
+
+            let entries = crate::recording::list_recordings(&db, profile, flow, tag)?;
+            let items: Vec<serde_json::Value> = entries
+                .iter()
+                .map(|e| {
+                    serde_json::json!({
+                        "recording_id": e.recording_id,
+                        "profile": e.profile,
+                        "flow": e.flow,
+                        "name": e.name,
+                        "tags": e.tags,
+                        "started_at": e.started_at.to_rfc3339(),
+                        "duration_ms": e.duration_ms,
+                        "format": e.format,
+                    })
+                })
+                .collect();
+
+            Ok(serde_json::json!({
+                "ok": true,
+                "recordings": items,
+                "count": items.len(),
+            })
+            .to_string())
+        }
+
+        "get_recording" => {
+            let recording_id = args["recording_id"]
+                .as_str()
+                .ok_or_else(|| PagerunnerError::Config("Missing recording_id".into()))?;
+
+            let entry = crate::recording::get_recording_index(&db, recording_id)?
+                .ok_or_else(|| {
+                    PagerunnerError::Config(format!("Recording {} not found", recording_id))
+                })?;
+
+            let metadata_path =
+                std::path::PathBuf::from(&entry.dir_path).join("metadata.json");
+            let markers: Vec<serde_json::Value> = if metadata_path.exists() {
+                match std::fs::read_to_string(&metadata_path) {
+                    Ok(json) => {
+                        if let Ok(meta) =
+                            serde_json::from_str::<crate::recording::RecordingMetadata>(&json)
+                        {
+                            meta.markers
+                                .iter()
+                                .map(|m| {
+                                    serde_json::json!({
+                                        "ts_ms": m.ts_ms,
+                                        "label": m.label,
+                                        "description": m.description,
+                                    })
+                                })
+                                .collect()
+                        } else {
+                            vec![]
+                        }
+                    }
+                    Err(_) => vec![],
+                }
+            } else {
+                vec![]
+            };
+
+            let video_path = std::path::PathBuf::from(&entry.dir_path)
+                .join(format!("video.{}", entry.format));
+
+            Ok(serde_json::json!({
+                "ok": true,
+                "recording_id": entry.recording_id,
+                "profile": entry.profile,
+                "flow": entry.flow,
+                "name": entry.name,
+                "tags": entry.tags,
+                "started_at": entry.started_at.to_rfc3339(),
+                "duration_ms": entry.duration_ms,
+                "format": entry.format,
+                "video_path": video_path.to_str(),
+                "metadata_path": metadata_path.to_str(),
+                "dir_path": entry.dir_path,
+                "markers": markers,
+            })
+            .to_string())
+        }
+
+        "delete_recording" => {
+            let recording_id = args["recording_id"]
+                .as_str()
+                .ok_or_else(|| PagerunnerError::Config("Missing recording_id".into()))?;
+
+            let entry = crate::recording::get_recording_index(&db, recording_id)?
+                .ok_or_else(|| {
+                    PagerunnerError::Config(format!("Recording {} not found", recording_id))
+                })?;
+
+            let dir = std::path::PathBuf::from(&entry.dir_path);
+            if dir.exists() {
+                std::fs::remove_dir_all(&dir).map_err(|e| {
+                    PagerunnerError::Config(format!("Failed to delete recording dir: {}", e))
+                })?;
+            }
+
+            crate::recording::delete_recording_index(&db, recording_id)?;
+
+            Ok(serde_json::json!({
+                "ok": true,
+                "deleted": recording_id,
+            })
+            .to_string())
+        }
+
+        "render_recording" => {
+            let recording_id = args["recording_id"]
+                .as_str()
+                .ok_or_else(|| PagerunnerError::Config("Missing recording_id".into()))?;
+            let format = args["format"].as_str();
+            let with_overlays = args["with_overlays"].as_bool().unwrap_or(true);
+
+            // Build overlay config: per-call overrides > config.toml > defaults
+            let overlay_cfg = crate::recording_render::OverlayStyle {
+                position: args["position"]
+                    .as_str()
+                    .unwrap_or(&config.overlay.position)
+                    .to_string(),
+                font: args["font"]
+                    .as_str()
+                    .unwrap_or(&config.overlay.font)
+                    .to_string(),
+                font_size: args["font_size"]
+                    .as_u64()
+                    .map(|v| v as u32)
+                    .unwrap_or(config.overlay.font_size),
+                text_color: args["text_color"]
+                    .as_str()
+                    .unwrap_or(&config.overlay.text_color)
+                    .to_string(),
+                bg_color: args["bg_color"]
+                    .as_str()
+                    .unwrap_or(&config.overlay.bg_color)
+                    .to_string(),
+                bar_height: args["bar_height"]
+                    .as_u64()
+                    .map(|v| v as u32)
+                    .unwrap_or(config.overlay.bar_height),
+            };
+
+            let result_json = crate::recording_render::render_annotated(
+                &db,
+                recording_id,
+                format,
+                with_overlays,
+                &overlay_cfg,
+            )
+            .await?;
+
+            let result: serde_json::Value =
+                serde_json::from_str(&result_json).unwrap_or(serde_json::json!({}));
+
+            Ok(serde_json::json!({
+                "ok": true,
+                "recording_id": recording_id,
+                "srt_path": result["srt_path"],
+                "annotated_video": result["annotated_video"],
+                "video_path": result["video_path"],
+            })
+            .to_string())
+        }
+
         _ => Err(crate::error::PagerunnerError::Cdp(format!(
             "Unknown tool: {}",
             tool
@@ -4156,6 +4881,55 @@ mod tests {
         assert!(tools
             .iter()
             .any(|t| t["name"] == "delete_session_checkpoint"));
+    }
+
+    #[test]
+    fn test_tools_list_includes_recording_tools() {
+        let tools = all_tools();
+        for name in &[
+            "start_recording",
+            "stop_recording",
+            "add_marker",
+            "list_recordings",
+            "get_recording",
+            "delete_recording",
+            "render_recording",
+        ] {
+            assert!(
+                tools.iter().any(|t| t["name"] == *name),
+                "missing recording tool: {}",
+                name
+            );
+        }
+    }
+
+    #[test]
+    fn test_start_recording_schema() {
+        let tools = all_tools();
+        let tool = tools
+            .iter()
+            .find(|t| t["name"] == "start_recording")
+            .unwrap();
+        let required = tool["inputSchema"]["required"].as_array().unwrap();
+        assert!(required.iter().any(|r| r == "session_id"));
+        assert!(required.iter().any(|r| r == "target_id"));
+        let props = &tool["inputSchema"]["properties"];
+        assert!(props.get("name").is_some());
+        assert!(props.get("tags").is_some());
+        assert!(props.get("flow").is_some());
+    }
+
+    #[test]
+    fn test_render_recording_schema() {
+        let tools = all_tools();
+        let tool = tools
+            .iter()
+            .find(|t| t["name"] == "render_recording")
+            .unwrap();
+        let required = tool["inputSchema"]["required"].as_array().unwrap();
+        assert!(required.iter().any(|r| r == "recording_id"));
+        let props = &tool["inputSchema"]["properties"];
+        assert!(props.get("format").is_some());
     }
 
     #[test]
