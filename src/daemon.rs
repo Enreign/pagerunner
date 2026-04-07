@@ -367,10 +367,10 @@ pub async fn run() -> Result<()> {
 // DaemonToolExecutor — adapts dispatch_tool for the agent's ToolExecutor trait
 // ---------------------------------------------------------------------------
 
-struct DaemonToolExecutor {
-    config: PagerunnerConfig,
-    sessions: Arc<Mutex<SessionManager>>,
-    db: Arc<Db>,
+pub struct DaemonToolExecutor {
+    pub config: PagerunnerConfig,
+    pub sessions: Arc<Mutex<SessionManager>>,
+    pub db: Arc<Db>,
 }
 
 #[async_trait::async_trait]
@@ -400,6 +400,10 @@ impl pagerunner_agent::ToolExecutor for DaemonToolExecutor {
             .into_iter()
             .filter_map(|v| {
                 let name = v.get("name")?.as_str()?.to_string();
+                // Exclude agent_run to prevent recursive agent invocation
+                if name == "agent_run" {
+                    return None;
+                }
                 let description = v.get("description")?.as_str()?.to_string();
                 let input_schema = v.get("inputSchema").cloned().unwrap_or_else(|| {
                     serde_json::json!({"type": "object"})
@@ -414,15 +418,15 @@ impl pagerunner_agent::ToolExecutor for DaemonToolExecutor {
 // Session context preparation — opens/reuses a session for the agent
 // ---------------------------------------------------------------------------
 
-struct SessionContext {
-    session_id: String,
-    target_id: String,
-    profile: String,
-    current_url: Option<String>,
+pub struct SessionContext {
+    pub session_id: String,
+    pub target_id: String,
+    pub profile: String,
+    pub current_url: Option<String>,
 }
 
 /// Open or reuse a session for the given profile, return session_id + target_id.
-async fn prepare_session_context(
+pub async fn prepare_session_context(
     profile_name: &str,
     config: &PagerunnerConfig,
     sessions: Arc<Mutex<SessionManager>>,
