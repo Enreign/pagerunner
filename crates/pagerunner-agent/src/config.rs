@@ -7,6 +7,19 @@ use crate::budget::BudgetConfig;
 use crate::context::ContextConfig;
 
 // ---------------------------------------------------------------------------
+// SessionContext — auto-injected session_id / target_id
+// ---------------------------------------------------------------------------
+
+/// Pre-resolved browser session context. When set, `session_id` and
+/// `target_id` are automatically injected into tool args and stripped from
+/// tool schemas so the LLM never needs to generate them.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SessionContext {
+    pub session_id: String,
+    pub target_id: String,
+}
+
+// ---------------------------------------------------------------------------
 // Default helpers
 // ---------------------------------------------------------------------------
 
@@ -52,6 +65,12 @@ pub struct AgentConfig {
     /// Extra text appended to the agent's system prompt.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub system_prompt_extra: Option<String>,
+
+    /// Pre-injected session context. If set, session_id and target_id are
+    /// auto-injected into tool args and stripped from tool schemas so the
+    /// LLM never sees or generates these parameters.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_context: Option<SessionContext>,
 }
 
 impl Default for AgentConfig {
@@ -64,6 +83,7 @@ impl Default for AgentConfig {
             context: ContextConfig::default(),
             session_profile: None,
             system_prompt_extra: None,
+            session_context: None,
         }
     }
 }
@@ -84,6 +104,7 @@ mod tests {
         assert_eq!(cfg.budget.max_steps, 50);
         assert!(cfg.session_profile.is_none());
         assert!(cfg.system_prompt_extra.is_none());
+        assert!(cfg.session_context.is_none());
     }
 
     #[test]
@@ -139,6 +160,7 @@ mod tests {
             context: ContextConfig::default(),
             session_profile: Some("work".to_string()),
             system_prompt_extra: None,
+            session_context: None,
         };
         let json = serde_json::to_string(&original).unwrap();
         let decoded: AgentConfig = serde_json::from_str(&json).unwrap();
@@ -151,5 +173,33 @@ mod tests {
         let json = serde_json::to_string(&cfg).unwrap();
         assert!(!json.contains("session_profile"));
         assert!(!json.contains("system_prompt_extra"));
+        assert!(!json.contains("session_context"));
+    }
+
+    #[test]
+    fn session_context_serde_roundtrip() {
+        let ctx = SessionContext {
+            session_id: "sess-123".to_string(),
+            target_id: "tab-456".to_string(),
+        };
+        let json = serde_json::to_string(&ctx).unwrap();
+        let decoded: SessionContext = serde_json::from_str(&json).unwrap();
+        assert_eq!(decoded, ctx);
+    }
+
+    #[test]
+    fn agent_config_with_session_context() {
+        let cfg = AgentConfig {
+            session_context: Some(SessionContext {
+                session_id: "s1".to_string(),
+                target_id: "t1".to_string(),
+            }),
+            ..AgentConfig::default()
+        };
+        let json = serde_json::to_string(&cfg).unwrap();
+        assert!(json.contains("session_context"));
+        assert!(json.contains("s1"));
+        let decoded: AgentConfig = serde_json::from_str(&json).unwrap();
+        assert_eq!(decoded.session_context, cfg.session_context);
     }
 }

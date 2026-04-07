@@ -648,31 +648,28 @@ async fn handle_connection(
 
                 // Build the enriched goal with session context
                 let enriched_goal = if let Some(ref ctx) = session_context {
-                    // Inject session info so the agent doesn't need to call
-                    // list_profiles → open_session → list_tabs
-                    let mut extra = format!(
-                        "SESSION CONTEXT (use these IDs directly — do NOT call open_session or list_tabs):\n\
-                         - session_id: {}\n\
-                         - target_id: {}\n\
-                         - profile: {}\n",
-                        ctx.session_id, ctx.target_id, ctx.profile,
-                    );
-                    if let Some(url) = &ctx.current_url {
-                        extra.push_str(&format!("- current page: {}\n", url));
-                    }
-                    extra.push_str(&format!("\nGOAL: {}", goal));
+                    // Set session context for auto-injection (Optimization 4).
+                    // This strips session_id/target_id from tool schemas and
+                    // auto-injects them into tool args — the LLM never sees them.
+                    agent_config.session_context = Some(pagerunner_agent::SessionContext {
+                        session_id: ctx.session_id.clone(),
+                        target_id: ctx.target_id.clone(),
+                    });
 
-                    // Also inject into system prompt extra
-                    agent_config.system_prompt_extra = Some(
-                        agent_config.system_prompt_extra
-                            .map(|s| format!("{}\n\n{}", extra, s))
-                            .unwrap_or(extra.clone()),
-                    );
+                    // Add current URL info if available
+                    if let Some(url) = &ctx.current_url {
+                        let url_extra = format!("Current page: {}", url);
+                        agent_config.system_prompt_extra = Some(
+                            agent_config.system_prompt_extra
+                                .map(|s| format!("{}\n\n{}", url_extra, s))
+                                .unwrap_or(url_extra),
+                        );
+                    }
 
                     format!(
-                        "You already have a browser session open. session_id={}, target_id={}. \
-                         Do NOT call open_session or list_tabs — use these IDs directly.\n\n{}",
-                        ctx.session_id, ctx.target_id, goal
+                        "You already have a browser session open on profile '{}'. \
+                         session_id and target_id are auto-injected — do NOT include them in tool calls.\n\n{}",
+                        ctx.profile, goal
                     )
                 } else {
                     goal

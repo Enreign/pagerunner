@@ -11,7 +11,7 @@ pub mod executor;
 pub use agent_loop::{build_system_prompt, extract_text, run_agent};
 pub use autonomy::{AutonomyPolicy, ToolDecision};
 pub use budget::{BudgetConfig, BudgetExceeded, BudgetTracker};
-pub use config::AgentConfig;
+pub use config::{AgentConfig, SessionContext};
 pub use context::ContextConfig;
 pub use events::{AgentEvent, AgentOutcome, AgentResult};
 pub use executor::{ToolExecutor, ToolResponse};

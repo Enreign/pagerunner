@@ -13,7 +13,7 @@ use pagerunner_llm::{
 
 use crate::autonomy::ToolDecision;
 use crate::budget::{BudgetExceeded, BudgetTracker};
-use crate::config::AgentConfig;
+use crate::config::{AgentConfig, SessionContext};
 use crate::context::{compact_messages, truncate_result};
 use crate::events::{AgentEvent, AgentOutcome, AgentResult};
 use crate::executor::{ToolExecutor, ToolResponse};
@@ -48,6 +48,16 @@ pub fn build_system_prompt(config: &AgentConfig, tool_names: &[String]) -> Strin
         prompt.push_str(&tool_names.join(", "));
     }
 
+    if let Some(ref ctx) = config.session_context {
+        prompt.push_str(&format!(
+            "\n\nSESSION CONTEXT (auto-injected — do NOT include session_id or target_id in tool calls):\n\
+             - session_id: {}\n\
+             - target_id: {}\n\
+             You already have a browser session. Use tools directly without session_id/target_id.",
+            ctx.session_id, ctx.target_id,
+        ));
+    }
+
     if let Some(extra) = &config.system_prompt_extra {
         prompt.push_str("\n\n");
         prompt.push_str(extra);
@@ -79,6 +89,65 @@ pub fn extract_text(content: &[ContentBlock]) -> Option<String> {
 }
 
 // ---------------------------------------------------------------------------
+// Session context helpers
+// ---------------------------------------------------------------------------
+
+/// Strip `session_id` and `target_id` from tool schemas so the LLM doesn't
+/// need to generate them. Only removes them from `properties` and `required`.
+pub fn strip_session_params(tools: &mut [ToolSchema]) {
+    const STRIP: &[&str] = &["session_id", "target_id"];
+    for tool in tools.iter_mut() {
+        if let Some(props) = tool.input_schema.get_mut("properties") {
+            if let Some(obj) = props.as_object_mut() {
+                for key in STRIP {
+                    obj.remove(*key);
+                }
+            }
+        }
+        if let Some(req) = tool.input_schema.get_mut("required") {
+            if let Some(arr) = req.as_array_mut() {
+                arr.retain(|v| {
+                    v.as_str().map_or(true, |s| !STRIP.contains(&s))
+                });
+            }
+        }
+    }
+}
+
+/// Inject `session_id` and `target_id` into tool call args if the tool's
+/// schema originally had those parameters (i.e. they were stripped).
+/// We inject only when the key is absent — never override an explicit value.
+pub fn inject_session_params(args: &mut Value, ctx: &SessionContext) {
+    if let Some(obj) = args.as_object_mut() {
+        if !obj.contains_key("session_id") {
+            obj.insert("session_id".to_string(), Value::String(ctx.session_id.clone()));
+        }
+        if !obj.contains_key("target_id") {
+            obj.insert("target_id".to_string(), Value::String(ctx.target_id.clone()));
+        }
+    }
+}
+
+/// Inject session params only for tools whose original schema had those params.
+pub fn maybe_inject_session_params(
+    tool_name: &str,
+    args: &mut Value,
+    ctx: &SessionContext,
+    original_tools: &[ToolSchema],
+) {
+    if let Some(tool) = original_tools.iter().find(|t| t.name == tool_name) {
+        let has_session_id = tool
+            .input_schema
+            .get("properties")
+            .and_then(|p| p.get("session_id"))
+            .is_some();
+        if has_session_id {
+            inject_session_params(args, ctx);
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Main agent loop
 // ---------------------------------------------------------------------------
 
@@ -98,7 +167,15 @@ pub async fn run_agent(
     mut approval_rx: mpsc::Receiver<bool>,
     run_id: String,
 ) -> AgentResult {
-    let tools: Vec<ToolSchema> = tool_executor.available_tools();
+    // Keep original tools for session param injection checks.
+    let original_tools: Vec<ToolSchema> = tool_executor.available_tools();
+    let mut tools: Vec<ToolSchema> = original_tools.clone();
+
+    // If session context is set, strip session_id/target_id from schemas.
+    if config.session_context.is_some() {
+        strip_session_params(&mut tools);
+    }
+
     let tool_names: Vec<String> = tools.iter().map(|t| t.name.clone()).collect();
     let system_prompt = build_system_prompt(&config, &tool_names);
 
@@ -227,6 +304,12 @@ pub async fn run_agent(
         messages.push(Message::assistant(response.content));
 
         for (tool_use_id, tool_name, tool_args) in &tool_calls {
+            // Auto-inject session context into tool args if configured.
+            let mut tool_args = tool_args.clone();
+            if let Some(ref ctx) = config.session_context {
+                maybe_inject_session_params(tool_name, &mut tool_args, ctx, &original_tools);
+            }
+
             // Check autonomy policy
             let decision = config.autonomy.decide(tool_name);
 
@@ -255,7 +338,7 @@ pub async fn run_agent(
                         description: format!(
                             "Tool '{}' requires approval. Args: {}",
                             tool_name,
-                            serde_json::to_string(tool_args).unwrap_or_default()
+                            serde_json::to_string(&tool_args).unwrap_or_default()
                         ),
                     });
 
@@ -281,7 +364,7 @@ pub async fn run_agent(
 
                     if approved {
                         let (_full, truncated) =
-                            execute_tool(&tool_executor, tool_name, tool_args, config.context.max_result_chars, &emit).await;
+                            execute_tool(&tool_executor, tool_name, &tool_args, config.context.max_result_chars, &emit).await;
                         messages.push(make_tool_result_message(
                             tool_use_id,
                             &truncated,
@@ -306,7 +389,7 @@ pub async fn run_agent(
                 }
                 ToolDecision::AutoApprove => {
                     let (_full, truncated) =
-                        execute_tool(&tool_executor, tool_name, tool_args, config.context.max_result_chars, &emit).await;
+                        execute_tool(&tool_executor, tool_name, &tool_args, config.context.max_result_chars, &emit).await;
                     messages.push(make_tool_result_message(
                         tool_use_id,
                         &truncated,
@@ -915,5 +998,186 @@ mod tests {
         assert_eq!(result.outcome, AgentOutcome::Completed);
         // Tool should NOT have been executed
         assert!(executor.call_log().is_empty());
+    }
+
+    // --- Session context tests ---
+
+    fn make_tools_with_session_params() -> Vec<ToolSchema> {
+        vec![
+            ToolSchema::new(
+                "navigate",
+                "Navigate to URL",
+                serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "session_id": {"type": "string"},
+                        "target_id": {"type": "string"},
+                        "url": {"type": "string"}
+                    },
+                    "required": ["session_id", "target_id", "url"]
+                }),
+            ),
+            ToolSchema::new(
+                "list_profiles",
+                "List profiles",
+                serde_json::json!({
+                    "type": "object",
+                    "properties": {}
+                }),
+            ),
+        ]
+    }
+
+    #[test]
+    fn strip_session_params_removes_from_properties_and_required() {
+        let mut tools = make_tools_with_session_params();
+        strip_session_params(&mut tools);
+
+        // navigate should have session_id/target_id removed
+        let nav = &tools[0];
+        let props = nav.input_schema["properties"].as_object().unwrap();
+        assert!(!props.contains_key("session_id"));
+        assert!(!props.contains_key("target_id"));
+        assert!(props.contains_key("url"));
+
+        let required: Vec<&str> = nav.input_schema["required"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v.as_str().unwrap())
+            .collect();
+        assert!(!required.contains(&"session_id"));
+        assert!(!required.contains(&"target_id"));
+        assert!(required.contains(&"url"));
+
+        // list_profiles should be unaffected
+        let lp = &tools[1];
+        assert!(lp.input_schema["properties"].as_object().unwrap().is_empty());
+    }
+
+    #[test]
+    fn inject_session_params_adds_missing_keys() {
+        let ctx = SessionContext {
+            session_id: "sess-1".to_string(),
+            target_id: "tab-1".to_string(),
+        };
+        let mut args = serde_json::json!({"url": "https://example.com"});
+        inject_session_params(&mut args, &ctx);
+
+        assert_eq!(args["session_id"], "sess-1");
+        assert_eq!(args["target_id"], "tab-1");
+        assert_eq!(args["url"], "https://example.com");
+    }
+
+    #[test]
+    fn inject_session_params_does_not_override_explicit() {
+        let ctx = SessionContext {
+            session_id: "sess-1".to_string(),
+            target_id: "tab-1".to_string(),
+        };
+        let mut args = serde_json::json!({
+            "url": "https://example.com",
+            "session_id": "explicit-sess",
+            "target_id": "explicit-tab"
+        });
+        inject_session_params(&mut args, &ctx);
+
+        assert_eq!(args["session_id"], "explicit-sess");
+        assert_eq!(args["target_id"], "explicit-tab");
+    }
+
+    #[test]
+    fn maybe_inject_skips_tools_without_session_params() {
+        let ctx = SessionContext {
+            session_id: "sess-1".to_string(),
+            target_id: "tab-1".to_string(),
+        };
+        let original_tools = make_tools_with_session_params();
+        let mut args = serde_json::json!({});
+        maybe_inject_session_params("list_profiles", &mut args, &ctx, &original_tools);
+
+        // list_profiles has no session_id in schema, so nothing should be injected
+        assert!(args.as_object().unwrap().is_empty());
+    }
+
+    #[test]
+    fn maybe_inject_adds_for_tools_with_session_params() {
+        let ctx = SessionContext {
+            session_id: "sess-1".to_string(),
+            target_id: "tab-1".to_string(),
+        };
+        let original_tools = make_tools_with_session_params();
+        let mut args = serde_json::json!({"url": "https://example.com"});
+        maybe_inject_session_params("navigate", &mut args, &ctx, &original_tools);
+
+        assert_eq!(args["session_id"], "sess-1");
+        assert_eq!(args["target_id"], "tab-1");
+    }
+
+    #[test]
+    fn build_system_prompt_includes_session_context() {
+        let config = AgentConfig {
+            session_context: Some(SessionContext {
+                session_id: "sess-abc".to_string(),
+                target_id: "tab-xyz".to_string(),
+            }),
+            ..default_config()
+        };
+        let prompt = build_system_prompt(&config, &[]);
+        assert!(prompt.contains("sess-abc"));
+        assert!(prompt.contains("tab-xyz"));
+        assert!(prompt.contains("auto-injected"));
+    }
+
+    #[test]
+    fn no_session_context_in_prompt_when_none() {
+        let config = default_config();
+        let prompt = build_system_prompt(&config, &[]);
+        assert!(!prompt.contains("auto-injected"));
+    }
+
+    #[tokio::test]
+    async fn agent_injects_session_context_into_tool_args() {
+        let provider = Arc::new(MockProvider::new(vec![
+            Ok(tool_use_response(
+                "call_1",
+                "navigate",
+                serde_json::json!({"url": "https://example.com"}),
+            )),
+            Ok(text_response("Done.")),
+        ]));
+        let executor = Arc::new(MockExecutor::new(
+            make_tools_with_session_params(),
+            ToolResponse::ok("navigated"),
+        ));
+        let (event_tx, _event_rx, _interrupt_tx, interrupt_rx, _approval_tx, approval_rx) =
+            setup_channels();
+
+        let mut config = default_config();
+        config.session_context = Some(SessionContext {
+            session_id: "sess-injected".to_string(),
+            target_id: "tab-injected".to_string(),
+        });
+
+        let result = run_agent(
+            "Navigate somewhere".to_string(),
+            config,
+            provider,
+            executor.clone(),
+            event_tx,
+            interrupt_rx,
+            approval_rx,
+            "run-inject".to_string(),
+        )
+        .await;
+
+        assert_eq!(result.outcome, AgentOutcome::Completed);
+        let calls = executor.call_log();
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].0, "navigate");
+        // session_id and target_id should have been injected
+        assert_eq!(calls[0].1["session_id"], "sess-injected");
+        assert_eq!(calls[0].1["target_id"], "tab-injected");
+        assert_eq!(calls[0].1["url"], "https://example.com");
     }
 }
