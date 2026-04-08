@@ -11,14 +11,8 @@ struct AgentIdleView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            // Compact header
-            HStack(spacing: 6) {
-                Text("\u{1F916} Pagerunner Agent")
-                    .font(.system(size: 14, weight: .semibold))
-                Spacer()
-            }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 8)
+            // Orb header
+            AgentOrbHeader(appState: appState)
 
             Divider()
 

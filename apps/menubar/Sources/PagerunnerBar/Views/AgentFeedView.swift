@@ -10,70 +10,19 @@ struct AgentFeedView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            // Header
-            VStack(alignment: .leading, spacing: 2) {
-                HStack {
-                    Text("\u{1F916} Pagerunner Agent")
-                        .font(.system(size: 14, weight: .semibold))
-                    Spacer()
+            // Orb header
+            AgentOrbHeader(appState: appState)
 
-                    // Mute/unmute narration toggle (only when voice active)
-                    if appState.voiceActive {
-                        Button {
-                            appState.voiceMuted.toggle()
-                        } label: {
-                            Image(systemName: appState.voiceMuted ? "speaker.slash" : "speaker.wave.2")
-                                .font(.system(size: 12))
-                                .foregroundColor(appState.voiceMuted
-                                    ? Color(red: 0.533, green: 0.533, blue: 0.533)
-                                    : Color(red: 0, green: 0.478, blue: 1))
-                        }
-                        .buttonStyle(.plain)
-                        .help(appState.voiceMuted ? "Unmute narration" : "Mute narration")
-                    }
-
-                    // Mic toggle
-                    if appState.voiceActive && appState.voiceMode == .pushToTalk {
-                        Image(systemName: isPressing ? "mic.fill" : "mic")
-                            .foregroundColor(isPressing
-                                ? Color(red: 0.133, green: 0.773, blue: 0.369)
-                                : Color(red: 0.533, green: 0.533, blue: 0.533))
-                            .font(.system(size: 14))
-                            .gesture(
-                                DragGesture(minimumDistance: 0)
-                                    .onChanged { _ in
-                                        if !isPressing {
-                                            isPressing = true
-                                            appState.voicePushToTalkStart()
-                                        }
-                                    }
-                                    .onEnded { _ in
-                                        isPressing = false
-                                        appState.voicePushToTalkStop()
-                                    }
-                            )
-                            .help("Hold to talk")
-                    } else {
-                        Button {
-                            if appState.voiceActive {
-                                appState.stopVoice()
-                            } else {
-                                appState.startVoice()
-                            }
-                        } label: {
-                            Image(systemName: appState.voiceActive ? "mic.fill" : "mic")
-                                .foregroundColor(appState.voiceActive
-                                    ? Color(red: 0.937, green: 0.267, blue: 0.267)
-                                    : Color(red: 0.533, green: 0.533, blue: 0.533))
-                                .font(.system(size: 14))
-                        }
-                        .buttonStyle(.plain)
-                        .help(appState.voiceActive ? "Stop voice" : "Start voice")
-                    }
-                }
+            // Live transcription when listening
+            if appState.voiceStatus == .listening && !appState.agentGoal.isEmpty {
+                Text("\"\(appState.agentGoal)\"")
+                    .font(.system(size: 13))
+                    .foregroundStyle(Color(red: 0.114, green: 0.114, blue: 0.122))
+                    .italic()
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 8)
+                    .transition(.opacity)
             }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 8)
 
             Divider()
 
