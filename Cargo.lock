@@ -1704,6 +1704,8 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "hound",
+ "ndarray 0.17.2",
+ "ort",
  "reqwest",
  "sha2",
  "thiserror 2.0.18",

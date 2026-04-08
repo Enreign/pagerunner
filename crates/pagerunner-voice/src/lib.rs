@@ -22,6 +22,11 @@ pub mod whisper_stt;
 #[cfg(feature = "whisper")]
 pub use whisper_stt::WhisperStt;
 
+#[cfg(feature = "silero-vad")]
+pub mod silero_vad;
+#[cfg(feature = "silero-vad")]
+pub use silero_vad::SileroVad;
+
 pub use stt::SttProvider;
 pub use tts::TtsProvider;
 pub use vad::VadDetector;
