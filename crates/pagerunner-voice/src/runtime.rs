@@ -11,8 +11,6 @@ static ORT_INIT: Once = Once::new();
 /// Initialize the ONNX runtime once. Safe to call multiple times.
 pub fn ensure_ort_initialized() {
     ORT_INIT.call_once(|| {
-        if let Err(e) = ort::init().with_name("pagerunner-voice").commit() {
-            tracing::warn!("ort init failed (may already be initialized): {}", e);
-        }
+        let _ = ort::init().with_name("pagerunner-voice").commit();
     });
 }
