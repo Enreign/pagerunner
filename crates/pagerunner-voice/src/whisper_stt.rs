@@ -63,6 +63,11 @@ fn ensure_model(info: &ModelInfo) -> std::result::Result<PathBuf, VoiceError> {
         .map_err(|e| VoiceError::Stt(format!("failed to create models dir: {e}")))?;
 
     let path = dir.join(info.filename);
+    let temp_path = path.with_extension("downloading");
+
+    // Clean up any previous failed download
+    let _ = std::fs::remove_file(&temp_path);
+
     if path.exists() {
         // Verify SHA-256
         if verify_sha256(&path, info.sha256)? {
@@ -76,8 +81,9 @@ fn ensure_model(info: &ModelInfo) -> std::result::Result<PathBuf, VoiceError> {
 
     download_model(info, &path)?;
     if !verify_sha256(&path, info.sha256)? {
+        let _ = std::fs::remove_file(&path);
         return Err(VoiceError::Stt(format!(
-            "SHA-256 verification failed after download for {}",
+            "SHA-256 verification failed after download for {}. Please retry.",
             info.name
         )));
     }
@@ -93,6 +99,8 @@ fn download_model(info: &ModelInfo, dest: &Path) -> std::result::Result<(), Voic
         "downloading whisper model"
     );
 
+    let temp_path = dest.with_extension("downloading");
+
     let response = reqwest::blocking::get(info.url)
         .map_err(|e| VoiceError::Stt(format!("model download failed: {e}")))?;
 
@@ -107,8 +115,12 @@ fn download_model(info: &ModelInfo, dest: &Path) -> std::result::Result<(), Voic
         .bytes()
         .map_err(|e| VoiceError::Stt(format!("failed to read model bytes: {e}")))?;
 
-    std::fs::write(dest, &bytes)
+    // Write to temp file first, then rename — avoids leaving partial files on crash/interrupt
+    std::fs::write(&temp_path, &bytes)
         .map_err(|e| VoiceError::Stt(format!("failed to write model file: {e}")))?;
+
+    std::fs::rename(&temp_path, dest)
+        .map_err(|e| VoiceError::Stt(format!("failed to rename model file: {e}")))?;
 
     tracing::info!(model = info.name, path = %dest.display(), "model downloaded");
     Ok(())

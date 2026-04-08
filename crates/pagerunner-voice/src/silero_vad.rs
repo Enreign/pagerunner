@@ -43,6 +43,11 @@ fn ensure_model() -> Result<PathBuf, VoiceError> {
         .map_err(|e| VoiceError::Vad(format!("failed to create models dir: {e}")))?;
 
     let path = dir.join(MODEL_FILENAME);
+    let temp_path = path.with_extension("downloading");
+
+    // Clean up any previous failed download
+    let _ = std::fs::remove_file(&temp_path);
+
     if path.exists() {
         tracing::info!(path = %path.display(), "silero VAD model already downloaded");
         return Ok(path);
@@ -54,6 +59,8 @@ fn ensure_model() -> Result<PathBuf, VoiceError> {
 
 fn download_model(dest: &Path) -> Result<(), VoiceError> {
     tracing::info!(url = MODEL_URL, "downloading silero VAD model (~2MB)");
+
+    let temp_path = dest.with_extension("downloading");
 
     let response = reqwest::blocking::get(MODEL_URL)
         .map_err(|e| VoiceError::Vad(format!("model download failed: {e}")))?;
@@ -69,8 +76,12 @@ fn download_model(dest: &Path) -> Result<(), VoiceError> {
         .bytes()
         .map_err(|e| VoiceError::Vad(format!("failed to read model bytes: {e}")))?;
 
-    std::fs::write(dest, &bytes)
+    // Write to temp file first, then rename — avoids leaving partial files on crash/interrupt
+    std::fs::write(&temp_path, &bytes)
         .map_err(|e| VoiceError::Vad(format!("failed to write model file: {e}")))?;
+
+    std::fs::rename(&temp_path, dest)
+        .map_err(|e| VoiceError::Vad(format!("failed to rename model file: {e}")))?;
 
     tracing::info!(path = %dest.display(), "silero VAD model downloaded");
     Ok(())

@@ -72,6 +72,10 @@ fn ensure_model(voice: &str) -> Result<(PathBuf, PathBuf), VoiceError> {
     let onnx_path = dir.join(format!("{voice}.onnx"));
     let json_path = dir.join(format!("{voice}.onnx.json"));
 
+    // Clean up any previous failed downloads
+    let _ = std::fs::remove_file(onnx_path.with_extension("downloading"));
+    let _ = std::fs::remove_file(json_path.with_extension("downloading"));
+
     let (onnx_url, json_url) = model_url(voice);
 
     if !onnx_path.exists() {
@@ -92,6 +96,8 @@ fn ensure_model(voice: &str) -> Result<(PathBuf, PathBuf), VoiceError> {
 fn download_file(url: &str, dest: &Path, label: &str) -> Result<(), VoiceError> {
     tracing::info!(url = url, "downloading piper {label}");
 
+    let temp_path = dest.with_extension("downloading");
+
     let response = reqwest::blocking::get(url)
         .map_err(|e| VoiceError::Tts(format!("{label} download failed: {e}")))?;
 
@@ -106,8 +112,12 @@ fn download_file(url: &str, dest: &Path, label: &str) -> Result<(), VoiceError> 
         .bytes()
         .map_err(|e| VoiceError::Tts(format!("failed to read {label} bytes: {e}")))?;
 
-    std::fs::write(dest, &bytes)
+    // Write to temp file first, then rename — avoids leaving partial files on crash/interrupt
+    std::fs::write(&temp_path, &bytes)
         .map_err(|e| VoiceError::Tts(format!("failed to write {label}: {e}")))?;
+
+    std::fs::rename(&temp_path, dest)
+        .map_err(|e| VoiceError::Tts(format!("failed to rename {label}: {e}")))?;
 
     tracing::info!(path = %dest.display(), "piper {label} downloaded");
     Ok(())
