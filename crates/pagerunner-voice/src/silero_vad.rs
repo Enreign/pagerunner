@@ -126,6 +126,8 @@ impl SileroVad {
         model_path: &Path,
         threshold: Option<f32>,
     ) -> Result<Self, VoiceError> {
+        crate::runtime::ensure_ort_initialized();
+
         let session = Session::builder()
             .map_err(|e| VoiceError::Vad(format!("failed to create ONNX session builder: {e}")))?
             .with_intra_threads(1)

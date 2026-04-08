@@ -23,6 +23,9 @@ pub mod whisper_stt;
 #[cfg(feature = "whisper")]
 pub use whisper_stt::WhisperStt;
 
+#[cfg(any(feature = "silero-vad", feature = "piper-tts"))]
+pub(crate) mod runtime;
+
 #[cfg(feature = "silero-vad")]
 pub mod silero_vad;
 #[cfg(feature = "silero-vad")]

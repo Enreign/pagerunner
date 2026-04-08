@@ -253,6 +253,8 @@ impl PiperTts {
         json_path: &Path,
         voice_name: &str,
     ) -> Result<Self, VoiceError> {
+        crate::runtime::ensure_ort_initialized();
+
         let espeak_path = find_espeak_ng()?;
         let config = PiperConfig::from_json(json_path)?;
 
