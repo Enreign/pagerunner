@@ -22,3 +22,4 @@ sha2 = { version = "0.10", optional = true }
 
 [dev-dependencies]
 tokio = { version = "1", features = ["full", "test-util"] }
+hound = "3.5"
