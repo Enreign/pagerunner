@@ -40,22 +40,28 @@ if [[ "$(uname)" != "Darwin" ]]; then
   exit 1
 fi
 
-DEST_DIR="${HOME}/Library/Application Support/Google/Chrome/NativeMessagingHosts"
-mkdir -p "$DEST_DIR"
-
-MANIFEST_DEST="${DEST_DIR}/com.pagerunner.host.json"
+GLOBAL_DIR="${HOME}/Library/Application Support/Google/Chrome/NativeMessagingHosts"
+mkdir -p "$GLOBAL_DIR"
 
 # Make the host script executable.
 chmod +x "$HOST_SCRIPT"
 
-# Write the manifest with real paths substituted.
-sed \
+# Generate the manifest content.
+MANIFEST_CONTENT="$(sed \
   -e "s|INSTALL_PATH_PLACEHOLDER|${HOST_SCRIPT}|g" \
   -e "s|EXTENSION_ID_PLACEHOLDER|${EXTENSION_ID}|g" \
-  "$MANIFEST_TEMPLATE" > "$MANIFEST_DEST"
+  "$MANIFEST_TEMPLATE")"
 
-echo "Installed native messaging host manifest:"
-echo "  ${MANIFEST_DEST}"
+# Install to global dir.
+echo "$MANIFEST_CONTENT" > "${GLOBAL_DIR}/com.pagerunner.host.json"
+echo "Installed to: ${GLOBAL_DIR}"
+
+# Also install to every per-profile NativeMessagingHosts dir (Chrome checks these first).
+for profile_dir in "${HOME}/Library/Application Support/Google/Chrome"/*/NativeMessagingHosts; do
+  [ -d "$profile_dir" ] || continue
+  echo "$MANIFEST_CONTENT" > "${profile_dir}/com.pagerunner.host.json"
+  echo "Installed to: ${profile_dir}"
+done
 echo ""
 echo "Host script: ${HOST_SCRIPT}"
 echo ""
