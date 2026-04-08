@@ -267,6 +267,12 @@ final class AppState {
             voiceStatus = .listening
         case "approval_response":
             voiceStatus = .processing
+        case "error":
+            if let message = eventData?["message"] as? String {
+                agentState = .error
+                agentError = message
+            }
+            stopVoice()
         default:
             break
         }

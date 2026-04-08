@@ -29,7 +29,22 @@ pub fn open_mic(chunk_size: usize) -> Result<(Stream, Receiver<Vec<f32>>)> {
 
     let supported = device
         .default_input_config()
-        .context("Failed to get default input config")?;
+        .map_err(|e| {
+            // cpal returns DefaultStreamConfigError which may indicate permission denial
+            // on macOS. The OS-level error message is typically opaque, so provide guidance.
+            let msg = format!("{e}");
+            if msg.contains("permission")
+                || msg.contains("denied")
+                || msg.contains("not allowed")
+                || matches!(e, cpal::DefaultStreamConfigError::DeviceNotAvailable)
+            {
+                anyhow::anyhow!(
+                    "Microphone access denied. Grant permission in System Settings \u{2192} Privacy & Security \u{2192} Microphone."
+                )
+            } else {
+                anyhow::anyhow!("Failed to get default input config: {e}")
+            }
+        })?;
 
     tracing::debug!(
         sample_rate = supported.sample_rate().0,
@@ -138,7 +153,19 @@ pub fn open_mic(chunk_size: usize) -> Result<(Stream, Receiver<Vec<f32>>)> {
         other => anyhow::bail!("Unsupported input sample format: {:?}", other),
     };
 
-    stream.play().context("Failed to start input stream")?;
+    stream.play().map_err(|e| {
+        let msg = format!("{e}");
+        if msg.contains("permission")
+            || msg.contains("denied")
+            || msg.contains("not allowed")
+        {
+            anyhow::anyhow!(
+                "Microphone access denied. Grant permission in System Settings \u{2192} Privacy & Security \u{2192} Microphone."
+            )
+        } else {
+            anyhow::anyhow!("Failed to start input stream: {e}")
+        }
+    })?;
 
     Ok((stream, rx))
 }

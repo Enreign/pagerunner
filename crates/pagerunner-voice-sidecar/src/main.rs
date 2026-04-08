@@ -116,5 +116,10 @@ async fn main() -> anyhow::Result<()> {
         "Starting voice session"
     );
 
-    session::run_voice_session(session_config).await
+    if let Err(e) = session::run_voice_session(session_config).await {
+        eprintln!("error: {e}");
+        std::process::exit(1);
+    }
+
+    Ok(())
 }

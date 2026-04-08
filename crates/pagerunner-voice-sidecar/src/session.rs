@@ -182,7 +182,16 @@ pub async fn run_voice_session(config: VoiceSessionConfig) -> Result<()> {
 
     // -- Open microphone ---------------------------------------------------
     let chunk_size = config.pipeline.vad_chunk_size;
-    let (_mic_stream, mic_rx) = audio::open_mic(chunk_size)?;
+    let (_mic_stream, mic_rx) = match audio::open_mic(chunk_size) {
+        Ok(result) => result,
+        Err(e) => {
+            let msg = format!("{e}");
+            if config.json {
+                emit_json("error", serde_json::json!({"message": &msg}));
+            }
+            anyhow::bail!("{}", msg);
+        }
+    };
 
     tracing::info!("Microphone open. Listening...");
     let is_ptt = config.mode == "ptt";
