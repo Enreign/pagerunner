@@ -62,13 +62,13 @@ function sendRequest(msg) {
     pendingCallbacks.set(id, { resolve, reject });
     port.postMessage({ id, tool: msg.tool, args: msg.args || {} });
 
-    // 30-second timeout per request.
+    // 120-second timeout (agent runs can take a while).
     setTimeout(() => {
       if (pendingCallbacks.has(id)) {
         pendingCallbacks.delete(id);
         reject(new Error("Request timed out"));
       }
-    }, 30000);
+    }, 120000);
   });
 }
 
@@ -151,15 +151,41 @@ async function handleAgentRun(message, sendResponse) {
 
   ensureConnected();
   try {
-    // agent_run handles session management internally — just pass goal + profile.
-    const agentResult = await sendRequest({
-      tool: "agent_run",
-      args: { goal, profile }
-    });
-    sendResponse({ ok: true, result: agentResult });
+    // Check for existing alive sessions first — reuse if possible.
+    const sessionsResult = await sendRequest({ tool: "list_sessions", args: {} });
+    const sessions = Array.isArray(sessionsResult.data) ? sessionsResult.data : [];
+    const alive = sessions.find(s => s.profile === profile && s.status === "alive");
+
+    if (alive) {
+      // Reuse existing session — agent_run with profile will pick it up.
+      const agentResult = await sendRequest({
+        tool: "agent_run",
+        args: { goal, profile }
+      });
+      sendResponse({ ok: true, result: agentResult });
+    } else {
+      // Try to attach to the current Chrome's debug port.
+      // First, find if this Chrome has a debug port by checking the profile's config.
+      // If not, open a new session (which launches a Pagerunner-managed Chrome).
+      const agentResult = await sendRequest({
+        tool: "agent_run",
+        args: { goal, profile }
+      });
+      sendResponse({ ok: true, result: agentResult });
+    }
   } catch (err) {
     sendResponse({ ok: false, error: err.message });
   }
+}
+
+// ── Active tab URL helper ────────────────────────────────────────────────────
+
+async function getActiveTabUrl() {
+  return new Promise((resolve) => {
+    chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+      resolve(tabs?.[0]?.url || null);
+    });
+  });
 }
 
 // ── Startup ───────────────────────────────────────────────────────────────────

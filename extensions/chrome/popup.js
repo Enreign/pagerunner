@@ -102,20 +102,33 @@ runBtn.addEventListener("click", async () => {
   updateRunBtn();
   feed.hidden = false;
   clearFeed();
-  feedLine("Starting agent…", "highlight");
+  feedLine("Starting agent — a browser window will open…", "highlight");
 
   try {
     const resp = await sendMsg({ type: "agent_run", goal, profile });
     if (resp.ok) {
-      const summary = resp.result?.data?.summary
-        || resp.result?.summary
-        || "Done.";
-      feedLine(summary, "success");
+      const result = resp.result || {};
+      const summary = result.summary || result.data?.summary || "Done.";
+      const steps = result.total_steps || result.data?.total_steps || "?";
+      const tokens = result.input_tokens || result.data?.input_tokens || 0;
+      const outcome = result.outcome || result.data?.outcome || "completed";
+
+      if (outcome === "completed" || outcome === "Completed") {
+        feedLine("✓ Done in " + steps + " steps", "success");
+        feedLine("", "");
+        // Split summary into lines for better readability
+        summary.split("\n").forEach(line => {
+          if (line.trim()) feedLine(line, "highlight");
+        });
+      } else {
+        feedLine("⚠ " + outcome + " (" + steps + " steps)", "error");
+        if (summary) feedLine(summary, "");
+      }
     } else {
-      feedLine("Error: " + (resp.error || "Unknown error"), "error");
+      feedLine("✗ " + (resp.error || "Unknown error"), "error");
     }
   } catch (err) {
-    feedLine("Error: " + err.message, "error");
+    feedLine("✗ " + err.message, "error");
   } finally {
     isRunning = false;
     updateRunBtn();
