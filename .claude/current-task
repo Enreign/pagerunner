@@ -1,1 +1,1 @@
-Phase 2: Wire agent crates into daemon (IPC, DaemonToolExecutor, CLI subcommand)
+Whisper STT backend for pagerunner-voice

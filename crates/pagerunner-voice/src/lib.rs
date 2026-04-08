@@ -7,13 +7,20 @@
 //! - [`TtsProvider`] — text-to-speech trait
 //! - [`VadDetector`] — voice activity detection trait
 //! - [`VoicePipeline`] — orchestrator that wires the three together
-//! - [`mock`] — mock implementations for tests
+//! - [`mock`] — mock implementations for tests (behind `mock` feature or `#[cfg(test)]`)
+//! - [`WhisperStt`] — whisper.cpp STT backend (behind `whisper` feature)
 //! - [`VoiceError`] — unified error type
 
+#[cfg(any(test, feature = "mock"))]
 pub mod mock;
 pub mod stt;
 pub mod tts;
 pub mod vad;
+
+#[cfg(feature = "whisper")]
+pub mod whisper_stt;
+#[cfg(feature = "whisper")]
+pub use whisper_stt::WhisperStt;
 
 pub use stt::SttProvider;
 pub use tts::TtsProvider;

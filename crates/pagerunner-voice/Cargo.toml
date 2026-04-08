@@ -6,11 +6,19 @@ rust-version = "1.91"
 description = "Voice pipeline with STT, TTS, and VAD traits — standalone, no Pagerunner dependencies"
 license = "Apache-2.0"
 
+[features]
+default = []
+mock = []
+whisper = ["dep:whisper-rs", "dep:reqwest", "dep:sha2"]
+
 [dependencies]
 async-trait = "0.1"
 tokio = { version = "1", features = ["sync"] }
 thiserror = "2"
 tracing = "0.1"
+whisper-rs = { version = "0.16", optional = true }
+reqwest = { version = "0.12", features = ["blocking"], optional = true }
+sha2 = { version = "0.10", optional = true }
 
 [dev-dependencies]
 tokio = { version = "1", features = ["full", "test-util"] }
