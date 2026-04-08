@@ -225,6 +225,8 @@ pub struct PiperTts {
     config: PiperConfig,
     espeak_path: String,
     voice_name: String,
+    /// Cache of text -> phoneme IDs to avoid re-running espeak-ng for repeated phrases.
+    phoneme_cache: Mutex<HashMap<String, Vec<i64>>>,
 }
 
 impl std::fmt::Debug for PiperTts {
@@ -277,11 +279,17 @@ impl PiperTts {
             config,
             espeak_path,
             voice_name: voice_name.to_string(),
+            phoneme_cache: Mutex::new(HashMap::new()),
         })
     }
 
-    /// Convert text to phoneme IDs via espeak-ng.
+    /// Convert text to phoneme IDs via espeak-ng, with caching.
     fn phonemize(&self, text: &str) -> Result<Vec<i64>, VoiceError> {
+        // Check cache first
+        if let Some(ids) = self.phoneme_cache.lock().unwrap().get(text) {
+            return Ok(ids.clone());
+        }
+
         let output = std::process::Command::new(&self.espeak_path)
             .args(["-q", "--ipa=2", "-v", &self.config.espeak_voice])
             .arg(text)
@@ -368,6 +376,12 @@ impl PiperTts {
 
         // EOS
         ids.extend(&eos_id);
+
+        // Cache result (cap at 1000 entries to bound memory)
+        let mut cache = self.phoneme_cache.lock().unwrap();
+        if cache.len() < 1000 {
+            cache.insert(text.to_string(), ids.clone());
+        }
 
         Ok(ids)
     }
