@@ -5,20 +5,34 @@ struct AgentFeedView: View {
     @Bindable var appState: AppState
     @Environment(\.daemonClient) private var client
     @State private var isPressing: Bool = false
+    @State private var followUpText: String = ""
+    @State private var showSettings: Bool = false
 
     var body: some View {
         VStack(spacing: 0) {
             // Header
             VStack(alignment: .leading, spacing: 2) {
                 HStack {
-                    Image(systemName: "cpu")
-                        .font(.system(size: 14))
-                        .foregroundColor(Color(red: 0, green: 0.478, blue: 1))
-                    Text("Pagerunner Agent")
+                    Text("\u{1F916} Pagerunner Agent")
                         .font(.system(size: 14, weight: .semibold))
                     Spacer()
 
-                    // Mic toggle — PTT uses hold gesture, always-listening uses tap
+                    // Mute/unmute narration toggle (only when voice active)
+                    if appState.voiceActive {
+                        Button {
+                            appState.voiceMuted.toggle()
+                        } label: {
+                            Image(systemName: appState.voiceMuted ? "speaker.slash" : "speaker.wave.2")
+                                .font(.system(size: 12))
+                                .foregroundColor(appState.voiceMuted
+                                    ? Color(red: 0.533, green: 0.533, blue: 0.533)
+                                    : Color(red: 0, green: 0.478, blue: 1))
+                        }
+                        .buttonStyle(.plain)
+                        .help(appState.voiceMuted ? "Unmute narration" : "Mute narration")
+                    }
+
+                    // Mic toggle
                     if appState.voiceActive && appState.voiceMode == .pushToTalk {
                         Image(systemName: isPressing ? "mic.fill" : "mic")
                             .foregroundColor(isPressing
@@ -48,21 +62,13 @@ struct AgentFeedView: View {
                             }
                         } label: {
                             Image(systemName: appState.voiceActive ? "mic.fill" : "mic")
-                                .foregroundColor(appState.voiceActive ? Color(red: 0.937, green: 0.267, blue: 0.267) : Color(red: 0.533, green: 0.533, blue: 0.533))
+                                .foregroundColor(appState.voiceActive
+                                    ? Color(red: 0.937, green: 0.267, blue: 0.267)
+                                    : Color(red: 0.533, green: 0.533, blue: 0.533))
                                 .font(.system(size: 14))
                         }
                         .buttonStyle(.plain)
                         .help(appState.voiceActive ? "Stop voice" : "Start voice")
-                    }
-                }
-
-                HStack(spacing: 4) {
-                    Text("Using \(appState.agentModel) \u{00B7} \(appState.agentProfile)")
-                        .font(.system(size: 11))
-                        .foregroundColor(Color(red: 0.533, green: 0.533, blue: 0.533))
-                    Spacer()
-                    if appState.voiceActive {
-                        VoiceStatusBadge(status: appState.voiceStatus)
                     }
                 }
             }
@@ -104,6 +110,24 @@ struct AgentFeedView: View {
                             .padding(.horizontal, 12)
                             .id("spinner")
                         }
+
+                        // Result card when completed
+                        if appState.agentState == .completed, let summary = appState.agentSummary {
+                            AgentResultCard(
+                                summary: summary,
+                                steps: appState.agentSteps,
+                                tokens: appState.agentTokens,
+                                voiceActive: appState.voiceActive,
+                                onReplay: {
+                                    appState.voiceReplay(text: summary)
+                                },
+                                onCopy: {
+                                    NSPasteboard.general.clearContents()
+                                    NSPasteboard.general.setString(summary, forType: .string)
+                                }
+                            )
+                            .id("result-card")
+                        }
                     }
                     .padding(.vertical, 8)
                 }
@@ -116,124 +140,201 @@ struct AgentFeedView: View {
                         }
                     }
                 }
+                .onChange(of: appState.agentState) { _, newState in
+                    if newState == .completed {
+                        withAnimation(.easeOut(duration: 0.2)) {
+                            proxy.scrollTo("result-card", anchor: .bottom)
+                        }
+                    }
+                }
             }
 
             Divider()
 
-            // Bottom bar
+            // Bottom bar: unified input + status
             bottomBar
         }
     }
 
     @ViewBuilder
     private var bottomBar: some View {
-        switch appState.agentState {
-        case .running:
-            HStack {
-                Text("Step \(appState.agentSteps)/15 \u{00B7} \(formatTokens(appState.agentTokens))")
-                    .font(.system(size: 11))
-                    .foregroundColor(Color(red: 0.533, green: 0.533, blue: 0.533))
-                Spacer()
-                Button("Stop") {
-                    appState.stopAgent(client: client)
-                }
-                .font(.system(size: 12, weight: .medium))
-                .foregroundColor(Color(red: 0.937, green: 0.267, blue: 0.267))
-                .buttonStyle(.plain)
-            }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 8)
-
-        case .waitingApproval:
-            HStack {
-                HStack(spacing: 4) {
-                    Image(systemName: "pause.fill")
-                        .font(.system(size: 9))
-                    Text("Waiting for approval...")
-                }
-                .font(.system(size: 11))
-                .foregroundColor(Color(red: 0.961, green: 0.620, blue: 0.043))
-                Spacer()
-                Button("Stop") {
-                    appState.stopAgent(client: client)
-                }
-                .font(.system(size: 12, weight: .medium))
-                .foregroundColor(Color(red: 0.937, green: 0.267, blue: 0.267))
-                .buttonStyle(.plain)
-            }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 8)
-
-        case .completed:
-            VStack(spacing: 6) {
-                HStack {
-                    HStack(spacing: 4) {
-                        Image(systemName: "checkmark")
-                            .font(.system(size: 10, weight: .bold))
-                        Text("Done \u{00B7} \(appState.agentSteps) steps \u{00B7} \(formatTokens(appState.agentTokens))")
+        VStack(spacing: 4) {
+            switch appState.agentState {
+            case .running, .waitingApproval:
+                AgentInputBar(
+                    text: $followUpText,
+                    placeholder: "Follow up...",
+                    voiceActive: appState.voiceActive,
+                    voiceStatus: appState.voiceStatus,
+                    voiceMode: appState.voiceMode,
+                    isRunning: true,
+                    onSend: {},
+                    onStop: { appState.stopAgent(client: client) },
+                    onMicTap: {
+                        if appState.voiceActive {
+                            appState.stopVoice()
+                        } else {
+                            appState.startVoice()
+                        }
+                    },
+                    onMicHoldStart: {
+                        if !isPressing {
+                            isPressing = true
+                            appState.voicePushToTalkStart()
+                        }
+                    },
+                    onMicHoldEnd: {
+                        isPressing = false
+                        appState.voicePushToTalkStop()
                     }
-                    .font(.system(size: 11))
-                    .foregroundColor(Color(red: 0.133, green: 0.773, blue: 0.369))
+                )
+                .padding(.horizontal, 12)
+
+                // Status line
+                HStack(spacing: 6) {
+                    if appState.agentState == .waitingApproval {
+                        HStack(spacing: 4) {
+                            Image(systemName: "pause.fill")
+                                .font(.system(size: 9))
+                            Text("Waiting for approval...")
+                        }
+                        .font(.system(size: 11))
+                        .foregroundColor(Color(red: 0.961, green: 0.620, blue: 0.043))
+                    } else if appState.voiceStatus == .speaking && appState.voiceActive {
+                        // Waveform indicator when speaking
+                        waveformIndicator
+                    } else {
+                        Text("Step \(appState.agentSteps)/15 \u{00B7} \(formatTokens(appState.agentTokens))")
+                            .font(.system(size: 11))
+                            .foregroundColor(Color(red: 0.533, green: 0.533, blue: 0.533))
+                    }
                     Spacer()
                 }
+                .padding(.horizontal, 12)
 
-                HStack(spacing: 8) {
-                    Button("New Goal") { appState.resetAgent() }
-                        .font(.system(size: 12, weight: .medium))
-                        .buttonStyle(.plain)
+            case .completed:
+                AgentInputBar(
+                    text: $followUpText,
+                    placeholder: "Follow up...",
+                    voiceActive: appState.voiceActive,
+                    voiceStatus: appState.voiceStatus,
+                    voiceMode: appState.voiceMode,
+                    isRunning: false,
+                    onSend: startFollowUp,
+                    onStop: {},
+                    onMicTap: {
+                        if appState.voiceActive {
+                            appState.stopVoice()
+                        } else {
+                            appState.startVoice()
+                        }
+                    },
+                    onMicHoldStart: {
+                        if !isPressing {
+                            isPressing = true
+                            appState.voicePushToTalkStart()
+                        }
+                    },
+                    onMicHoldEnd: {
+                        isPressing = false
+                        appState.voicePushToTalkStop()
+                    }
+                )
+                .padding(.horizontal, 12)
+
+                // Settings line
+                HStack(spacing: 4) {
+                    Text("\u{2713} Done \u{00B7} \(appState.agentSteps) steps \u{00B7} \(formatTokens(appState.agentTokens))")
+                        .font(.system(size: 10))
+                        .foregroundColor(Color(red: 0.133, green: 0.773, blue: 0.369))
                     Spacer()
-                    if let summary = appState.agentSummary {
-                        Button("Copy Result") {
-                            NSPasteboard.general.clearContents()
-                            NSPasteboard.general.setString(summary, forType: .string)
+                    Button { appState.resetAgent() } label: {
+                        Text("New")
+                            .font(.system(size: 10, weight: .medium))
+                            .foregroundColor(Color(red: 0, green: 0.478, blue: 1))
+                    }
+                    .buttonStyle(.plain)
+
+                    Button {
+                        showSettings.toggle()
+                    } label: {
+                        Image(systemName: "gearshape")
+                            .font(.system(size: 11))
+                            .foregroundColor(Color(red: 0.533, green: 0.533, blue: 0.533))
+                    }
+                    .buttonStyle(.plain)
+                    .popover(isPresented: $showSettings) {
+                        AgentSettingsPopover(appState: appState)
+                    }
+                }
+                .padding(.horizontal, 12)
+
+            case .error:
+                VStack(spacing: 6) {
+                    HStack {
+                        HStack(spacing: 4) {
+                            Image(systemName: "xmark")
+                                .font(.system(size: 10, weight: .bold))
+                            Text("Failed \u{00B7} \(appState.agentSteps) steps")
+                        }
+                        .font(.system(size: 11))
+                        .foregroundColor(Color(red: 0.937, green: 0.267, blue: 0.267))
+                        Spacer()
+                    }
+                    HStack(spacing: 8) {
+                        Button("Retry") {
+                            let goal = appState.agentGoal
+                            appState.startAgentRun(goal: goal, client: client)
                         }
                         .font(.system(size: 12, weight: .medium))
-                        .foregroundColor(Color(red: 0, green: 0.478, blue: 1))
                         .buttonStyle(.plain)
+                        Spacer()
+                        Button("New Goal") { appState.resetAgent() }
+                            .font(.system(size: 12, weight: .medium))
+                            .buttonStyle(.plain)
                     }
                 }
-            }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 8)
+                .padding(.horizontal, 12)
 
-        case .error:
-            VStack(spacing: 6) {
-                HStack {
-                    HStack(spacing: 4) {
-                        Image(systemName: "xmark")
-                            .font(.system(size: 10, weight: .bold))
-                        Text("Failed \u{00B7} \(appState.agentSteps) steps")
-                    }
-                    .font(.system(size: 11))
-                    .foregroundColor(Color(red: 0.937, green: 0.267, blue: 0.267))
-                    Spacer()
-                }
-                HStack(spacing: 8) {
-                    Button("Retry") {
-                        let goal = appState.agentGoal
-                        appState.startAgentRun(goal: goal, client: client)
-                    }
-                    .font(.system(size: 12, weight: .medium))
-                    .buttonStyle(.plain)
-                    Spacer()
-                    Button("New Goal") { appState.resetAgent() }
-                        .font(.system(size: 12, weight: .medium))
-                        .buttonStyle(.plain)
-                }
+            case .idle:
+                EmptyView()
             }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 8)
-
-        case .idle:
-            EmptyView()
         }
+        .padding(.vertical, 8)
+    }
+
+    @ViewBuilder
+    private var waveformIndicator: some View {
+        HStack(spacing: 2) {
+            ForEach(0..<5, id: \.self) { i in
+                RoundedRectangle(cornerRadius: 1)
+                    .fill(Color(red: 0, green: 0.478, blue: 1))
+                    .frame(width: 3, height: waveformHeight(for: i))
+            }
+            Text("Speaking...")
+                .font(.system(size: 11))
+                .foregroundColor(Color(red: 0.533, green: 0.533, blue: 0.533))
+        }
+    }
+
+    /// Deterministic height per bar index to avoid SwiftUI re-render jitter.
+    private func waveformHeight(for index: Int) -> CGFloat {
+        let heights: [CGFloat] = [6, 12, 8, 14, 5]
+        return heights[index % heights.count]
+    }
+
+    private func startFollowUp() {
+        guard !followUpText.isEmpty else { return }
+        let goal = followUpText
+        followUpText = ""
+        appState.startAgentRun(goal: goal, client: client)
     }
 
     private func formatTokens(_ tokens: Int) -> String {
         if tokens >= 1000 {
-            return "\(tokens / 1000)K tokens"
+            return "\(tokens / 1000)K tk"
         }
-        return "\(tokens) tokens"
+        return "\(tokens) tk"
     }
 }
 

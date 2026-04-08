@@ -102,6 +102,15 @@ final class AppState {
     var voiceStatus: VoiceStatus = .idle
     var voiceMode: VoiceMode = .alwaysListening
     var narrationMode: NarrationMode = .summary
+    var voiceMuted: Bool = false {
+        didSet {
+            guard voiceActive, let pipe = voiceInputPipe else { return }
+            let cmd = voiceMuted ? "{\"type\":\"mute\"}\n" : "{\"type\":\"unmute\"}\n"
+            if let data = cmd.data(using: .utf8) {
+                pipe.fileHandleForWriting.write(data)
+            }
+        }
+    }
     /// Stdin pipe to the voice sidecar (for PTT commands).
     var voiceInputPipe: Pipe?
     /// Background task reading voice sidecar stdout.
@@ -194,6 +203,19 @@ final class AppState {
         guard voiceActive, let pipe = voiceInputPipe else { return }
         if let data = "{\"type\":\"stop_listening\"}\n".data(using: .utf8) {
             pipe.fileHandleForWriting.write(data)
+        }
+    }
+
+    /// Send text to the voice sidecar for TTS playback (e.g. replay result).
+    func voiceReplay(text: String) {
+        guard voiceActive, let pipe = voiceInputPipe else { return }
+        // JSON-escape the text by encoding it as a JSON string value
+        if let textData = try? JSONSerialization.data(withJSONObject: text),
+           let escapedText = String(data: textData, encoding: .utf8) {
+            let cmd = "{\"type\":\"speak\",\"text\":\(escapedText)}\n"
+            if let data = cmd.data(using: .utf8) {
+                pipe.fileHandleForWriting.write(data)
+            }
         }
     }
 

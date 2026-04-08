@@ -32,10 +32,12 @@ pub struct VoiceSessionConfig {
     pub narration: String,
 }
 
-/// Stdin command from the menu bar (for PTT mode).
+/// Stdin command from the menu bar (for PTT mode, mute, speak).
 #[derive(Deserialize)]
 struct StdinCommand {
     r#type: String,
+    /// Text payload for the "speak" command.
+    text: Option<String>,
 }
 
 /// Emit a structured JSON event to stdout (for `--json` mode).
@@ -194,9 +196,9 @@ pub async fn run_voice_session(config: VoiceSessionConfig) -> Result<()> {
         println!("Ready. Speak a command...");
     }
 
-    // -- Stdin reader for PTT commands ------------------------------------
-    let (stdin_tx, mut stdin_rx) = tokio::sync::mpsc::unbounded_channel::<String>();
-    if is_ptt {
+    // -- Stdin reader for PTT / mute / speak commands ----------------------
+    let (stdin_tx, mut stdin_rx) = tokio::sync::mpsc::unbounded_channel::<StdinCommand>();
+    {
         std::thread::spawn(move || {
             let stdin = std::io::stdin();
             let mut line = String::new();
@@ -205,7 +207,9 @@ pub async fn run_voice_session(config: VoiceSessionConfig) -> Result<()> {
                 match std::io::BufRead::read_line(&mut stdin.lock(), &mut line) {
                     Ok(0) => break, // EOF
                     Ok(_) => {
-                        let _ = stdin_tx.send(line.trim().to_string());
+                        if let Ok(cmd) = serde_json::from_str::<StdinCommand>(line.trim()) {
+                            let _ = stdin_tx.send(cmd);
+                        }
                     }
                     Err(_) => break,
                 }
@@ -217,24 +221,45 @@ pub async fn run_voice_session(config: VoiceSessionConfig) -> Result<()> {
     let interrupted = Arc::new(AtomicBool::new(false));
     let json_mode = config.json;
     let narration_mode = config.narration.clone();
+    let muted = Arc::new(AtomicBool::new(false));
 
     loop {
-        // In PTT mode, wait for start_listening command before capturing
-        if is_ptt {
-            loop {
+        // Drain any pending stdin commands (mute/unmute/speak) and handle PTT
+        loop {
+            let cmd = if is_ptt {
+                // In PTT mode, block until start_listening
                 match stdin_rx.recv().await {
-                    Some(line) => {
-                        if let Ok(cmd) = serde_json::from_str::<StdinCommand>(&line) {
-                            if cmd.r#type == "start_listening" {
-                                if json_mode {
-                                    emit_json("listening", serde_json::json!({}));
-                                }
-                                break;
+                    Some(cmd) => cmd,
+                    None => return Ok(()),
+                }
+            } else {
+                // In always-listening mode, drain non-blocking
+                match stdin_rx.try_recv() {
+                    Ok(cmd) => cmd,
+                    Err(_) => break, // No pending commands
+                }
+            };
+
+            match cmd.r#type.as_str() {
+                "mute" => { muted.store(true, Ordering::Relaxed); }
+                "unmute" => { muted.store(false, Ordering::Relaxed); }
+                "speak" => {
+                    if let Some(text) = cmd.text {
+                        if !muted.load(Ordering::Relaxed) {
+                            if json_mode {
+                                emit_json("speaking", serde_json::json!({"text": &text}));
                             }
+                            speak_interruptible(&mut pipeline, &text, tts_rate, &mic_rx, &interrupted).await?;
                         }
                     }
-                    None => return Ok(()), // Stdin closed
                 }
+                "start_listening" if is_ptt => {
+                    if json_mode {
+                        emit_json("listening", serde_json::json!({}));
+                    }
+                    break;
+                }
+                _ => {}
             }
         }
 
@@ -307,7 +332,7 @@ pub async fn run_voice_session(config: VoiceSessionConfig) -> Result<()> {
                     _ => false, // "off"
                 };
 
-                if should_narrate {
+                if should_narrate && !muted.load(Ordering::Relaxed) {
                     if let Some(phrase) = narrator::narrate(etype, &ev.event) {
                         if json_mode {
                             emit_json("speaking", serde_json::json!({"text": &phrase}));
@@ -379,9 +404,13 @@ pub async fn run_voice_session(config: VoiceSessionConfig) -> Result<()> {
 
         pipeline.reset_vad();
 
-        // In PTT mode, drain any pending stop_listening commands
-        if is_ptt {
-            while stdin_rx.try_recv().is_ok() {}
+        // Drain any pending stdin commands (e.g. stale stop_listening)
+        while let Ok(cmd) = stdin_rx.try_recv() {
+            match cmd.r#type.as_str() {
+                "mute" => { muted.store(true, Ordering::Relaxed); }
+                "unmute" => { muted.store(false, Ordering::Relaxed); }
+                _ => {}
+            }
         }
 
         if json_mode {
