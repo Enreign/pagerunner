@@ -5,11 +5,11 @@ const statusText  = document.getElementById("statusText");
 const profileSel  = document.getElementById("profileSelect");
 const goalInput   = document.getElementById("goalInput");
 const runBtn      = document.getElementById("runBtn");
-const runBtnText  = document.getElementById("runBtnText");
+const runBtnIcon  = document.getElementById("runBtnIcon");
 const feed        = document.getElementById("feed");
 const feedInner   = document.getElementById("feedInner");
 const welcome     = document.getElementById("welcome");
-const tokenInfo   = document.getElementById("tokenInfo");
+const inputMeta   = document.getElementById("inputMeta");
 
 let isRunning = false;
 
@@ -17,54 +17,50 @@ let isRunning = false;
 
 function sendMsg(msg) {
   return new Promise((resolve) => {
-    chrome.runtime.sendMessage(msg, (response) => {
-      resolve(response || {});
-    });
+    chrome.runtime.sendMessage(msg, (r) => resolve(r || {}));
   });
 }
 
-function setStatus(connected, sessionCount) {
+function setStatus(connected, count) {
   statusDot.className = "dot " + (connected ? "connected" : "disconnected");
-  if (connected) {
-    statusText.textContent = sessionCount === 1
-      ? "Connected · 1 session"
-      : `Connected · ${sessionCount} sessions`;
-  } else {
-    statusText.textContent = "Disconnected";
-  }
+  statusText.textContent = connected
+    ? (count === 1 ? "1 session" : `${count} sessions`)
+    : "Disconnected";
 }
 
-function addEvent(html, cls) {
+function ev(html, cls) {
   if (welcome) welcome.hidden = true;
   const el = document.createElement("div");
-  el.className = "event-card " + (cls || "");
+  el.className = "ev " + (cls || "");
   el.innerHTML = html;
   feedInner.appendChild(el);
   feed.scrollTop = feed.scrollHeight;
   return el;
 }
 
-function clearEvents() {
-  // Remove all event cards but keep welcome
-  const cards = feedInner.querySelectorAll(".event-card");
-  cards.forEach(c => c.remove());
+function clearFeed() {
+  feedInner.querySelectorAll(".ev, .result-card").forEach(e => e.remove());
 }
 
-function syncRunBtn() {
-  const hasGoal    = goalInput.value.trim().length > 0;
-  const hasProfile = profileSel.value.length > 0;
-  runBtn.disabled  = isRunning ? false : !(hasGoal && hasProfile);
+function syncBtn() {
+  const ok = goalInput.value.trim().length > 0 && profileSel.value.length > 0;
+  runBtn.disabled = isRunning ? false : !ok;
 }
 
-function updateRunBtn() {
-  if (isRunning) {
-    runBtnText.textContent = "Stop";
-    runBtn.classList.add("running");
-  } else {
-    runBtnText.textContent = "Send";
-    runBtn.classList.remove("running");
+// Auto-resize textarea
+goalInput.addEventListener("input", () => {
+  goalInput.style.height = "auto";
+  goalInput.style.height = Math.min(goalInput.scrollHeight, 80) + "px";
+  syncBtn();
+});
+
+// Cmd/Ctrl+Enter to send
+goalInput.addEventListener("keydown", (e) => {
+  if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
+    e.preventDefault();
+    if (!runBtn.disabled) runBtn.click();
   }
-}
+});
 
 // ── Init ─────────────────────────────────────────────────────────────────────
 
@@ -73,7 +69,7 @@ async function init() {
   setStatus(status.connected, status.sessions || 0);
 
   const { ok, profiles } = await sendMsg({ type: "list_profiles" });
-  if (ok && profiles && profiles.length > 0) {
+  if (ok && profiles?.length) {
     profileSel.innerHTML = "";
     for (const p of profiles) {
       const opt = document.createElement("option");
@@ -81,114 +77,99 @@ async function init() {
       opt.textContent = p.display_name || p.name;
       profileSel.appendChild(opt);
     }
-    runBtn.disabled = !status.connected;
   } else {
-    profileSel.innerHTML = '<option value="">No profiles found</option>';
-    runBtn.disabled = true;
+    profileSel.innerHTML = '<option value="">No profiles</option>';
   }
-
-  goalInput.addEventListener("input", syncRunBtn);
-  profileSel.addEventListener("change", syncRunBtn);
-
-  // Cmd+Enter to send
-  goalInput.addEventListener("keydown", (e) => {
-    if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
-      e.preventDefault();
-      if (!runBtn.disabled) runBtn.click();
-    }
-  });
-
-  syncRunBtn();
+  syncBtn();
 }
 
-// ── Run / Stop ───────────────────────────────────────────────────────────────
+// ── Run ──────────────────────────────────────────────────────────────────────
 
 runBtn.addEventListener("click", async () => {
   if (isRunning) {
     isRunning = false;
-    updateRunBtn();
-    addEvent("Stopped by user", "status");
+    runBtnIcon.textContent = "↑";
+    runBtn.classList.remove("running");
+    ev("Stopped", "status");
     return;
   }
 
-  const goal    = goalInput.value.trim();
+  const goal = goalInput.value.trim();
   const profile = profileSel.value;
   if (!goal || !profile) return;
 
   isRunning = true;
-  updateRunBtn();
-  clearEvents();
+  runBtnIcon.textContent = "■";
+  runBtn.classList.add("running");
+  clearFeed();
 
-  // Show the goal as a "user message"
-  addEvent(`<strong>Goal:</strong> ${escapeHtml(goal)}`, "thinking");
+  ev(`<strong>Goal:</strong> ${esc(goal)}`, "goal");
+  const spinner = ev('<span class="spinner"></span> Working…', "status");
 
-  // Show working indicator
-  const workingEl = addEvent('<span class="spinner"></span> Agent is working…', "status");
+  goalInput.value = "";
+  goalInput.style.height = "auto";
+  syncBtn();
 
   try {
     const resp = await sendMsg({ type: "agent_run", goal, profile });
-
-    // Remove working indicator
-    workingEl.remove();
+    spinner.remove();
 
     if (resp.ok) {
-      const result = resp.result || {};
-      const summary = result.summary || result.data?.summary || "Done.";
-      const steps = result.total_steps || result.data?.total_steps || "?";
-      const inputTokens = result.input_tokens || result.data?.input_tokens || 0;
-      const outputTokens = result.output_tokens || result.data?.output_tokens || 0;
-      const outcome = result.outcome || result.data?.outcome || "completed";
+      const r = resp.result || {};
+      const summary = r.summary || "Done.";
+      const steps = r.total_steps || "?";
+      const tokens = (r.input_tokens || 0) + (r.output_tokens || 0);
+      const outcome = r.outcome || "completed";
 
-      if (outcome === "completed" || outcome === "Completed") {
-        // Result card
-        addEvent(`
-          <div class="result-header">✓ Result</div>
-          <div class="result-body">${escapeHtml(summary)}</div>
-          <div class="result-footer">
-            <span>${steps} steps · ${formatTokens(inputTokens + outputTokens)}</span>
-            <button class="copy-btn" onclick="copyText(this, '${escapeAttr(summary)}')">Copy</button>
+      if (outcome.toLowerCase().includes("completed")) {
+        const card = document.createElement("div");
+        card.className = "result-card";
+        card.innerHTML = `
+          <div class="result-head">✓ Result</div>
+          <div class="result-body">${esc(summary)}</div>
+          <div class="result-foot">
+            <span>${steps} steps · ${fmtTok(tokens)}</span>
+            <button class="copy-btn" onclick="doCopy(this)">Copy</button>
           </div>
-        `, "result");
+        `;
+        card.dataset.summary = summary;
+        feedInner.appendChild(card);
+        feed.scrollTop = feed.scrollHeight;
+        inputMeta.textContent = `${steps} steps · ${fmtTok(tokens)}`;
       } else {
-        addEvent(`⚠ ${escapeHtml(outcome)}: ${escapeHtml(summary || "")}`, "error-msg");
+        ev(`⚠ ${esc(outcome)}${summary ? ": " + esc(summary) : ""}`, "error");
       }
-
-      tokenInfo.textContent = `${steps} steps · ${formatTokens(inputTokens + outputTokens)}`;
     } else {
-      addEvent(`✗ ${escapeHtml(resp.error || "Unknown error")}`, "error-msg");
+      ev(`✗ ${esc(resp.error || "Unknown error")}`, "error");
     }
   } catch (err) {
-    workingEl.remove();
-    addEvent(`✗ ${escapeHtml(err.message)}`, "error-msg");
+    spinner.remove();
+    ev(`✗ ${esc(err.message)}`, "error");
   } finally {
     isRunning = false;
-    updateRunBtn();
-    syncRunBtn();
-    goalInput.value = "";
+    runBtnIcon.textContent = "↑";
+    runBtn.classList.remove("running");
+    syncBtn();
     goalInput.focus();
   }
 });
 
 // ── Utils ────────────────────────────────────────────────────────────────────
 
-function escapeHtml(str) {
-  const div = document.createElement("div");
-  div.textContent = str;
-  return div.innerHTML.replace(/\n/g, "<br>");
+function esc(s) {
+  const d = document.createElement("div");
+  d.textContent = s;
+  return d.innerHTML.replace(/\n/g, "<br>");
 }
 
-function escapeAttr(str) {
-  return str.replace(/'/g, "\\'").replace(/\n/g, "\\n");
-}
-
-function formatTokens(n) {
+function fmtTok(n) {
   return n >= 1000 ? Math.round(n / 1000) + "K tokens" : n + " tokens";
 }
 
-// Global: copy button handler
-window.copyText = function(btn, text) {
-  const decoded = text.replace(/\\n/g, "\n").replace(/\\'/g, "'");
-  navigator.clipboard.writeText(decoded).then(() => {
+window.doCopy = function(btn) {
+  const card = btn.closest(".result-card");
+  const text = card?.dataset?.summary || "";
+  navigator.clipboard.writeText(text).then(() => {
     btn.textContent = "Copied!";
     setTimeout(() => { btn.textContent = "Copy"; }, 1500);
   });

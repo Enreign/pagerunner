@@ -8,55 +8,41 @@
 </head>
 <body>
   <div class="panel">
-    <!-- Header -->
-    <header class="header">
-      <div class="header-left">
-        <img src="icons/icon48.png" alt="" class="header-icon" />
-        <span class="header-title">Pagerunner</span>
-      </div>
-      <div class="header-right">
-        <span class="status-badge" id="statusBadge">
-          <span class="dot" id="statusDot"></span>
-          <span id="statusText">Connecting…</span>
-        </span>
-      </div>
-    </header>
+    <!-- Status bar (compact — Chrome already shows "Pagerunner" in its own bar) -->
+    <div class="status-bar">
+      <span class="status-badge" id="statusBadge">
+        <span class="dot" id="statusDot"></span>
+        <span id="statusText">Connecting…</span>
+      </span>
+      <select class="profile-select" id="profileSelect">
+        <option value="">Loading…</option>
+      </select>
+    </div>
 
-    <!-- Feed area (scrollable, takes remaining space) -->
+    <!-- Feed area -->
     <div class="feed" id="feed">
       <div class="feed-inner" id="feedInner">
-        <!-- Welcome state -->
         <div class="welcome" id="welcome">
-          <div class="welcome-icon">🤖</div>
-          <div class="welcome-title">Ready to browse</div>
-          <div class="welcome-sub">Type a goal below and the agent will navigate, click, and extract information for you.</div>
+          <div class="welcome-hint">Type a goal below — the agent will browse for you</div>
         </div>
       </div>
     </div>
 
-    <!-- Input area (pinned to bottom) -->
+    <!-- Input area -->
     <div class="input-area">
-      <div class="input-row">
-        <select class="profile-select" id="profileSelect">
-          <option value="">Loading…</option>
-        </select>
-      </div>
-      <div class="input-row">
+      <div class="input-wrap">
         <textarea
           class="goal-input"
           id="goalInput"
-          rows="2"
-          placeholder="What should I do? e.g. Go to HN and summarize top stories"
+          rows="1"
+          placeholder="Ask the agent…"
           maxlength="2000"
         ></textarea>
-      </div>
-      <div class="input-row input-actions">
-        <span class="token-info" id="tokenInfo"></span>
-        <button class="btn btn-send" id="runBtn" disabled>
-          <span id="runBtnText">Send</span>
-          <span class="btn-icon">↑</span>
+        <button class="btn-send" id="runBtn" disabled>
+          <span id="runBtnIcon">↑</span>
         </button>
       </div>
+      <div class="input-meta" id="inputMeta"></div>
     </div>
   </div>
 
