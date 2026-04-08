@@ -161,6 +161,35 @@ fn is_denial(text: &str) -> bool {
 /// 4. Handle approval requests with yes/no voice input.
 /// 5. Resume listening after the agent finishes.
 pub async fn run_voice_session(config: VoiceSessionConfig) -> Result<()> {
+    // -- Check daemon connectivity before loading models (which is slow) ---
+    {
+        let sock_path = dirs::home_dir()
+            .ok_or_else(|| anyhow::anyhow!("Cannot determine home directory"))?
+            .join(SOCKET_SUBPATH);
+
+        if !sock_path.exists() {
+            let msg = "Pagerunner daemon is not running. Start it with: pagerunner daemon";
+            if config.json {
+                emit_json("error", serde_json::json!({"message": msg}));
+            }
+            anyhow::bail!(msg);
+        }
+
+        // Quick connectivity check — open and immediately close
+        match std::os::unix::net::UnixStream::connect(&sock_path) {
+            Ok(_) => {} // daemon is reachable
+            Err(e) => {
+                let msg = format!(
+                    "Cannot connect to daemon: {e}. Start it with: pagerunner daemon"
+                );
+                if config.json {
+                    emit_json("error", serde_json::json!({"message": &msg}));
+                }
+                anyhow::bail!("{}", msg);
+            }
+        }
+    }
+
     // -- Load models -------------------------------------------------------
     tracing::info!("Loading voice models...");
 
