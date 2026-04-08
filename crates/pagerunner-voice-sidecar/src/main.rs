@@ -11,6 +11,8 @@ mod session;
 use clap::Parser;
 use pagerunner_voice::PipelineConfig;
 use session::VoiceSessionConfig;
+use std::fs::File;
+use std::io::Write;
 
 #[derive(Parser)]
 #[command(
@@ -65,6 +67,9 @@ async fn main() -> anyhow::Result<()> {
         .init();
 
     let cli = Cli::parse();
+
+    // Acquire instance lock — prevents multiple sidecars fighting over the mic
+    let _lock = acquire_instance_lock()?;
 
     // Validate threshold
     if !(0.0..=1.0).contains(&cli.vad_threshold) {
@@ -122,4 +127,38 @@ async fn main() -> anyhow::Result<()> {
     }
 
     Ok(())
+}
+
+/// Acquire an exclusive file lock to prevent multiple voice sidecar instances.
+///
+/// The returned `File` must be held for the lifetime of the process — the lock
+/// is released automatically when the file handle is dropped.
+fn acquire_instance_lock() -> anyhow::Result<File> {
+    let lock_path = dirs::home_dir()
+        .ok_or_else(|| anyhow::anyhow!("Cannot determine home directory"))?
+        .join(".pagerunner/voice.lock");
+
+    // Ensure parent directory exists
+    if let Some(parent) = lock_path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+
+    let file = File::create(&lock_path)?;
+
+    // Try to get an exclusive non-blocking lock
+    use std::os::unix::io::AsRawFd;
+    let fd = file.as_raw_fd();
+    let result = unsafe { libc::flock(fd, libc::LOCK_EX | libc::LOCK_NB) };
+
+    if result != 0 {
+        anyhow::bail!(
+            "Another pagerunner-voice instance is already running. Stop it first."
+        );
+    }
+
+    // Write PID for diagnostics
+    let mut f = file;
+    writeln!(f, "{}", std::process::id())?;
+
+    Ok(f)
 }
