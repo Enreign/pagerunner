@@ -61,6 +61,139 @@ final class AppState {
         }
     }
 
+    // MARK: - Voice state
+
+    enum VoiceStatus: Equatable {
+        case idle
+        case starting
+        case listening
+        case processing
+        case speaking
+    }
+
+    var voiceActive: Bool = false
+    var voiceProcess: Process?
+    var voiceStatus: VoiceStatus = .idle
+    /// Background task reading voice sidecar stdout.
+    var voiceReadTask: Task<Void, Never>?
+
+    func startVoice() {
+        guard !voiceActive, let binary = binaryPath else { return }
+        voiceActive = true
+        voiceStatus = .starting
+
+        let voiceBinaryPath: String
+        if binary.hasSuffix("/pagerunner") {
+            voiceBinaryPath = String(binary.dropLast("/pagerunner".count)) + "/pagerunner-voice"
+        } else {
+            voiceBinaryPath = binary + "-voice"
+        }
+
+        let profile = agentProfile.isEmpty ? profiles.first?.name ?? "personal" : agentProfile
+
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: voiceBinaryPath)
+        process.arguments = ["--profile", profile, "--json"]
+
+        let pipe = Pipe()
+        process.standardOutput = pipe
+        process.standardError = FileHandle.nullDevice
+
+        voiceProcess = process
+
+        voiceReadTask = Task { [weak self] in
+            do {
+                try process.run()
+            } catch {
+                await MainActor.run {
+                    self?.voiceActive = false
+                    self?.voiceStatus = .idle
+                }
+                return
+            }
+
+            let handle = pipe.fileHandleForReading
+            do {
+                for try await line in handle.bytes.lines {
+                    guard let self, !Task.isCancelled else { break }
+                    await MainActor.run {
+                        self.handleVoiceEvent(line)
+                    }
+                }
+            } catch {
+                // Stream ended or read error — fall through to cleanup
+            }
+
+            // Process ended
+            await MainActor.run {
+                self?.voiceActive = false
+                self?.voiceStatus = .idle
+            }
+        }
+    }
+
+    func stopVoice() {
+        voiceReadTask?.cancel()
+        voiceReadTask = nil
+        voiceProcess?.terminate()
+        voiceProcess = nil
+        voiceActive = false
+        voiceStatus = .idle
+    }
+
+    private func handleVoiceEvent(_ line: String) {
+        guard let data = line.data(using: .utf8),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let eventType = json["type"] as? String else { return }
+
+        let eventData = json["data"] as? [String: Any]
+
+        switch eventType {
+        case "listening":
+            voiceStatus = .listening
+        case "utterance":
+            if let text = eventData?["text"] as? String {
+                agentGoal = text
+                voiceStatus = .processing
+            }
+        case "agent_event":
+            if let innerEvent = eventData?["event"] as? [String: Any] {
+                // Decode the inner event as AgentEventWire
+                if let wireData = try? JSONSerialization.data(withJSONObject: innerEvent),
+                   let wire = try? JSONDecoder().decode(AgentEventWire.self, from: wireData) {
+                    // Auto-transition to running on first event
+                    if agentState == .idle {
+                        agentState = .running
+                        agentStartTime = Date()
+                        agentEvents = []
+                        agentSteps = 0
+                        agentTokens = 0
+                        agentSummary = nil
+                        agentError = nil
+                        agentApproval = nil
+                    }
+                    handleAgentEvent(wire)
+                }
+            }
+        case "speaking":
+            voiceStatus = .speaking
+        case "idle":
+            voiceStatus = .listening
+            // If agent was running, mark completed
+            if agentState == .running || agentState == .completed {
+                if agentState != .completed && agentState != .error {
+                    agentState = .completed
+                }
+            }
+        case "approval":
+            voiceStatus = .listening
+        case "approval_response":
+            voiceStatus = .processing
+        default:
+            break
+        }
+    }
+
     // MARK: - Agent state
 
     /// UI-facing event item for the feed.
@@ -465,6 +598,7 @@ final class AppState {
     func resetAgent() {
         agentStreamTask?.cancel()
         agentStreamTask = nil
+        stopVoice()
         agentState = .idle
         agentGoal = ""
         agentEvents = []

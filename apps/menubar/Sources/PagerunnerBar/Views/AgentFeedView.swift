@@ -16,10 +16,32 @@ struct AgentFeedView: View {
                     Text("Pagerunner Agent")
                         .font(.system(size: 14, weight: .semibold))
                     Spacer()
+
+                    // Mic toggle
+                    Button {
+                        if appState.voiceActive {
+                            appState.stopVoice()
+                        } else {
+                            appState.startVoice()
+                        }
+                    } label: {
+                        Image(systemName: appState.voiceActive ? "mic.fill" : "mic")
+                            .foregroundColor(appState.voiceActive ? Color(red: 0.937, green: 0.267, blue: 0.267) : Color(red: 0.533, green: 0.533, blue: 0.533))
+                            .font(.system(size: 14))
+                    }
+                    .buttonStyle(.plain)
+                    .help(appState.voiceActive ? "Stop voice" : "Start voice")
                 }
-                Text("Using \(appState.agentModel) \u{00B7} \(appState.agentProfile)")
-                    .font(.system(size: 11))
-                    .foregroundColor(Color(red: 0.533, green: 0.533, blue: 0.533))
+
+                HStack(spacing: 4) {
+                    Text("Using \(appState.agentModel) \u{00B7} \(appState.agentProfile)")
+                        .font(.system(size: 11))
+                        .foregroundColor(Color(red: 0.533, green: 0.533, blue: 0.533))
+                    Spacer()
+                    if appState.voiceActive {
+                        VoiceStatusBadge(status: appState.voiceStatus)
+                    }
+                }
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 8)

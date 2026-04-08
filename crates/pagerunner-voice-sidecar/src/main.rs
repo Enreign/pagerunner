@@ -39,6 +39,10 @@ struct Cli {
     /// Silence timeout in seconds before ending an utterance.
     #[arg(long, default_value = "0.3")]
     silence_timeout: f32,
+
+    /// Output events as JSON lines to stdout (for integration with menu bar).
+    #[arg(long)]
+    json: bool,
 }
 
 #[tokio::main]
@@ -78,6 +82,7 @@ async fn main() -> anyhow::Result<()> {
         pipeline: pipeline_config,
         vad_threshold: cli.vad_threshold,
         wake_word: cli.wake_word,
+        json: cli.json,
     };
 
     if session_config.wake_word.is_some() {

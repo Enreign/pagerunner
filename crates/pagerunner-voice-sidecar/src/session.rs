@@ -24,6 +24,16 @@ pub struct VoiceSessionConfig {
     pub vad_threshold: f32,
     /// Optional wake word (unused in v1 — reserved for future).
     pub wake_word: Option<String>,
+    /// Output structured JSON lines to stdout (for menu bar integration).
+    pub json: bool,
+}
+
+/// Emit a structured JSON event to stdout (for `--json` mode).
+fn emit_json(event_type: &str, data: serde_json::Value) {
+    let line = serde_json::json!({"type": event_type, "data": data});
+    println!("{}", line);
+    use std::io::Write;
+    std::io::stdout().flush().ok();
 }
 
 // ---------------------------------------------------------------------------
@@ -163,10 +173,15 @@ pub async fn run_voice_session(config: VoiceSessionConfig) -> Result<()> {
     let (_mic_stream, mic_rx) = audio::open_mic(chunk_size)?;
 
     tracing::info!("Microphone open. Listening...");
-    println!("Ready. Speak a command...");
+    if config.json {
+        emit_json("listening", serde_json::json!({}));
+    } else {
+        println!("Ready. Speak a command...");
+    }
 
     // -- Main loop ---------------------------------------------------------
     let interrupted = Arc::new(AtomicBool::new(false));
+    let json_mode = config.json;
 
     loop {
         // 1. Listen for an utterance
@@ -186,7 +201,11 @@ pub async fn run_voice_session(config: VoiceSessionConfig) -> Result<()> {
             continue;
         }
 
-        println!("[You]: {}", trimmed);
+        if json_mode {
+            emit_json("utterance", serde_json::json!({"text": trimmed}));
+        } else {
+            println!("[You]: {}", trimmed);
+        }
         tracing::info!(goal = trimmed, "Utterance captured");
 
         // 2. Send to daemon
@@ -219,9 +238,21 @@ pub async fn run_voice_session(config: VoiceSessionConfig) -> Result<()> {
                 current_run_id = Some(ev.run_id.clone());
                 let etype = event_type(&ev.event);
 
+                // Emit JSON event for menu bar integration
+                if json_mode {
+                    emit_json("agent_event", serde_json::json!({
+                        "event_type": etype,
+                        "event": ev.event,
+                    }));
+                }
+
                 // Narrate the event
                 if let Some(phrase) = narrator::narrate(etype, &ev.event) {
-                    println!("[Agent]: {}", phrase);
+                    if json_mode {
+                        emit_json("speaking", serde_json::json!({"text": &phrase}));
+                    } else {
+                        println!("[Agent]: {}", phrase);
+                    }
                     speak_interruptible(&mut pipeline, &phrase, tts_rate, &mic_rx, &interrupted)
                         .await?;
                 }
@@ -229,6 +260,12 @@ pub async fn run_voice_session(config: VoiceSessionConfig) -> Result<()> {
                 // Handle approval requests
                 if etype == "approval_required" {
                     if let Some(run_id) = &current_run_id {
+                        if json_mode {
+                            emit_json("approval", serde_json::json!({
+                                "action": ev.event.get("action").and_then(|v| v.as_str()).unwrap_or("unknown"),
+                                "description": ev.event.get("description").and_then(|v| v.as_str()).unwrap_or(""),
+                            }));
+                        }
                         let response =
                             wait_for_approval(&mut pipeline, &mic_rx, &interrupted).await?;
                         let approve_msg = serde_json::json!({
@@ -238,7 +275,9 @@ pub async fn run_voice_session(config: VoiceSessionConfig) -> Result<()> {
                             "approved": response,
                         });
                         conn.send(&approve_msg).await?;
-                        if response {
+                        if json_mode {
+                            emit_json("approval_response", serde_json::json!({"approved": response}));
+                        } else if response {
                             println!("[You]: Approved.");
                         } else {
                             println!("[You]: Denied.");
@@ -262,7 +301,11 @@ pub async fn run_voice_session(config: VoiceSessionConfig) -> Result<()> {
                 if let Some(err) = resp.error {
                     tracing::error!(err, "Daemon error");
                     let phrase = format!("Error: {}", err);
-                    println!("[Agent]: {}", phrase);
+                    if json_mode {
+                        emit_json("speaking", serde_json::json!({"text": &phrase}));
+                    } else {
+                        println!("[Agent]: {}", phrase);
+                    }
                     speak_interruptible(&mut pipeline, &phrase, tts_rate, &mic_rx, &interrupted)
                         .await?;
                 }
@@ -273,7 +316,11 @@ pub async fn run_voice_session(config: VoiceSessionConfig) -> Result<()> {
         }
 
         pipeline.reset_vad();
-        println!("Ready. Speak a command...");
+        if json_mode {
+            emit_json("idle", serde_json::json!({}));
+        } else {
+            println!("Ready. Speak a command...");
+        }
     }
 }
 

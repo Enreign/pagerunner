@@ -19,7 +19,37 @@ struct AgentIdleView: View {
                 .font(.system(size: 16, weight: .semibold))
                 .foregroundColor(Color(red: 0.114, green: 0.114, blue: 0.122))
 
-            // Goal input
+            // Voice listening indicator (replaces text input when active)
+            if appState.voiceActive {
+                VStack(spacing: 8) {
+                    VoiceStatusBadge(status: appState.voiceStatus)
+
+                    Button {
+                        appState.stopVoice()
+                    } label: {
+                        HStack(spacing: 4) {
+                            Image(systemName: "mic.slash.fill")
+                                .font(.system(size: 10))
+                            Text("Stop")
+                                .font(.system(size: 12, weight: .medium))
+                        }
+                        .foregroundColor(Color(red: 0.937, green: 0.267, blue: 0.267))
+                    }
+                    .buttonStyle(.plain)
+
+                    if !appState.agentGoal.isEmpty {
+                        Text(appState.agentGoal)
+                            .font(.system(size: 12))
+                            .foregroundColor(Color(red: 0.533, green: 0.533, blue: 0.533))
+                            .italic()
+                            .padding(.horizontal, 16)
+                    }
+                }
+                .padding(.vertical, 4)
+            }
+
+            // Goal input (hidden when voice is active)
+            if !appState.voiceActive {
             TextField("What should I browse?", text: $goalText, axis: .vertical)
                 .textFieldStyle(.plain)
                 .font(.system(size: 13))
@@ -58,6 +88,20 @@ struct AgentIdleView: View {
                 .labelsHidden()
                 .frame(maxWidth: .infinity)
 
+                // Voice button
+                Button {
+                    appState.startVoice()
+                } label: {
+                    Image(systemName: "mic")
+                        .font(.system(size: 12))
+                        .foregroundColor(.white)
+                        .frame(width: 28, height: 24)
+                        .background(Color(red: 0.533, green: 0.533, blue: 0.533))
+                        .cornerRadius(5)
+                }
+                .buttonStyle(.plain)
+                .help("Start voice input")
+
                 // Run button
                 Button(action: startRun) {
                     HStack(spacing: 4) {
@@ -78,6 +122,7 @@ struct AgentIdleView: View {
                 .disabled(goalText.isEmpty)
             }
             .padding(.horizontal, 16)
+            } // end if !voiceActive
 
             Divider().padding(.horizontal, 16)
 
