@@ -59,6 +59,65 @@ pub enum VoiceError {
 pub type Result<T> = std::result::Result<T, VoiceError>;
 
 // ---------------------------------------------------------------------------
+// PipelineConfig
+// ---------------------------------------------------------------------------
+
+/// Configuration for the voice pipeline.
+///
+/// Controls silence detection timing and STT model selection. Use the
+/// [`Default`], [`accurate`], or [`fast`] presets, or customize individual
+/// fields.
+///
+/// [`accurate`]: PipelineConfig::accurate
+/// [`fast`]: PipelineConfig::fast
+#[derive(Debug, Clone)]
+pub struct PipelineConfig {
+    /// Silence duration (in seconds) required to end an utterance. Default: 0.3.
+    pub silence_timeout_secs: f32,
+    /// VAD chunk size used for silence frame counting. Default: 512 (32 ms at 16 kHz).
+    pub vad_chunk_size: usize,
+    /// Whisper model to use. `"whisper-tiny"` (faster, ~75 MB) or `"whisper-base"` (better, ~142 MB).
+    pub stt_model: String,
+}
+
+impl Default for PipelineConfig {
+    fn default() -> Self {
+        Self {
+            silence_timeout_secs: 0.3,
+            vad_chunk_size: 512,
+            stt_model: "whisper-tiny".to_string(),
+        }
+    }
+}
+
+impl PipelineConfig {
+    /// Preset for accuracy — uses whisper-base, longer silence timeout.
+    pub fn accurate() -> Self {
+        Self {
+            silence_timeout_secs: 0.5,
+            stt_model: "whisper-base".to_string(),
+            ..Default::default()
+        }
+    }
+
+    /// Preset for speed — uses whisper-tiny, shorter silence timeout.
+    pub fn fast() -> Self {
+        Self {
+            silence_timeout_secs: 0.2,
+            stt_model: "whisper-tiny".to_string(),
+            ..Default::default()
+        }
+    }
+
+    /// Compute the number of silence frames required to end an utterance,
+    /// based on `silence_timeout_secs` and `vad_chunk_size` at 16 kHz.
+    pub(crate) fn silence_frames_required(&self) -> usize {
+        let chunk_duration_secs = self.vad_chunk_size as f32 / 16_000.0;
+        (self.silence_timeout_secs / chunk_duration_secs).ceil() as usize
+    }
+}
+
+// ---------------------------------------------------------------------------
 // VoicePipeline
 // ---------------------------------------------------------------------------
 
