@@ -9,6 +9,7 @@
 //! - [`VoicePipeline`] — orchestrator that wires the three together
 //! - [`mock`] — mock implementations for tests (behind `mock` feature or `#[cfg(test)]`)
 //! - [`WhisperStt`] — whisper.cpp STT backend (behind `whisper` feature)
+//! - [`PiperTts`] — Piper neural TTS backend (behind `piper-tts` feature)
 //! - [`VoiceError`] — unified error type
 
 #[cfg(any(test, feature = "mock"))]
@@ -26,6 +27,11 @@ pub use whisper_stt::WhisperStt;
 pub mod silero_vad;
 #[cfg(feature = "silero-vad")]
 pub use silero_vad::SileroVad;
+
+#[cfg(feature = "piper-tts")]
+pub mod piper_tts;
+#[cfg(feature = "piper-tts")]
+pub use piper_tts::PiperTts;
 
 pub use stt::SttProvider;
 pub use tts::TtsProvider;
