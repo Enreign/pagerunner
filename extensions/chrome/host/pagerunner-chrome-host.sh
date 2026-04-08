@@ -63,19 +63,33 @@ send_error() {
 }
 
 # Forward one request line to the daemon socket and return the response line.
+# Uses Python for reliable Unix socket I/O with proper timeout handling.
+# agent_run can take 120+ seconds — nc/socat don't handle this well.
 daemon_call() {
   local request_line="$1"
-  # Use nc (netcat) to talk to the Unix socket.
-  # -U = Unix socket, -q 1 = quit 1s after EOF on stdin.
-  if command -v socat >/dev/null 2>&1; then
-    printf '%s\n' "$request_line" | socat - "UNIX-CONNECT:${SOCKET}" 2>/dev/null
-  elif command -v nc >/dev/null 2>&1; then
-    # macOS nc doesn't support -q; use -w (timeout) instead.
-    printf '%s\n' "$request_line" | nc -U "$SOCKET" -w 2 2>/dev/null
-  else
-    echo ""
-    return 1
-  fi
+  printf '%s' "$request_line" | python3 -c "
+import socket, sys
+s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+try:
+    s.connect(sys.argv[1])
+    s.sendall(sys.stdin.buffer.read() + b'\n')
+    s.settimeout(180)
+    buf = b''
+    while True:
+        chunk = s.recv(8192)
+        if not chunk:
+            break
+        buf += chunk
+        if b'\n' in buf:
+            break
+    s.close()
+    line = buf.split(b'\n')[0]
+    sys.stdout.buffer.write(line)
+    sys.stdout.buffer.write(b'\n')
+    sys.stdout.buffer.flush()
+except Exception as e:
+    sys.stderr.write(str(e) + '\n')
+" "$SOCKET" 2>/dev/null
 }
 
 # ── Main loop ─────────────────────────────────────────────────────────────────
