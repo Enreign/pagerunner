@@ -125,21 +125,31 @@ impl PipelineConfig {
 ///
 /// Typical call flow:
 ///
-/// 1. Feed raw PCM chunks via [`process_audio`] — VAD gates STT so that STT
-///    only runs when speech is active.
+/// 1. Feed raw PCM chunks via [`process_audio`] — VAD gates STT. Audio is
+///    buffered while speech is active and sent to STT as a single utterance
+///    once silence is detected (after a configurable debounce).
 /// 2. When `process_audio` returns `Some(text)` a complete utterance has been
-///    transcribed; call [`reset_vad`] to prepare for the next utterance.
+///    transcribed; the pipeline auto-resets for the next utterance.
 /// 3. Use [`speak`] to synthesize a response.
 ///
 /// [`process_audio`]: VoicePipeline::process_audio
-/// [`reset_vad`]: VoicePipeline::reset_vad
 /// [`speak`]: VoicePipeline::speak
 pub struct VoicePipeline {
     stt: Box<dyn SttProvider>,
     tts: Box<dyn TtsProvider>,
     vad: Box<dyn VadDetector>,
-    /// Tracks whether the last VAD frame detected speech.
+    /// Whether the current VAD frame detected speech.
     speaking: bool,
+    /// Whether the previous VAD frame detected speech (for edge detection).
+    was_speaking: bool,
+    /// Accumulates audio samples while VAD detects speech.
+    utterance_buffer: Vec<f32>,
+    /// Number of consecutive silence frames needed to end an utterance.
+    silence_frames_required: usize,
+    /// Current count of consecutive silence frames.
+    silence_frame_count: usize,
+    /// Sample rate of buffered audio.
+    buffer_sample_rate: u32,
 }
 
 impl VoicePipeline {
@@ -149,36 +159,101 @@ impl VoicePipeline {
         tts: impl TtsProvider + 'static,
         vad: impl VadDetector + 'static,
     ) -> Self {
+        Self::with_config(stt, tts, vad, PipelineConfig::default())
+    }
+
+    /// Construct a new pipeline with explicit configuration.
+    pub fn with_config(
+        stt: impl SttProvider + 'static,
+        tts: impl TtsProvider + 'static,
+        vad: impl VadDetector + 'static,
+        config: PipelineConfig,
+    ) -> Self {
+        let silence_frames_required = config.silence_frames_required();
         Self {
             stt: Box::new(stt),
             tts: Box::new(tts),
             vad: Box::new(vad),
             speaking: false,
+            was_speaking: false,
+            utterance_buffer: Vec::new(),
+            silence_frames_required,
+            silence_frame_count: 0,
+            buffer_sample_rate: 0,
         }
     }
 
-    /// Process an audio chunk through VAD then STT.
+    /// Process an audio chunk through VAD, buffering speech until silence ends
+    /// the utterance, then transcribing the full utterance in one STT call.
     ///
-    /// VAD runs first.  If no speech is detected the chunk is discarded and
-    /// `Ok(None)` is returned.  When speech is detected the chunk is forwarded
-    /// to the STT provider; a complete utterance yields `Ok(Some(text))`.
+    /// Returns `Ok(None)` while accumulating speech or during silence.
+    /// Returns `Ok(Some(text))` when a complete utterance is transcribed.
     pub async fn process_audio(
         &mut self,
         audio: &[f32],
         sample_rate: u32,
     ) -> Result<Option<String>> {
+        self.was_speaking = self.speaking;
         self.speaking = self.vad.process(audio, sample_rate);
 
-        if !self.speaking {
-            tracing::trace!("VAD: no speech detected, skipping STT");
+        if self.speaking {
+            // Speech detected — accumulate in buffer
+            tracing::trace!("VAD: speech detected, buffering");
+            self.utterance_buffer.extend_from_slice(audio);
+            self.buffer_sample_rate = sample_rate;
+            self.silence_frame_count = 0;
             return Ok(None);
         }
 
-        tracing::trace!("VAD: speech detected, forwarding to STT");
-        self.stt
-            .transcribe_chunk(audio, sample_rate)
-            .await
-            .map_err(|e| VoiceError::Stt(e.to_string()))
+        // Silence detected
+        if self.was_speaking || !self.utterance_buffer.is_empty() {
+            // Was speaking or have buffered audio — debounce silence
+            self.silence_frame_count += 1;
+
+            if self.silence_frame_count < self.silence_frames_required {
+                // Still debouncing — include trailing silence in buffer
+                tracing::trace!(
+                    silence_frames = self.silence_frame_count,
+                    required = self.silence_frames_required,
+                    "VAD: silence debounce, still buffering"
+                );
+                self.utterance_buffer.extend_from_slice(audio);
+                return Ok(None);
+            }
+
+            // Enough silence — utterance is complete
+            if self.utterance_buffer.is_empty() {
+                self.reset_utterance_state();
+                return Ok(None);
+            }
+
+            let buffer = std::mem::take(&mut self.utterance_buffer);
+            let sr = self.buffer_sample_rate;
+            self.reset_utterance_state();
+
+            tracing::trace!(
+                samples = buffer.len(),
+                "VAD: utterance complete, sending to STT"
+            );
+            return self
+                .stt
+                .transcribe_chunk(&buffer, sr)
+                .await
+                .map_err(|e| VoiceError::Stt(e.to_string()));
+        }
+
+        // Pure silence, no buffered audio
+        tracing::trace!("VAD: no speech detected, skipping STT");
+        Ok(None)
+    }
+
+    /// Reset utterance buffering state (not VAD model state).
+    fn reset_utterance_state(&mut self) {
+        self.utterance_buffer.clear();
+        self.silence_frame_count = 0;
+        self.was_speaking = false;
+        self.speaking = false;
+        self.buffer_sample_rate = 0;
     }
 
     /// Synthesize speech from `text` using the TTS provider.
@@ -211,12 +286,25 @@ impl VoicePipeline {
     /// Reset VAD state (e.g. after processing a complete utterance).
     pub fn reset_vad(&mut self) {
         self.vad.reset();
-        self.speaking = false;
+        self.reset_utterance_state();
     }
 
-    /// Flush any audio buffered inside the STT provider and return remaining
-    /// transcription text, if any.
+    /// Flush any audio buffered inside the utterance buffer and/or STT
+    /// provider and return remaining transcription text, if any.
     pub async fn flush_stt(&mut self) -> Result<Option<String>> {
+        // If there's buffered audio in the utterance buffer, send it to STT
+        if !self.utterance_buffer.is_empty() {
+            let buffer = std::mem::take(&mut self.utterance_buffer);
+            let sr = self.buffer_sample_rate;
+            self.reset_utterance_state();
+            return self
+                .stt
+                .transcribe_chunk(&buffer, sr)
+                .await
+                .map_err(|e| VoiceError::Stt(e.to_string()));
+        }
+
+        // Otherwise delegate to the STT provider's own flush
         self.stt
             .flush()
             .await
@@ -243,12 +331,32 @@ mod tests {
     use super::*;
     use crate::mock::{MockStt, MockTts, MockVad};
 
-    fn make_pipeline(stt_chunks: usize) -> VoicePipeline {
-        VoicePipeline::new(
-            MockStt::new(stt_chunks),
+    /// Build a pipeline with a short silence timeout for fast tests.
+    /// Uses `silence_frames_required = 2` so only 2 silence chunks end an
+    /// utterance. MockStt with `chunks_required = 1` transcribes on the
+    /// first call (gets the full utterance buffer in one shot).
+    fn make_pipeline() -> VoicePipeline {
+        let config = PipelineConfig {
+            silence_timeout_secs: 0.064, // 2 frames at 512/16kHz = 64ms
+            vad_chunk_size: 512,
+            stt_model: "whisper-tiny".to_string(),
+        };
+        VoicePipeline::with_config(
+            MockStt::new(1),
             MockTts::default(),
             MockVad::new(0.01),
+            config,
         )
+    }
+
+    /// Helper: feed N silence chunks to trigger utterance end.
+    async fn feed_silence(p: &mut VoicePipeline, n: usize) -> Vec<Option<String>> {
+        let silent = vec![0.0_f32; 160];
+        let mut results = Vec::new();
+        for _ in 0..n {
+            results.push(p.process_audio(&silent, 16_000).await.unwrap());
+        }
+        results
     }
 
     // -----------------------------------------------------------------------
@@ -257,36 +365,78 @@ mod tests {
 
     #[test]
     fn pipeline_construction_with_mocks() {
-        let p = make_pipeline(3);
+        let p = make_pipeline();
         assert_eq!(p.stt_name(), "mock-stt");
         assert_eq!(p.tts_name(), "mock-tts");
         assert!(!p.is_speaking());
     }
 
     // -----------------------------------------------------------------------
-    // process_audio — speech path
+    // process_audio — speech buffering
     // -----------------------------------------------------------------------
 
     #[tokio::test]
-    async fn process_audio_with_speech_returns_transcription() {
-        let mut p = make_pipeline(1); // transcribe on first chunk
-        let loud = vec![0.5_f32; 160]; // energy > threshold → VAD fires
+    async fn speech_chunk_buffers_and_returns_none() {
+        let mut p = make_pipeline();
+        let loud = vec![0.5_f32; 160];
 
+        // Speech chunk should buffer, not transcribe yet
         let result = p.process_audio(&loud, 16_000).await.unwrap();
-        assert_eq!(result, Some("mock transcription".to_string()));
+        assert!(result.is_none(), "speech should buffer, not transcribe immediately");
         assert!(p.is_speaking());
     }
 
     #[tokio::test]
-    async fn process_audio_accumulates_chunks_before_transcribing() {
-        let mut p = make_pipeline(2); // needs 2 chunks
+    async fn speech_then_silence_triggers_transcription() {
+        let mut p = make_pipeline();
         let loud = vec![0.5_f32; 160];
 
-        let first = p.process_audio(&loud, 16_000).await.unwrap();
-        assert!(first.is_none(), "not enough chunks yet");
+        // Feed speech
+        let r = p.process_audio(&loud, 16_000).await.unwrap();
+        assert!(r.is_none());
 
-        let second = p.process_audio(&loud, 16_000).await.unwrap();
-        assert_eq!(second, Some("mock transcription".to_string()));
+        // Feed enough silence to end the utterance (silence_frames_required = 2)
+        let results = feed_silence(&mut p, 3).await;
+        // One of the silence chunks should trigger transcription
+        let transcriptions: Vec<_> = results.into_iter().flatten().collect();
+        assert_eq!(transcriptions.len(), 1);
+        assert_eq!(transcriptions[0], "mock transcription");
+    }
+
+    #[tokio::test]
+    async fn short_silence_does_not_end_utterance() {
+        let mut p = make_pipeline();
+        let loud = vec![0.5_f32; 160];
+
+        // Speech
+        p.process_audio(&loud, 16_000).await.unwrap();
+
+        // One silence frame (less than required 2) — should still be buffering
+        let silent = vec![0.0_f32; 160];
+        let result = p.process_audio(&silent, 16_000).await.unwrap();
+        assert!(result.is_none(), "single silence frame should not end utterance");
+
+        // More speech resumes buffering
+        let result = p.process_audio(&loud, 16_000).await.unwrap();
+        assert!(result.is_none());
+        assert!(p.is_speaking());
+    }
+
+    #[tokio::test]
+    async fn multiple_speech_chunks_form_single_utterance() {
+        let mut p = make_pipeline();
+        let loud = vec![0.5_f32; 160];
+
+        // Feed 5 speech chunks
+        for _ in 0..5 {
+            let r = p.process_audio(&loud, 16_000).await.unwrap();
+            assert!(r.is_none());
+        }
+
+        // End with silence
+        let results = feed_silence(&mut p, 3).await;
+        let transcriptions: Vec<_> = results.into_iter().flatten().collect();
+        assert_eq!(transcriptions.len(), 1, "should transcribe exactly once for the full utterance");
     }
 
     // -----------------------------------------------------------------------
@@ -294,9 +444,9 @@ mod tests {
     // -----------------------------------------------------------------------
 
     #[tokio::test]
-    async fn process_audio_with_silence_returns_none() {
-        let mut p = make_pipeline(1);
-        let silent = vec![0.0_f32; 160]; // energy == 0 → VAD suppresses
+    async fn pure_silence_returns_none() {
+        let mut p = make_pipeline();
+        let silent = vec![0.0_f32; 160];
 
         let result = p.process_audio(&silent, 16_000).await.unwrap();
         assert!(result.is_none());
@@ -309,16 +459,15 @@ mod tests {
 
     #[tokio::test]
     async fn speak_returns_audio_samples() {
-        let p = make_pipeline(1);
+        let p = make_pipeline();
         let samples = p.speak("hello world").await.unwrap();
         assert!(!samples.is_empty());
-        // Sine wave values must be within [-1, 1]
         assert!(samples.iter().all(|s| s.abs() <= 1.0 + f32::EPSILON));
     }
 
     #[tokio::test]
     async fn speak_sample_rate_matches_tts_provider() {
-        let p = make_pipeline(1);
+        let p = make_pipeline();
         assert_eq!(p.tts_sample_rate(), 16_000);
     }
 
@@ -328,21 +477,21 @@ mod tests {
 
     #[tokio::test]
     async fn is_speaking_reflects_vad_result() {
-        let mut p = make_pipeline(3);
+        let mut p = make_pipeline();
         assert!(!p.is_speaking());
 
         let loud = vec![0.5_f32; 160];
         p.process_audio(&loud, 16_000).await.unwrap();
         assert!(p.is_speaking());
 
-        let silent = vec![0.0_f32; 160];
-        p.process_audio(&silent, 16_000).await.unwrap();
+        // After enough silence, speaking should be false
+        feed_silence(&mut p, 3).await;
         assert!(!p.is_speaking());
     }
 
     #[tokio::test]
     async fn reset_vad_clears_speaking_flag() {
-        let mut p = make_pipeline(3);
+        let mut p = make_pipeline();
         let loud = vec![0.5_f32; 160];
         p.process_audio(&loud, 16_000).await.unwrap();
         assert!(p.is_speaking());
@@ -356,26 +505,49 @@ mod tests {
     // -----------------------------------------------------------------------
 
     #[tokio::test]
-    async fn flush_stt_returns_buffered_text() {
-        let mut p = make_pipeline(1); // transcribes on first speech chunk
+    async fn flush_stt_returns_buffered_utterance() {
+        let mut p = make_pipeline();
         let loud = vec![0.5_f32; 160];
 
-        // Trigger transcription (buffers "mock transcription" inside MockStt).
-        let transcribed = p.process_audio(&loud, 16_000).await.unwrap();
-        assert!(transcribed.is_some());
+        // Speech is buffered inside VoicePipeline (not yet sent to STT)
+        p.process_audio(&loud, 16_000).await.unwrap();
 
+        // Flush should send the buffered audio to STT
         let flushed = p.flush_stt().await.unwrap();
         assert_eq!(flushed, Some("mock transcription".to_string()));
     }
 
     #[tokio::test]
     async fn flush_stt_returns_none_when_nothing_buffered() {
-        let mut p = make_pipeline(3); // needs 3 chunks — nothing emitted yet
-        let loud = vec![0.5_f32; 160];
-        p.process_audio(&loud, 16_000).await.unwrap();
+        let mut p = make_pipeline();
 
-        // No transcription emitted yet, flush should return None.
+        // No speech fed — flush should return None
         let flushed = p.flush_stt().await.unwrap();
         assert!(flushed.is_none());
+    }
+
+    // -----------------------------------------------------------------------
+    // PipelineConfig
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn pipeline_config_default_silence_frames() {
+        let config = PipelineConfig::default();
+        // 0.3s / (512/16000) = 0.3 / 0.032 = 9.375 → ceil = 10
+        assert_eq!(config.silence_frames_required(), 10);
+    }
+
+    #[test]
+    fn pipeline_config_accurate_preset() {
+        let config = PipelineConfig::accurate();
+        assert_eq!(config.stt_model, "whisper-base");
+        assert!(config.silence_timeout_secs > 0.3);
+    }
+
+    #[test]
+    fn pipeline_config_fast_preset() {
+        let config = PipelineConfig::fast();
+        assert_eq!(config.stt_model, "whisper-tiny");
+        assert!(config.silence_timeout_secs < 0.3);
     }
 }
