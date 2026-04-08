@@ -6,6 +6,7 @@ struct AgentIdleView: View {
     @Environment(\.daemonClient) private var client
 
     @State private var goalText: String = ""
+    @State private var isPressing: Bool = false
 
     var body: some View {
         VStack(spacing: 16) {
@@ -23,6 +24,33 @@ struct AgentIdleView: View {
             if appState.voiceActive {
                 VStack(spacing: 8) {
                     VoiceStatusBadge(status: appState.voiceStatus)
+
+                    if appState.voiceMode == .pushToTalk {
+                        // Hold-to-talk button
+                        Image(systemName: isPressing ? "mic.fill" : "mic.circle")
+                            .font(.system(size: 32))
+                            .foregroundColor(isPressing
+                                ? Color(red: 0.133, green: 0.773, blue: 0.369)
+                                : Color(red: 0.533, green: 0.533, blue: 0.533))
+                            .gesture(
+                                DragGesture(minimumDistance: 0)
+                                    .onChanged { _ in
+                                        if !isPressing {
+                                            isPressing = true
+                                            appState.voicePushToTalkStart()
+                                        }
+                                    }
+                                    .onEnded { _ in
+                                        isPressing = false
+                                        appState.voicePushToTalkStop()
+                                    }
+                            )
+                            .help("Hold to talk")
+
+                        Text(isPressing ? "Listening..." : "Hold to talk")
+                            .font(.system(size: 11))
+                            .foregroundColor(Color(red: 0.533, green: 0.533, blue: 0.533))
+                    }
 
                     Button {
                         appState.stopVoice()
@@ -101,8 +129,48 @@ struct AgentIdleView: View {
                 }
                 .buttonStyle(.plain)
                 .help("Start voice input")
+            }
+            .padding(.horizontal, 16)
 
-                // Run button
+            // Voice settings (expandable)
+            DisclosureGroup("Voice Settings") {
+                VStack(spacing: 6) {
+                    HStack {
+                        Text("Listening")
+                            .font(.system(size: 11))
+                            .foregroundColor(Color(red: 0.533, green: 0.533, blue: 0.533))
+                        Spacer()
+                        Picker("", selection: $appState.voiceMode) {
+                            ForEach(AppState.VoiceMode.allCases, id: \.self) { mode in
+                                Text(mode.label).tag(mode)
+                            }
+                        }
+                        .labelsHidden()
+                        .frame(width: 120)
+                    }
+                    HStack {
+                        Text("Narration")
+                            .font(.system(size: 11))
+                            .foregroundColor(Color(red: 0.533, green: 0.533, blue: 0.533))
+                        Spacer()
+                        Picker("", selection: $appState.narrationMode) {
+                            ForEach(AppState.NarrationMode.allCases, id: \.self) { mode in
+                                Text(mode.label).tag(mode)
+                            }
+                        }
+                        .labelsHidden()
+                        .frame(width: 120)
+                    }
+                }
+                .padding(.top, 4)
+            }
+            .font(.system(size: 11, weight: .medium))
+            .foregroundColor(Color(red: 0.533, green: 0.533, blue: 0.533))
+            .padding(.horizontal, 16)
+
+            // Run button row
+            HStack {
+                Spacer()
                 Button(action: startRun) {
                     HStack(spacing: 4) {
                         Text("Run")

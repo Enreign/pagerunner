@@ -71,9 +71,39 @@ final class AppState {
         case speaking
     }
 
+    enum VoiceMode: String, CaseIterable, Sendable {
+        case alwaysListening = "always"
+        case pushToTalk = "ptt"
+
+        var label: String {
+            switch self {
+            case .alwaysListening: return "Always"
+            case .pushToTalk: return "Push-to-Talk"
+            }
+        }
+    }
+
+    enum NarrationMode: String, CaseIterable, Sendable {
+        case full = "full"
+        case summary = "summary"
+        case off = "off"
+
+        var label: String {
+            switch self {
+            case .full: return "Full"
+            case .summary: return "Summary"
+            case .off: return "Off"
+            }
+        }
+    }
+
     var voiceActive: Bool = false
     var voiceProcess: Process?
     var voiceStatus: VoiceStatus = .idle
+    var voiceMode: VoiceMode = .alwaysListening
+    var narrationMode: NarrationMode = .summary
+    /// Stdin pipe to the voice sidecar (for PTT commands).
+    var voiceInputPipe: Pipe?
     /// Background task reading voice sidecar stdout.
     var voiceReadTask: Task<Void, Never>?
 
@@ -93,11 +123,20 @@ final class AppState {
 
         let process = Process()
         process.executableURL = URL(fileURLWithPath: voiceBinaryPath)
-        process.arguments = ["--profile", profile, "--json"]
+        process.arguments = [
+            "--profile", profile,
+            "--json",
+            "--mode", voiceMode.rawValue,
+            "--narration", narrationMode.rawValue,
+        ]
 
-        let pipe = Pipe()
-        process.standardOutput = pipe
+        let outPipe = Pipe()
+        process.standardOutput = outPipe
         process.standardError = FileHandle.nullDevice
+
+        let inPipe = Pipe()
+        process.standardInput = inPipe
+        voiceInputPipe = inPipe
 
         voiceProcess = process
 
@@ -112,7 +151,7 @@ final class AppState {
                 return
             }
 
-            let handle = pipe.fileHandleForReading
+            let handle = outPipe.fileHandleForReading
             do {
                 for try await line in handle.bytes.lines {
                     guard let self, !Task.isCancelled else { break }
@@ -137,8 +176,25 @@ final class AppState {
         voiceReadTask = nil
         voiceProcess?.terminate()
         voiceProcess = nil
+        voiceInputPipe = nil
         voiceActive = false
         voiceStatus = .idle
+    }
+
+    /// PTT: send start_listening command to sidecar stdin.
+    func voicePushToTalkStart() {
+        guard voiceActive, let pipe = voiceInputPipe else { return }
+        if let data = "{\"type\":\"start_listening\"}\n".data(using: .utf8) {
+            pipe.fileHandleForWriting.write(data)
+        }
+    }
+
+    /// PTT: send stop_listening command to sidecar stdin.
+    func voicePushToTalkStop() {
+        guard voiceActive, let pipe = voiceInputPipe else { return }
+        if let data = "{\"type\":\"stop_listening\"}\n".data(using: .utf8) {
+            pipe.fileHandleForWriting.write(data)
+        }
     }
 
     private func handleVoiceEvent(_ line: String) {

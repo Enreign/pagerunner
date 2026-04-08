@@ -43,6 +43,14 @@ struct Cli {
     /// Output events as JSON lines to stdout (for integration with menu bar).
     #[arg(long)]
     json: bool,
+
+    /// Voice mode: "ptt" (push-to-talk) or "always" (always listening).
+    #[arg(long, default_value = "always")]
+    mode: String,
+
+    /// Narration: "full" (narrate every action), "summary" (clean summary at end), "off".
+    #[arg(long, default_value = "summary")]
+    narration: String,
 }
 
 #[tokio::main]
@@ -61,6 +69,16 @@ async fn main() -> anyhow::Result<()> {
     // Validate threshold
     if !(0.0..=1.0).contains(&cli.vad_threshold) {
         anyhow::bail!("--vad-threshold must be between 0.0 and 1.0");
+    }
+
+    // Validate mode
+    if !matches!(cli.mode.as_str(), "always" | "ptt") {
+        anyhow::bail!("--mode must be 'always' or 'ptt'");
+    }
+
+    // Validate narration
+    if !matches!(cli.narration.as_str(), "full" | "summary" | "off") {
+        anyhow::bail!("--narration must be 'full', 'summary', or 'off'");
     }
 
     // Check audio devices
@@ -83,6 +101,8 @@ async fn main() -> anyhow::Result<()> {
         vad_threshold: cli.vad_threshold,
         wake_word: cli.wake_word,
         json: cli.json,
+        mode: cli.mode,
+        narration: cli.narration,
     };
 
     if session_config.wake_word.is_some() {

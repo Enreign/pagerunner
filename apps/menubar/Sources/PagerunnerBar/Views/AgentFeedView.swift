@@ -4,6 +4,7 @@ import PagerunnerCore
 struct AgentFeedView: View {
     @Bindable var appState: AppState
     @Environment(\.daemonClient) private var client
+    @State private var isPressing: Bool = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -17,20 +18,42 @@ struct AgentFeedView: View {
                         .font(.system(size: 14, weight: .semibold))
                     Spacer()
 
-                    // Mic toggle
-                    Button {
-                        if appState.voiceActive {
-                            appState.stopVoice()
-                        } else {
-                            appState.startVoice()
-                        }
-                    } label: {
-                        Image(systemName: appState.voiceActive ? "mic.fill" : "mic")
-                            .foregroundColor(appState.voiceActive ? Color(red: 0.937, green: 0.267, blue: 0.267) : Color(red: 0.533, green: 0.533, blue: 0.533))
+                    // Mic toggle — PTT uses hold gesture, always-listening uses tap
+                    if appState.voiceActive && appState.voiceMode == .pushToTalk {
+                        Image(systemName: isPressing ? "mic.fill" : "mic")
+                            .foregroundColor(isPressing
+                                ? Color(red: 0.133, green: 0.773, blue: 0.369)
+                                : Color(red: 0.533, green: 0.533, blue: 0.533))
                             .font(.system(size: 14))
+                            .gesture(
+                                DragGesture(minimumDistance: 0)
+                                    .onChanged { _ in
+                                        if !isPressing {
+                                            isPressing = true
+                                            appState.voicePushToTalkStart()
+                                        }
+                                    }
+                                    .onEnded { _ in
+                                        isPressing = false
+                                        appState.voicePushToTalkStop()
+                                    }
+                            )
+                            .help("Hold to talk")
+                    } else {
+                        Button {
+                            if appState.voiceActive {
+                                appState.stopVoice()
+                            } else {
+                                appState.startVoice()
+                            }
+                        } label: {
+                            Image(systemName: appState.voiceActive ? "mic.fill" : "mic")
+                                .foregroundColor(appState.voiceActive ? Color(red: 0.937, green: 0.267, blue: 0.267) : Color(red: 0.533, green: 0.533, blue: 0.533))
+                                .font(.system(size: 14))
+                        }
+                        .buttonStyle(.plain)
+                        .help(appState.voiceActive ? "Stop voice" : "Start voice")
                     }
-                    .buttonStyle(.plain)
-                    .help(appState.voiceActive ? "Stop voice" : "Start voice")
                 }
 
                 HStack(spacing: 4) {
