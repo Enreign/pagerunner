@@ -151,21 +151,10 @@ async function handleAgentRun(message, sendResponse) {
 
   ensureConnected();
   try {
-    // Step 1 — open (or reuse) a session for the given profile.
-    const openResult = await sendRequest({
-      tool: "open_session",
-      args: { profile }
-    });
-    const sessionId = openResult.data?.session_id || openResult.session_id;
-    if (!sessionId) {
-      sendResponse({ ok: false, error: "Could not open session" });
-      return;
-    }
-
-    // Step 2 — kick off the agent.
+    // agent_run handles session management internally — just pass goal + profile.
     const agentResult = await sendRequest({
       tool: "agent_run",
-      args: { session_id: sessionId, goal }
+      args: { goal, profile }
     });
     sendResponse({ ok: true, result: agentResult });
   } catch (err) {

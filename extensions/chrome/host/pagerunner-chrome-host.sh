@@ -67,11 +67,14 @@ daemon_call() {
   local request_line="$1"
   # Use nc (netcat) to talk to the Unix socket.
   # -U = Unix socket, -q 1 = quit 1s after EOF on stdin.
-  if command -v nc >/dev/null 2>&1; then
-    printf '%s\n' "$request_line" | nc -U "$SOCKET" -q 1 2>/dev/null
-  else
-    # Fallback: socat.
+  if command -v socat >/dev/null 2>&1; then
     printf '%s\n' "$request_line" | socat - "UNIX-CONNECT:${SOCKET}" 2>/dev/null
+  elif command -v nc >/dev/null 2>&1; then
+    # macOS nc doesn't support -q; use -w (timeout) instead.
+    printf '%s\n' "$request_line" | nc -U "$SOCKET" -w 2 2>/dev/null
+  else
+    echo ""
+    return 1
   fi
 }
 
