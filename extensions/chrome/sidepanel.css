@@ -1,0 +1,354 @@
+/* Pagerunner sidepanel */
+
+*, *::before, *::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+:root {
+  --bg:         #0f0f0f;
+  --surface:    #1a1a1a;
+  --surface-2:  #222;
+  --border:     #2a2a2a;
+  --text:       #e8e8e8;
+  --text-secondary: #888;
+  --accent:     #4f8ef7;
+  --accent-dim: rgba(79, 142, 247, 0.12);
+  --green:      #3ecf4c;
+  --green-dim:  rgba(62, 207, 76, 0.12);
+  --red:        #f75555;
+  --red-dim:    rgba(247, 85, 85, 0.12);
+  --yellow:     #f5a623;
+  --yellow-dim: rgba(245, 166, 35, 0.12);
+  --radius:     8px;
+  --radius-sm:  5px;
+}
+
+html, body {
+  height: 100%;
+  background: var(--bg);
+  color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.panel {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+}
+
+/* ── Header ──────────────────────────────────────────────────────────────── */
+
+.header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+.header-left {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.header-icon {
+  width: 20px;
+  height: 20px;
+  border-radius: 4px;
+}
+
+.header-title {
+  font-weight: 600;
+  font-size: 14px;
+}
+
+.status-badge {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
+.dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--text-secondary);
+  transition: background 0.2s;
+}
+
+.dot.connected    { background: var(--green); }
+.dot.disconnected { background: var(--red); }
+
+/* ── Feed ────────────────────────────────────────────────────────────────── */
+
+.feed {
+  flex: 1;
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: var(--border) transparent;
+}
+
+.feed-inner {
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-height: 100%;
+}
+
+/* Welcome state */
+.welcome {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  padding: 40px 20px;
+  flex: 1;
+}
+
+.welcome-icon {
+  font-size: 36px;
+  margin-bottom: 12px;
+}
+
+.welcome-title {
+  font-size: 16px;
+  font-weight: 600;
+  margin-bottom: 6px;
+}
+
+.welcome-sub {
+  font-size: 12px;
+  color: var(--text-secondary);
+  max-width: 240px;
+  line-height: 1.6;
+}
+
+/* Event cards */
+.event-card {
+  padding: 10px 12px;
+  border-radius: var(--radius);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.event-card.thinking {
+  background: var(--surface);
+  color: var(--text);
+}
+
+.event-card.tool-call {
+  background: var(--accent-dim);
+  color: var(--accent);
+  font-family: "SF Mono", "Fira Code", monospace;
+  font-size: 11px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.event-card.tool-call .arrow {
+  opacity: 0.6;
+}
+
+.event-card.tool-result {
+  background: var(--green-dim);
+  color: var(--green);
+  font-size: 11px;
+}
+
+.event-card.tool-result.error {
+  background: var(--red-dim);
+  color: var(--red);
+}
+
+.event-card.status {
+  background: var(--surface);
+  color: var(--text-secondary);
+  font-size: 11px;
+  text-align: center;
+}
+
+.event-card.result {
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  color: var(--text);
+  white-space: pre-wrap;
+}
+
+.event-card.result .result-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 8px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--green);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.event-card.result .result-body {
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.event-card.result .result-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 10px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
+.event-card.result .copy-btn {
+  background: none;
+  border: 1px solid var(--border);
+  color: var(--text-secondary);
+  padding: 3px 8px;
+  border-radius: var(--radius-sm);
+  font-size: 11px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.event-card.result .copy-btn:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.event-card.error-msg {
+  background: var(--red-dim);
+  color: var(--red);
+}
+
+/* Spinner */
+.spinner {
+  display: inline-block;
+  width: 12px;
+  height: 12px;
+  border: 2px solid var(--border);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+/* ── Input area ──────────────────────────────────────────────────────────── */
+
+.input-area {
+  flex-shrink: 0;
+  padding: 10px 14px 14px;
+  border-top: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.input-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.input-actions {
+  justify-content: space-between;
+}
+
+.profile-select {
+  width: 100%;
+  background: var(--surface);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 6px 28px 6px 8px;
+  font-size: 12px;
+  font-family: inherit;
+  outline: none;
+  cursor: pointer;
+  appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' fill='none'%3E%3Cpath d='M1 1l4 4 4-4' stroke='%23666' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 8px center;
+}
+
+.profile-select:focus {
+  border-color: var(--accent);
+}
+
+.goal-input {
+  width: 100%;
+  background: var(--surface);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 8px 10px;
+  font-size: 13px;
+  font-family: inherit;
+  line-height: 1.5;
+  outline: none;
+  resize: none;
+  transition: border-color 0.15s;
+}
+
+.goal-input:focus {
+  border-color: var(--accent);
+}
+
+.goal-input::placeholder {
+  color: var(--text-secondary);
+}
+
+.token-info {
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
+.btn-send {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 14px;
+  background: var(--accent);
+  color: #fff;
+  border: none;
+  border-radius: var(--radius-sm);
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.15s;
+  white-space: nowrap;
+}
+
+.btn-send:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
+.btn-send:not(:disabled):hover {
+  filter: brightness(1.1);
+}
+
+.btn-send.running {
+  background: var(--red);
+}
+
+.btn-icon {
+  font-size: 14px;
+  font-weight: 600;
+}

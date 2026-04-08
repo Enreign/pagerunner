@@ -188,6 +188,9 @@ async function getActiveTabUrl() {
   });
 }
 
+// Open side panel when extension icon is clicked.
+chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true });
+
 // ── Startup ───────────────────────────────────────────────────────────────────
 
 connect();
