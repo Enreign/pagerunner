@@ -40,3 +40,7 @@ required-features = ["silero-vad"]
 [[example]]
 name = "tts_demo"
 required-features = ["piper-tts"]
+
+[[example]]
+name = "pipeline_demo"
+required-features = ["whisper", "silero-vad", "piper-tts"]
