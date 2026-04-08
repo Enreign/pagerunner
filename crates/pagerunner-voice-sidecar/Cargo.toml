@@ -1,0 +1,24 @@
+[package]
+name = "pagerunner-voice-sidecar"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.91"
+description = "Voice sidecar for Pagerunner — mic/speaker I/O wired to the agent"
+license = "Apache-2.0"
+
+[[bin]]
+name = "pagerunner-voice"
+path = "src/main.rs"
+
+[dependencies]
+pagerunner-voice = { path = "../pagerunner-voice", features = ["whisper", "silero-vad", "piper-tts"] }
+tokio = { version = "1", features = ["full"] }
+clap = { version = "4", features = ["derive"] }
+cpal = "0.15"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+uuid = { version = "1", features = ["v4"] }
+dirs = "6"
+anyhow = "1"
