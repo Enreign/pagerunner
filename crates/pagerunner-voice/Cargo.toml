@@ -1,0 +1,46 @@
+[package]
+name = "pagerunner-voice"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.91"
+description = "Voice pipeline with STT, TTS, and VAD traits — standalone, no Pagerunner dependencies"
+license = "Apache-2.0"
+
+[features]
+default = []
+mock = []
+whisper = ["dep:whisper-rs", "dep:reqwest", "dep:sha2"]
+silero-vad = ["dep:ort", "dep:ndarray", "dep:reqwest", "dep:sha2"]
+piper-tts = ["dep:ort", "dep:ndarray", "dep:reqwest", "dep:sha2", "dep:serde_json"]
+
+[dependencies]
+async-trait = "0.1"
+tokio = { version = "1", features = ["sync"] }
+thiserror = "2"
+tracing = "0.1"
+whisper-rs = { version = "0.16", optional = true }
+reqwest = { version = "0.12", features = ["blocking"], optional = true }
+sha2 = { version = "0.10", optional = true }
+ort = { version = "2.0.0-rc.12", features = ["download-binaries"], optional = true }
+ndarray = { version = "0.17", optional = true }
+serde_json = { version = "1", optional = true }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["full", "test-util"] }
+hound = "3.5"
+
+[[example]]
+name = "stt_demo"
+required-features = ["whisper"]
+
+[[example]]
+name = "vad_demo"
+required-features = ["silero-vad"]
+
+[[example]]
+name = "tts_demo"
+required-features = ["piper-tts"]
+
+[[example]]
+name = "pipeline_demo"
+required-features = ["whisper", "silero-vad", "piper-tts"]
