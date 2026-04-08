@@ -91,6 +91,9 @@ pub struct SileroVad {
     session: Session,
     /// Hidden state tensor [2, 1, 128] — carried between inference calls.
     state: Array3<f32>,
+    /// Context from previous chunk (last 64 samples at 16kHz, 32 at 8kHz).
+    /// Prepended to the next chunk before inference (as the Python API does).
+    context: Vec<f32>,
     /// Speech probability threshold (0.0–1.0). Default: 0.5.
     threshold: f32,
     /// Whether the last processed chunk was classified as speech.
@@ -135,9 +138,11 @@ impl SileroVad {
             "silero VAD initialized"
         );
 
+        // Log model input/output names for debugging
         Ok(Self {
             session,
             state: Array3::zeros((2, 1, 128)),
+            context: Vec::new(),
             threshold: threshold.unwrap_or(0.5),
             speaking: false,
         })
@@ -152,7 +157,7 @@ impl SileroVad {
         // Build owned tensors via Tensor::from_array (takes ndarray types)
         let input_arr = Array2::from_shape_vec((1, chunk_size), chunk.to_vec())
             .map_err(|e| VoiceError::Vad(format!("failed to create input array: {e}")))?;
-        let sr_arr = Array1::from_vec(vec![sample_rate as i64]);
+        let sr_arr = ndarray::arr0(sample_rate as i64);
 
         let input_tensor = Tensor::from_array(input_arr)
             .map_err(|e| VoiceError::Vad(format!("failed to create input tensor: {e}")))?;
@@ -165,8 +170,8 @@ impl SileroVad {
             .session
             .run(ort::inputs![
                 "input" => input_tensor,
-                "sr" => sr_tensor,
                 "state" => state_tensor,
+                "sr" => sr_tensor,
             ])
             .map_err(|e| VoiceError::Vad(format!("silero VAD inference failed: {e}")))?;
 
@@ -210,6 +215,7 @@ impl VadDetector for SileroVad {
         } else {
             CHUNK_SIZE_8K
         };
+        let context_size: usize = if sample_rate == 16000 { 64 } else { 32 };
 
         // Take the last chunk_size samples, or zero-pad if shorter
         let chunk: Vec<f32> = if audio.len() >= chunk_size {
@@ -221,7 +227,18 @@ impl VadDetector for SileroVad {
             padded
         };
 
-        match self.infer(&chunk, sample_rate) {
+        // Prepend context (like Python: x = torch.cat([self._context, x], dim=1))
+        if self.context.is_empty() {
+            self.context = vec![0.0f32; context_size];
+        }
+        let mut input_with_context = Vec::with_capacity(context_size + chunk_size);
+        input_with_context.extend_from_slice(&self.context);
+        input_with_context.extend_from_slice(&chunk);
+
+        // Save context for next call (last context_size samples of the chunk)
+        self.context = chunk[chunk.len() - context_size..].to_vec();
+
+        match self.infer(&input_with_context, sample_rate) {
             Ok(prob) => {
                 self.speaking = prob > self.threshold;
                 tracing::trace!(prob = prob, threshold = self.threshold, speaking = self.speaking, "silero VAD");
@@ -236,6 +253,7 @@ impl VadDetector for SileroVad {
 
     fn reset(&mut self) {
         self.state = Array3::zeros((2, 1, 128));
+        self.context.clear();
         self.speaking = false;
     }
 }

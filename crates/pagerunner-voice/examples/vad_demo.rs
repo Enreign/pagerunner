@@ -91,8 +91,14 @@ fn main() {
     println!("Loading Silero VAD model (first run downloads ~2MB)...");
     let load_start = Instant::now();
 
+    let threshold = std::env::var("VAD_THRESHOLD")
+        .ok()
+        .and_then(|s| s.parse::<f32>().ok())
+        .unwrap_or(0.5);
+    println!("Threshold: {threshold} (set VAD_THRESHOLD=0.3 to adjust)");
+
     let mut vad =
-        pagerunner_voice::SileroVad::new(Some(0.5)).expect("Failed to load Silero VAD model");
+        pagerunner_voice::SileroVad::new(Some(threshold)).expect("Failed to load Silero VAD model");
     println!(
         "Model loaded in {:.1}s",
         load_start.elapsed().as_secs_f32()
@@ -107,11 +113,18 @@ fn main() {
 
     let process_start = Instant::now();
 
+    let verbose = std::env::var("VERBOSE").is_ok();
+
     for (i, chunk) in audio_16k.chunks(chunk_size).enumerate() {
         use pagerunner_voice::VadDetector;
 
         let is_speech = vad.process(chunk, 16000);
         let time_sec = i as f32 * chunk_size as f32 / 16000.0;
+
+        if verbose {
+            let rms = (chunk.iter().map(|s| s * s).sum::<f32>() / chunk.len() as f32).sqrt();
+            println!("  [{:6.2}s] speech={} rms={:.4}", time_sec, is_speech, rms);
+        }
 
         if is_speech && !was_speaking {
             // Speech started
