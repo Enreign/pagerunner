@@ -9,6 +9,7 @@ struct PagerunnerApp: App {
         WindowGroup {
             ContentView()
                 .environment(appState)
+                .preferredColorScheme(.dark)
         }
     }
 }

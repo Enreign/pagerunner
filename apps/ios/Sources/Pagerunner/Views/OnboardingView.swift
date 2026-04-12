@@ -13,8 +13,20 @@ struct OnboardingView: View {
     @State private var isWorking = false
     @State private var error: String?
     @State private var revealToken = false
-    @State private var detectedMode: AuthMode?
+    @State private var probeStatus: ProbeStatus = .idle
     @State private var probeTask: Task<Void, Never>?
+
+    enum ProbeStatus: Equatable {
+        case idle
+        case probing
+        case reachable(AuthMode)
+        case unreachable(String)
+
+        var mode: AuthMode? {
+            if case .reachable(let m) = self { return m }
+            return nil
+        }
+    }
     @FocusState private var focusedField: Field?
 
     private enum Field { case host, port, token }
@@ -24,6 +36,7 @@ struct OnboardingView: View {
             VStack(alignment: .leading, spacing: Theme.Spacing.section) {
                 hero
                 form
+                probeBanner
                 connectButton
                 if let error {
                     errorBanner(error)
@@ -43,31 +56,32 @@ struct OnboardingView: View {
         .onChange(of: port) { scheduleProbe() }
         .animation(.snappy, value: error)
         .animation(.snappy, value: isWorking)
-        .animation(.snappy, value: detectedMode)
+        .animation(.snappy, value: probeStatus)
     }
 
     // Debounced probe of the daemon's /auth-info so we can hide the token
     // field when the server uses Tailscale auth.
     private func scheduleProbe() {
         probeTask?.cancel()
-        detectedMode = nil
-        guard !host.isEmpty, Int(port) != nil else { return }
-        probeTask = Task {
+        guard !host.isEmpty, Int(port) != nil else {
+            probeStatus = .idle
+            return
+        }
+        probeStatus = .probing
+        probeTask = Task { @MainActor in
             try? await Task.sleep(for: .milliseconds(450))
             if Task.isCancelled { return }
             appState.connection.host = host
             appState.connection.port = Int(port) ?? 19876
             appState.connection.useTLS = useTLS
-            let mode = await appState.connection.probeAuthMode()
-            if !Task.isCancelled {
-                detectedMode = mode
+            if let mode = await appState.connection.probeAuthMode() {
+                probeStatus = .reachable(mode)
+            } else {
+                probeStatus = .unreachable(appState.connection.lastError ?? "Unreachable")
             }
         }
     }
 
-    private var requiresToken: Bool {
-        detectedMode != .tailscale
-    }
 
     // MARK: Hero
 
@@ -81,11 +95,11 @@ struct OnboardingView: View {
                     .font(.system(size: 30, weight: .semibold))
                     .foregroundStyle(.accent)
             }
-            VStack(alignment: .leading, spacing: 4) {
-                Text("Connect to your daemon")
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Connect")
                     .font(.largeTitle.bold())
                     .foregroundStyle(.primary)
-                Text("Point the app at the Pagerunner daemon running on your machine.")
+                Text("Enter the address of your Pagerunner daemon. If it's on your tailnet, you're in — no token required.")
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
             }
@@ -98,7 +112,7 @@ struct OnboardingView: View {
         Card(padding: 0) {
             VStack(spacing: 0) {
                 row(icon: "server.rack", label: "Host") {
-                    TextField("100.64.0.1 or 127.0.0.1", text: $host)
+                    TextField("100.64.0.1", text: $host)
                         .textContentType(.URL)
                         .autocorrectionDisabled()
                         .textInputAutocapitalization(.never)
@@ -112,11 +126,18 @@ struct OnboardingView: View {
                 row(icon: "number", label: "Port") {
                     TextField("19876", text: $port)
                         .keyboardType(.numberPad)
-                        .submitLabel(.next)
+                        .submitLabel(probeStatus.mode == .token ? .next : .go)
                         .focused($focusedField, equals: .port)
+                        .onSubmit {
+                            if probeStatus.mode == .token {
+                                focusedField = .token
+                            } else if canConnect {
+                                connect()
+                            }
+                        }
                         .font(.mono)
                 }
-                if requiresToken {
+                if probeStatus.mode == .token {
                     separator
                     row(icon: "key.fill", label: "Token") {
                         Group {
@@ -142,33 +163,8 @@ struct OnboardingView: View {
                         .buttonStyle(.plain)
                         .accessibilityLabel(revealToken ? "Hide token" : "Show token")
                     }
-                } else {
-                    separator
-                    HStack(spacing: 10) {
-                        Image(systemName: "lock.shield.fill")
-                            .foregroundStyle(.accent)
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text("Tailscale identity")
-                                .font(.footnote.weight(.semibold))
-                            Text("The daemon will verify you via your tailnet — no token needed.")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        }
-                        Spacer()
-                    }
-                    .padding(.horizontal, Theme.Spacing.loose)
-                    .padding(.vertical, 14)
+                    .transition(.move(edge: .top).combined(with: .opacity))
                 }
-                separator
-                HStack(spacing: 12) {
-                    Image(systemName: "lock.fill")
-                        .foregroundStyle(.secondary)
-                        .frame(width: 28)
-                    Toggle("Use TLS", isOn: $useTLS)
-                        .tint(.accent)
-                }
-                .padding(.horizontal, Theme.Spacing.loose)
-                .padding(.vertical, 14)
             }
         }
     }
@@ -193,6 +189,46 @@ struct OnboardingView: View {
     }
 
     // MARK: Connect button
+
+    @ViewBuilder
+    private var probeBanner: some View {
+        switch probeStatus {
+        case .idle:
+            EmptyView()
+        case .probing:
+            HStack(spacing: 10) {
+                ProgressView().controlSize(.small)
+                Text("Checking daemon…")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                Spacer()
+            }
+            .padding(.horizontal, Theme.Spacing.regular)
+        case .reachable(let mode):
+            HStack(spacing: 10) {
+                Image(systemName: "checkmark.circle.fill").foregroundStyle(.accent)
+                Text(mode == .tailscale
+                     ? "Daemon reachable · Tailscale auth (no token)"
+                     : "Daemon reachable · Token required")
+                    .font(.footnote)
+                Spacer()
+            }
+            .padding(.horizontal, Theme.Spacing.loose)
+            .padding(.vertical, Theme.Spacing.regular)
+            .background(Color.accent.opacity(0.12), in: RoundedRectangle(cornerRadius: Theme.Radius.chip, style: .continuous))
+        case .unreachable(let msg):
+            HStack(spacing: 10) {
+                Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
+                Text("Can't reach daemon: \(msg)")
+                    .font(.footnote)
+                    .lineLimit(2)
+                Spacer()
+            }
+            .padding(.horizontal, Theme.Spacing.loose)
+            .padding(.vertical, Theme.Spacing.regular)
+            .background(Color.orange.opacity(0.12), in: RoundedRectangle(cornerRadius: Theme.Radius.chip, style: .continuous))
+        }
+    }
 
     private var connectButton: some View {
         Button(action: connect) {
@@ -250,7 +286,12 @@ struct OnboardingView: View {
 
     private var canConnect: Bool {
         guard !host.isEmpty, !port.isEmpty, !isWorking else { return false }
-        return !requiresToken || !token.isEmpty
+        switch probeStatus {
+        case .reachable(.tailscale): return true
+        case .reachable(.token):     return !token.isEmpty
+        case .idle, .probing:        return false
+        case .unreachable:           return false
+        }
     }
 
     private func loadFromConnection() {
