@@ -18,16 +18,6 @@ struct DashboardView: View {
         .background(Color.operatorBackground)
         .navigationTitle("Dashboard")
         .navigationBarTitleDisplayMode(.large)
-        .toolbar {
-            ToolbarItem(placement: .topBarTrailing) {
-                Button {
-                    Task { await appState.refresh() }
-                } label: {
-                    Image(systemName: "arrow.clockwise")
-                }
-                .accessibilityLabel("Refresh")
-            }
-        }
         .refreshable { await appState.refresh() }
     }
 

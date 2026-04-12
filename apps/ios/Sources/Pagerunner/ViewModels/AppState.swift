@@ -53,9 +53,20 @@ final class AppState {
     var agentEvents: [IdentifiableAgentEvent] = []
     var pendingApproval: AgentEventDetail?
 
+    // MARK: - Chat
+
+    var chatItems: [ChatItem] = []
+    var activeRunId: String?
+    var activeContext: ActiveContext?
+
+    struct ActiveContext: Equatable {
+        var sessionId: String
+        var targetId: String?
+    }
+
     // MARK: - Navigation
 
-    var selectedTab: AppTab = .dashboard
+    var selectedTab: AppTab = .agent
     var selectedSession: Session?
 
     // MARK: - Polling
@@ -86,11 +97,47 @@ final class AppState {
     func startPolling() {
         guard !isPolling else { return }
         isPolling = true
+        attachWebSocketCallbacks()
         pollingTask = Task { [weak self] in
             while !Task.isCancelled {
                 await self?.refresh()
                 try? await Task.sleep(for: .seconds(3))
             }
+        }
+    }
+
+    /// Wire live event streams from the WebSocket into the chat transcript
+    /// and the per-tab event log. Called once a connection is established.
+    private func attachWebSocketCallbacks() {
+        guard let ws = connection.wsClient else { return }
+
+        ws.onAgentEvent = { [weak self] event in
+            Task { @MainActor in
+                guard let self else { return }
+                let wrapped = IdentifiableAgentEvent(event: event, index: self.agentEvents.count)
+                self.agentEvents.append(wrapped)
+                if let item = ChatItem.from(event.event) {
+                    self.chatItems.append(item)
+                }
+                if case .approvalRequired = event.event {
+                    self.pendingApproval = event.event
+                }
+                self.activeRunId = event.runId
+            }
+        }
+    }
+
+    /// Add a user-authored message to the transcript and kick off the agent.
+    func sendUserMessage(_ text: String) async {
+        guard let client = connection.apiClient else { return }
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+
+        chatItems.append(.user(id: UUID(), text: trimmed, sent: .now))
+        do {
+            _ = try await client.callTool("agent_run", args: ["goal": trimmed])
+        } catch {
+            chatItems.append(.error(id: UUID(), message: error.localizedDescription))
         }
     }
 

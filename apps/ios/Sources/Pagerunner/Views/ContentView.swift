@@ -17,7 +17,10 @@ struct ContentView: View {
         .animation(.spring(duration: 0.5, bounce: 0.15), value: appState.connection.isConnected)
         .task {
             appState.connection.loadSettings()
-            if !appState.connection.token.isEmpty {
+            guard !appState.connection.host.isEmpty else { return }
+            // Probe first — we might not need a token (tailscale mode).
+            let mode = await appState.connection.probeAuthMode()
+            if mode == .tailscale || !appState.connection.token.isEmpty {
                 await appState.connection.connect()
                 if appState.connection.isConnected {
                     appState.startPolling()
@@ -29,17 +32,8 @@ struct ContentView: View {
     private var authenticatedRoot: some View {
         @Bindable var state = appState
         return TabView(selection: $state.selectedTab) {
-            Tab(AppTab.dashboard.title, systemImage: AppTab.dashboard.icon, value: .dashboard) {
-                NavigationStack { DashboardView() }
-            }
-            Tab(AppTab.sessions.title, systemImage: AppTab.sessions.icon, value: .sessions) {
-                NavigationStack { SessionListView() }
-            }
-            Tab(AppTab.agent.title, systemImage: AppTab.agent.icon, value: .agent) {
-                NavigationStack { AgentView() }
-            }
-            Tab(AppTab.observe.title, systemImage: AppTab.observe.icon, value: .observe) {
-                NavigationStack { ObserveView() }
+            Tab("Chat", systemImage: "bubble.left.and.bubble.right", value: .agent) {
+                NavigationStack { ChatView() }
             }
             Tab(AppTab.settings.title, systemImage: AppTab.settings.icon, value: .settings) {
                 NavigationStack { SettingsView() }
