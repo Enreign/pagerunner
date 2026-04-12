@@ -13,6 +13,8 @@ struct OnboardingView: View {
     @State private var isWorking = false
     @State private var error: String?
     @State private var revealToken = false
+    @State private var detectedMode: AuthMode?
+    @State private var probeTask: Task<Void, Never>?
     @FocusState private var focusedField: Field?
 
     private enum Field { case host, port, token }
@@ -37,8 +39,34 @@ struct OnboardingView: View {
         .background(Color.operatorBackground.ignoresSafeArea())
         .scrollDismissesKeyboard(.interactively)
         .onAppear { loadFromConnection() }
+        .onChange(of: host) { scheduleProbe() }
+        .onChange(of: port) { scheduleProbe() }
         .animation(.snappy, value: error)
         .animation(.snappy, value: isWorking)
+        .animation(.snappy, value: detectedMode)
+    }
+
+    // Debounced probe of the daemon's /auth-info so we can hide the token
+    // field when the server uses Tailscale auth.
+    private func scheduleProbe() {
+        probeTask?.cancel()
+        detectedMode = nil
+        guard !host.isEmpty, Int(port) != nil else { return }
+        probeTask = Task {
+            try? await Task.sleep(for: .milliseconds(450))
+            if Task.isCancelled { return }
+            appState.connection.host = host
+            appState.connection.port = Int(port) ?? 19876
+            appState.connection.useTLS = useTLS
+            let mode = await appState.connection.probeAuthMode()
+            if !Task.isCancelled {
+                detectedMode = mode
+            }
+        }
+    }
+
+    private var requiresToken: Bool {
+        detectedMode != .tailscale
     }
 
     // MARK: Hero
@@ -88,30 +116,48 @@ struct OnboardingView: View {
                         .focused($focusedField, equals: .port)
                         .font(.mono)
                 }
-                separator
-                row(icon: "key.fill", label: "Token") {
-                    Group {
-                        if revealToken {
-                            TextField("bearer…", text: $token)
-                        } else {
-                            SecureField("bearer…", text: $token)
+                if requiresToken {
+                    separator
+                    row(icon: "key.fill", label: "Token") {
+                        Group {
+                            if revealToken {
+                                TextField("bearer…", text: $token)
+                            } else {
+                                SecureField("bearer…", text: $token)
+                            }
                         }
-                    }
-                    .autocorrectionDisabled()
-                    .textInputAutocapitalization(.never)
-                    .focused($focusedField, equals: .token)
-                    .submitLabel(.go)
-                    .onSubmit(connect)
-                    .font(.mono)
+                        .autocorrectionDisabled()
+                        .textInputAutocapitalization(.never)
+                        .focused($focusedField, equals: .token)
+                        .submitLabel(.go)
+                        .onSubmit(connect)
+                        .font(.mono)
 
-                    Button {
-                        revealToken.toggle()
-                    } label: {
-                        Image(systemName: revealToken ? "eye.slash" : "eye")
-                            .foregroundStyle(.secondary)
+                        Button {
+                            revealToken.toggle()
+                        } label: {
+                            Image(systemName: revealToken ? "eye.slash" : "eye")
+                                .foregroundStyle(.secondary)
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel(revealToken ? "Hide token" : "Show token")
                     }
-                    .buttonStyle(.plain)
-                    .accessibilityLabel(revealToken ? "Hide token" : "Show token")
+                } else {
+                    separator
+                    HStack(spacing: 10) {
+                        Image(systemName: "lock.shield.fill")
+                            .foregroundStyle(.accent)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Tailscale identity")
+                                .font(.footnote.weight(.semibold))
+                            Text("The daemon will verify you via your tailnet — no token needed.")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                        Spacer()
+                    }
+                    .padding(.horizontal, Theme.Spacing.loose)
+                    .padding(.vertical, 14)
                 }
                 separator
                 HStack(spacing: 12) {
@@ -203,7 +249,8 @@ struct OnboardingView: View {
     // MARK: Logic
 
     private var canConnect: Bool {
-        !host.isEmpty && !port.isEmpty && !token.isEmpty && !isWorking
+        guard !host.isEmpty, !port.isEmpty, !isWorking else { return false }
+        return !requiresToken || !token.isEmpty
     }
 
     private func loadFromConnection() {

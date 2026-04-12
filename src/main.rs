@@ -16,6 +16,7 @@ mod daemon;
 mod daemon_client;
 mod db;
 mod http_api;
+mod tailscale;
 mod endpoint_mapper;
 mod error;
 mod init;

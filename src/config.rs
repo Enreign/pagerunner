@@ -280,6 +280,18 @@ impl Default for OverlayConfig {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum AuthMode {
+    /// Shared bearer token. Default for backwards compatibility.
+    #[default]
+    Token,
+    /// Use Tailscale LocalAPI `whois` to identify the caller by tailnet
+    /// identity. Requires the daemon to bind to a Tailscale IP and the
+    /// `tailscale` CLI to be on PATH.
+    Tailscale,
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct HttpApiConfig {
     /// Enable the HTTP API server alongside the Unix socket (default: false).
@@ -291,9 +303,23 @@ pub struct HttpApiConfig {
     /// TCP port (default: 9876).
     #[serde(default = "default_http_port")]
     pub port: u16,
-    /// Bearer token for authentication. **Required** when enabled.
+    /// Bearer token for authentication. Required when `auth = "token"`.
     #[serde(default)]
     pub token: String,
+    /// Authentication mode. `"token"` (default) requires a shared bearer token;
+    /// `"tailscale"` validates the caller against the local Tailscale daemon.
+    #[serde(default)]
+    pub auth: AuthMode,
+    /// When `auth = "tailscale"`, optionally restrict access to specific
+    /// tailnet login names (e.g. "alice@example.com"). Empty = any peer in
+    /// the tailnet is allowed.
+    #[serde(default)]
+    pub tailscale_allowed_users: Vec<String>,
+    /// When `auth = "tailscale"`, optionally restrict access to peers carrying
+    /// a specific tag (e.g. "tag:pagerunner-phone"). Empty = tag is not
+    /// checked.
+    #[serde(default)]
+    pub tailscale_allowed_tags: Vec<String>,
 }
 
 fn default_http_bind() -> String {
@@ -308,14 +334,32 @@ fn default_http_port() -> u16 {
 const WILDCARD_ADDRS: &[&str] = &["0.0.0.0", "::", "[::]", "*"];
 
 impl HttpApiConfig {
-    /// Validate the config. Returns an error if the bind address is a wildcard.
+    /// Validate the config. Returns an error if the bind address is a wildcard,
+    /// or if auth requirements for the selected mode aren't met.
     pub fn validate(&self) -> Result<()> {
-        if self.enabled && WILDCARD_ADDRS.contains(&self.bind_address.as_str()) {
+        if !self.enabled {
+            return Ok(());
+        }
+        if WILDCARD_ADDRS.contains(&self.bind_address.as_str()) {
             return Err(PagerunnerError::Config(format!(
                 "http_api.bind_address = \"{}\" binds to all interfaces and is not allowed. \
                  Use a specific IP (e.g. 127.0.0.1 for local, or your Tailscale IP 100.x.x.x for remote access).",
                 self.bind_address
             )));
+        }
+        if self.auth == AuthMode::Token && self.token.is_empty() {
+            return Err(PagerunnerError::Config(
+                "http_api.auth = \"token\" but http_api.token is empty — \
+                 set a token or switch auth to \"tailscale\".".into(),
+            ));
+        }
+        if self.auth == AuthMode::Tailscale
+            && (self.bind_address == "127.0.0.1" || self.bind_address == "::1")
+        {
+            return Err(PagerunnerError::Config(
+                "http_api.auth = \"tailscale\" requires binding to a Tailscale IP \
+                 (100.x.x.x), not loopback — Tailscale cannot identify local callers.".into(),
+            ));
         }
         Ok(())
     }
@@ -328,6 +372,9 @@ impl Default for HttpApiConfig {
             bind_address: default_http_bind(),
             port: default_http_port(),
             token: String::new(),
+            auth: AuthMode::default(),
+            tailscale_allowed_users: Vec::new(),
+            tailscale_allowed_tags: Vec::new(),
         }
     }
 }
@@ -980,6 +1027,7 @@ token = "abc"
             bind_address: "0.0.0.0".into(),
             port: 9876,
             token: "t".into(),
+            ..Default::default()
         };
         assert!(cfg.validate().is_err());
     }
@@ -991,6 +1039,7 @@ token = "abc"
             bind_address: "::".into(),
             port: 9876,
             token: "t".into(),
+            ..Default::default()
         };
         assert!(cfg.validate().is_err());
     }
@@ -1002,6 +1051,7 @@ token = "abc"
             bind_address: "[::]".into(),
             port: 9876,
             token: "t".into(),
+            ..Default::default()
         };
         assert!(cfg.validate().is_err());
     }
@@ -1013,6 +1063,7 @@ token = "abc"
             bind_address: "*".into(),
             port: 9876,
             token: "t".into(),
+            ..Default::default()
         };
         assert!(cfg.validate().is_err());
     }
@@ -1024,6 +1075,7 @@ token = "abc"
             bind_address: "127.0.0.1".into(),
             port: 9876,
             token: "t".into(),
+            ..Default::default()
         };
         assert!(cfg.validate().is_ok());
     }
@@ -1035,6 +1087,7 @@ token = "abc"
             bind_address: "100.64.0.1".into(),
             port: 9876,
             token: "t".into(),
+            ..Default::default()
         };
         assert!(cfg.validate().is_ok());
     }
@@ -1046,6 +1099,67 @@ token = "abc"
             bind_address: "192.168.1.50".into(),
             port: 9876,
             token: "t".into(),
+            ..Default::default()
+        };
+        assert!(cfg.validate().is_ok());
+    }
+
+    #[test]
+    fn test_auth_mode_deserialize() {
+        let toml_str = r#"
+[http_api]
+enabled = true
+bind_address = "100.64.0.1"
+auth = "tailscale"
+tailscale_allowed_users = ["alice@example.com"]
+tailscale_allowed_tags = ["tag:phone"]
+"#;
+        let cfg: PagerunnerConfig = toml::from_str(toml_str).unwrap();
+        assert_eq!(cfg.http_api.auth, AuthMode::Tailscale);
+        assert_eq!(cfg.http_api.tailscale_allowed_users, vec!["alice@example.com"]);
+        assert_eq!(cfg.http_api.tailscale_allowed_tags, vec!["tag:phone"]);
+    }
+
+    #[test]
+    fn test_auth_mode_default_is_token() {
+        let cfg = HttpApiConfig::default();
+        assert_eq!(cfg.auth, AuthMode::Token);
+    }
+
+    #[test]
+    fn test_validate_rejects_empty_token_in_token_mode() {
+        let cfg = HttpApiConfig {
+            enabled: true,
+            bind_address: "127.0.0.1".into(),
+            port: 9876,
+            token: String::new(),
+            ..Default::default()
+        };
+        assert!(cfg.validate().is_err());
+    }
+
+    #[test]
+    fn test_validate_rejects_loopback_in_tailscale_mode() {
+        let cfg = HttpApiConfig {
+            enabled: true,
+            bind_address: "127.0.0.1".into(),
+            port: 9876,
+            token: String::new(),
+            auth: AuthMode::Tailscale,
+            ..Default::default()
+        };
+        assert!(cfg.validate().is_err());
+    }
+
+    #[test]
+    fn test_validate_accepts_tailscale_on_tailnet_ip() {
+        let cfg = HttpApiConfig {
+            enabled: true,
+            bind_address: "100.64.0.1".into(),
+            port: 9876,
+            token: String::new(),
+            auth: AuthMode::Tailscale,
+            ..Default::default()
         };
         assert!(cfg.validate().is_ok());
     }
@@ -1057,6 +1171,7 @@ token = "abc"
             bind_address: "0.0.0.0".into(),
             port: 9876,
             token: "t".into(),
+            ..Default::default()
         };
         // Validation only rejects wildcards when enabled
         assert!(cfg.validate().is_ok());

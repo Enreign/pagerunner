@@ -63,6 +63,11 @@ public final class APIClient: Sendable {
         try await get("/health", authenticated: false)
     }
 
+    /// Report which auth mode the daemon expects. Unauthenticated.
+    public func authInfo() async throws -> AuthInfoResponse {
+        try await get("/auth-info", authenticated: false)
+    }
+
     /// List all configured profiles.
     public func listProfiles() async throws -> [Profile] {
         let envelope: DataEnvelope<[Profile]> = try await get("/api/profiles")

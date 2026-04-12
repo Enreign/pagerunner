@@ -67,29 +67,27 @@ pub async fn run() -> Result<()> {
     // Start HTTP API server if enabled
     let event_tx: broadcast::Sender<crate::ipc::DaemonEvent> = broadcast::channel(256).0;
     if config.http_api.enabled {
+        // `validate()` now checks both wildcard bind and auth-mode requirements
+        // (token presence in token mode, non-loopback in tailscale mode).
         config.http_api.validate()?;
-        if config.http_api.token.is_empty() {
-            tracing::warn!("HTTP API enabled but no token configured — refusing to start without auth");
-        } else {
-            let http_config = config.http_api.clone();
-            let http_sessions = Arc::clone(&sessions);
-            let http_db = Arc::clone(&db);
-            let http_app_config = config.clone();
-            let http_event_tx = event_tx.clone();
-            tokio::spawn(async move {
-                if let Err(e) = crate::http_api::start_http_server(
-                    &http_config,
-                    http_app_config,
-                    http_sessions,
-                    http_db,
-                    http_event_tx,
-                )
-                .await
-                {
-                    tracing::error!("HTTP API server failed: {}", e);
-                }
-            });
-        }
+        let http_config = config.http_api.clone();
+        let http_sessions = Arc::clone(&sessions);
+        let http_db = Arc::clone(&db);
+        let http_app_config = config.clone();
+        let http_event_tx = event_tx.clone();
+        tokio::spawn(async move {
+            if let Err(e) = crate::http_api::start_http_server(
+                &http_config,
+                http_app_config,
+                http_sessions,
+                http_db,
+                http_event_tx,
+            )
+            .await
+            {
+                tracing::error!("HTTP API server failed: {}", e);
+            }
+        });
     }
 
     // Reattach surviving Chrome sessions. Passing site_store: None here is intentional —

@@ -24,6 +24,21 @@ public final class ConnectionManager {
     public private(set) var isConnected: Bool = false
     public private(set) var lastError: String?
     public private(set) var daemonVersion: String?
+    public private(set) var authMode: AuthMode = .token
+
+    /// Probe the daemon for its auth mode. Useful before showing the token
+    /// field — if the daemon uses Tailscale, no token is needed.
+    public func probeAuthMode() async -> AuthMode? {
+        let client = APIClient(host: host, port: port, token: "", useTLS: useTLS)
+        do {
+            let info = try await client.authInfo()
+            authMode = info.mode
+            return info.mode
+        } catch {
+            lastError = error.localizedDescription
+            return nil
+        }
+    }
 
     // MARK: Clients
 

@@ -39,6 +39,17 @@ public struct HealthResponse: Codable, Sendable {
     public let version: String
 }
 
+// MARK: - Auth info
+
+public enum AuthMode: String, Codable, Sendable {
+    case token
+    case tailscale
+}
+
+public struct AuthInfoResponse: Codable, Sendable {
+    public let mode: AuthMode
+}
+
 // MARK: - Profile
 
 public struct Profile: Codable, Identifiable, Sendable, Hashable {

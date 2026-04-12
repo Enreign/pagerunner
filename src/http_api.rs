@@ -22,22 +22,26 @@
 //! - `GET  /api/recordings`      → list_recordings
 //! - `WS   /ws/events`           → real-time event stream (agent events, notifications)
 
-use crate::config::{HttpApiConfig, PagerunnerConfig};
+use crate::config::{AuthMode, HttpApiConfig, PagerunnerConfig};
 use crate::db::Db;
 use crate::ipc::DaemonEvent;
 use crate::session::SessionManager;
+use crate::tailscale;
 use axum::{
     extract::{
+        connect_info::ConnectInfo,
         ws::{Message, WebSocket},
-        Path, Query, State, WebSocketUpgrade,
+        Path, Query, Request, State, WebSocketUpgrade,
     },
     http::{HeaderMap, StatusCode},
-    response::IntoResponse,
+    middleware::{self, Next},
+    response::{IntoResponse, Response},
     routing::{get, post},
     Json, Router,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::sync::{broadcast, Mutex};
 use tower_http::cors::{Any, CorsLayer};
@@ -52,6 +56,9 @@ pub struct ApiState {
     pub sessions: Arc<Mutex<SessionManager>>,
     pub db: Arc<Db>,
     pub bearer_token: String,
+    pub auth_mode: AuthMode,
+    pub tailscale_allowed_users: Vec<String>,
+    pub tailscale_allowed_tags: Vec<String>,
     pub event_tx: broadcast::Sender<DaemonEvent>,
     /// Broadcast channel for notification push (profile, title, body).
     pub notification_tx: broadcast::Sender<NotificationPush>,
@@ -69,7 +76,8 @@ pub struct NotificationPush {
 // Auth middleware helper
 // ---------------------------------------------------------------------------
 
-fn check_auth(headers: &HeaderMap, expected: &str) -> Result<(), StatusCode> {
+/// Token-mode auth check — exported for unit tests.
+fn check_token(headers: &HeaderMap, expected: &str) -> Result<(), StatusCode> {
     let auth = headers
         .get("authorization")
         .and_then(|v| v.to_str().ok())
@@ -80,6 +88,69 @@ fn check_auth(headers: &HeaderMap, expected: &str) -> Result<(), StatusCode> {
         }
     }
     Err(StatusCode::UNAUTHORIZED)
+}
+
+/// Dispatch auth based on the configured mode. Used by every authenticated
+/// handler; returns `Ok(())` when the caller is authorised, or a status code
+/// to reply with.
+async fn authorize(
+    state: &ApiState,
+    headers: &HeaderMap,
+    peer: Option<SocketAddr>,
+) -> Result<(), StatusCode> {
+    match state.auth_mode {
+        AuthMode::Token => check_token(headers, &state.bearer_token),
+        AuthMode::Tailscale => check_tailscale(state, peer).await,
+    }
+}
+
+async fn check_tailscale(
+    state: &ApiState,
+    peer: Option<SocketAddr>,
+) -> Result<(), StatusCode> {
+    let Some(addr) = peer else {
+        tracing::warn!("tailscale auth: no peer addr available");
+        return Err(StatusCode::UNAUTHORIZED);
+    };
+
+    let whois = match tailscale::whois(addr).await {
+        Ok(Some(w)) => w,
+        Ok(None) => {
+            tracing::debug!("tailscale auth: {} is not in tailnet", addr);
+            return Err(StatusCode::UNAUTHORIZED);
+        }
+        Err(e) => {
+            tracing::error!("tailscale auth: {}", e);
+            return Err(StatusCode::SERVICE_UNAVAILABLE);
+        }
+    };
+
+    if !state.tailscale_allowed_users.is_empty()
+        && !state
+            .tailscale_allowed_users
+            .iter()
+            .any(|u| u == &whois.user_profile.login_name)
+    {
+        tracing::debug!(
+            "tailscale auth: user {:?} not in allow list",
+            whois.user_profile.login_name
+        );
+        return Err(StatusCode::FORBIDDEN);
+    }
+    if !state.tailscale_allowed_tags.is_empty()
+        && !state
+            .tailscale_allowed_tags
+            .iter()
+            .any(|t| whois.node.tags.iter().any(|nt| nt == t))
+    {
+        tracing::debug!(
+            "tailscale auth: node tags {:?} do not match allow list",
+            whois.node.tags
+        );
+        return Err(StatusCode::FORBIDDEN);
+    }
+
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
@@ -118,28 +189,49 @@ pub fn router(state: ApiState) -> Router {
         .allow_methods(Any)
         .allow_headers(Any);
 
-    Router::new()
-        // Health — no auth
+    // Unauthenticated — reachable without any credentials. `auth-info` lets
+    // clients discover which auth mode the daemon expects before connecting.
+    let public = Router::new()
         .route("/health", get(health))
-        // Tool gateway
+        .route("/auth-info", get(auth_info))
+        .with_state(state.clone());
+
+    // Authenticated — every request passes through `auth_middleware`.
+    let protected = Router::new()
         .route("/api/tool", post(tool_call))
-        // Convenience REST endpoints
         .route("/api/profiles", get(list_profiles))
         .route("/api/sessions", get(list_sessions))
         .route("/api/sessions/{id}/tabs", get(list_tabs))
         .route("/api/sessions/{id}/network-log", get(network_log))
         .route("/api/sessions/{id}/console-log", get(console_log))
-        .route(
-            "/api/sessions/{id}/screenshot/{tid}",
-            post(screenshot),
-        )
+        .route("/api/sessions/{id}/screenshot/{tid}", post(screenshot))
         .route("/api/notifications", get(notifications))
         .route("/api/checkpoints/{profile}", get(checkpoints))
         .route("/api/recordings", get(recordings))
-        // WebSocket for real-time events
         .route("/ws/events", get(ws_events))
-        .layer(cors)
-        .with_state(state)
+        .layer(middleware::from_fn_with_state(state.clone(), auth_middleware))
+        .with_state(state);
+
+    public.merge(protected).layer(cors)
+}
+
+/// Tower middleware: runs before every protected route and rejects callers
+/// that can't satisfy the configured auth mode.
+async fn auth_middleware(
+    State(state): State<ApiState>,
+    request: Request,
+    next: Next,
+) -> Response {
+    let peer_addr = request
+        .extensions()
+        .get::<ConnectInfo<SocketAddr>>()
+        .map(|c| c.0);
+    let headers = request.headers().clone();
+    if let Err(status) = authorize(&state, &headers, peer_addr).await {
+        let body = json!({ "ok": false, "error": "unauthorized" });
+        return (status, Json(body)).into_response();
+    }
+    next.run(request).await
 }
 
 // ---------------------------------------------------------------------------
@@ -150,15 +242,21 @@ async fn health() -> impl IntoResponse {
     Json(json!({ "status": "ok", "version": env!("CARGO_PKG_VERSION") }))
 }
 
+/// Publishes the auth mode so clients can decide what credentials to present
+/// before making a real request. Always unauthenticated.
+async fn auth_info(State(state): State<ApiState>) -> impl IntoResponse {
+    let mode = match state.auth_mode {
+        AuthMode::Token => "token",
+        AuthMode::Tailscale => "tailscale",
+    };
+    Json(json!({ "mode": mode }))
+}
+
 async fn tool_call(
     State(state): State<ApiState>,
-    headers: HeaderMap,
+    _headers: HeaderMap,
     Json(req): Json<ToolCallRequest>,
 ) -> impl IntoResponse {
-    if let Err(status) = check_auth(&headers, &state.bearer_token) {
-        return (status, Json(ToolCallResponse { ok: false, result: None, error: Some("unauthorized".into()) }));
-    }
-
     match dispatch(&state, &req.tool, &req.args).await {
         Ok(result) => (
             StatusCode::OK,
@@ -181,11 +279,8 @@ async fn tool_call(
 
 async fn list_profiles(
     State(state): State<ApiState>,
-    headers: HeaderMap,
+    _headers: HeaderMap,
 ) -> impl IntoResponse {
-    if let Err(status) = check_auth(&headers, &state.bearer_token) {
-        return (status, Json(json!({"error": "unauthorized"})));
-    }
     match dispatch(&state, "list_profiles", &json!({})).await {
         Ok(r) => (StatusCode::OK, Json(parse_result(&r))),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e}))),
@@ -194,11 +289,8 @@ async fn list_profiles(
 
 async fn list_sessions(
     State(state): State<ApiState>,
-    headers: HeaderMap,
+    _headers: HeaderMap,
 ) -> impl IntoResponse {
-    if let Err(status) = check_auth(&headers, &state.bearer_token) {
-        return (status, Json(json!({"error": "unauthorized"})));
-    }
     match dispatch(&state, "list_sessions", &json!({})).await {
         Ok(r) => (StatusCode::OK, Json(parse_result(&r))),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e}))),
@@ -207,12 +299,9 @@ async fn list_sessions(
 
 async fn list_tabs(
     State(state): State<ApiState>,
-    headers: HeaderMap,
+    _headers: HeaderMap,
     Path(session_id): Path<String>,
 ) -> impl IntoResponse {
-    if let Err(status) = check_auth(&headers, &state.bearer_token) {
-        return (status, Json(json!({"error": "unauthorized"})));
-    }
     match dispatch(&state, "list_tabs", &json!({"session_id": session_id})).await {
         Ok(r) => (StatusCode::OK, Json(parse_result(&r))),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e}))),
@@ -221,13 +310,10 @@ async fn list_tabs(
 
 async fn network_log(
     State(state): State<ApiState>,
-    headers: HeaderMap,
+    _headers: HeaderMap,
     Path(session_id): Path<String>,
     Query(q): Query<LogQuery>,
 ) -> impl IntoResponse {
-    if let Err(status) = check_auth(&headers, &state.bearer_token) {
-        return (status, Json(json!({"error": "unauthorized"})));
-    }
     let mut args = json!({"session_id": session_id});
     if let Some(limit) = q.limit {
         args["limit"] = json!(limit);
@@ -243,13 +329,10 @@ async fn network_log(
 
 async fn console_log(
     State(state): State<ApiState>,
-    headers: HeaderMap,
+    _headers: HeaderMap,
     Path(session_id): Path<String>,
     Query(q): Query<LogQuery>,
 ) -> impl IntoResponse {
-    if let Err(status) = check_auth(&headers, &state.bearer_token) {
-        return (status, Json(json!({"error": "unauthorized"})));
-    }
     let mut args = json!({"session_id": session_id});
     if let Some(ref tid) = q.target_id {
         args["target_id"] = json!(tid);
@@ -262,12 +345,9 @@ async fn console_log(
 
 async fn screenshot(
     State(state): State<ApiState>,
-    headers: HeaderMap,
+    _headers: HeaderMap,
     Path((session_id, target_id)): Path<(String, String)>,
 ) -> impl IntoResponse {
-    if let Err(status) = check_auth(&headers, &state.bearer_token) {
-        return (status, Json(json!({"error": "unauthorized"})));
-    }
     let args = json!({
         "session_id": session_id,
         "target_id": target_id,
@@ -281,11 +361,8 @@ async fn screenshot(
 
 async fn notifications(
     State(state): State<ApiState>,
-    headers: HeaderMap,
+    _headers: HeaderMap,
 ) -> impl IntoResponse {
-    if let Err(status) = check_auth(&headers, &state.bearer_token) {
-        return (status, Json(json!({"error": "unauthorized"})));
-    }
     match dispatch(&state, "list_notifications", &json!({})).await {
         Ok(r) => (StatusCode::OK, Json(parse_result(&r))),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e}))),
@@ -294,12 +371,9 @@ async fn notifications(
 
 async fn checkpoints(
     State(state): State<ApiState>,
-    headers: HeaderMap,
+    _headers: HeaderMap,
     Path(profile): Path<String>,
 ) -> impl IntoResponse {
-    if let Err(status) = check_auth(&headers, &state.bearer_token) {
-        return (status, Json(json!({"error": "unauthorized"})));
-    }
     match dispatch(&state, "list_session_checkpoints", &json!({"profile": profile})).await {
         Ok(r) => (StatusCode::OK, Json(parse_result(&r))),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e}))),
@@ -308,11 +382,8 @@ async fn checkpoints(
 
 async fn recordings(
     State(state): State<ApiState>,
-    headers: HeaderMap,
+    _headers: HeaderMap,
 ) -> impl IntoResponse {
-    if let Err(status) = check_auth(&headers, &state.bearer_token) {
-        return (status, Json(json!({"error": "unauthorized"})));
-    }
     match dispatch(&state, "list_recordings", &json!({})).await {
         Ok(r) => (StatusCode::OK, Json(parse_result(&r))),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e}))),
@@ -325,13 +396,9 @@ async fn recordings(
 
 async fn ws_events(
     State(state): State<ApiState>,
-    headers: HeaderMap,
+    _headers: HeaderMap,
     ws: WebSocketUpgrade,
 ) -> impl IntoResponse {
-    // Auth check via query param or header
-    if let Err(_) = check_auth(&headers, &state.bearer_token) {
-        return StatusCode::UNAUTHORIZED.into_response();
-    }
     ws.on_upgrade(move |socket| handle_ws(socket, state))
         .into_response()
 }
@@ -481,6 +548,9 @@ pub async fn start_http_server(
         sessions,
         db,
         bearer_token: config.token.clone(),
+        auth_mode: config.auth,
+        tailscale_allowed_users: config.tailscale_allowed_users.clone(),
+        tailscale_allowed_tags: config.tailscale_allowed_tags.clone(),
         event_tx,
         notification_tx: broadcast::channel(256).0,
     };
@@ -491,9 +561,15 @@ pub async fn start_http_server(
         .await
         .map_err(|e| format!("HTTP API bind {}: {}", addr, e))?;
 
-    tracing::info!("HTTP API listening on {}", addr);
+    tracing::info!(
+        "HTTP API listening on {} (auth: {:?})",
+        addr, config.auth
+    );
 
-    axum::serve(listener, app)
+    // `into_make_service_with_connect_info` exposes the TCP peer address to
+    // handlers via `ConnectInfo<SocketAddr>`. Tailscale auth needs this to
+    // identify the caller.
+    axum::serve(listener, app.into_make_service_with_connect_info::<SocketAddr>())
         .await
         .map_err(|e| format!("HTTP API server error: {}", e))?;
 
@@ -522,20 +598,20 @@ mod tests {
     fn test_check_auth_valid() {
         let mut headers = HeaderMap::new();
         headers.insert("authorization", "Bearer test-token".parse().unwrap());
-        assert!(check_auth(&headers, "test-token").is_ok());
+        assert!(check_token(&headers, "test-token").is_ok());
     }
 
     #[test]
     fn test_check_auth_invalid() {
         let mut headers = HeaderMap::new();
         headers.insert("authorization", "Bearer wrong".parse().unwrap());
-        assert!(check_auth(&headers, "test-token").is_err());
+        assert!(check_token(&headers, "test-token").is_err());
     }
 
     #[test]
     fn test_check_auth_missing() {
         let headers = HeaderMap::new();
-        assert!(check_auth(&headers, "test-token").is_err());
+        assert!(check_token(&headers, "test-token").is_err());
     }
 
     #[test]
