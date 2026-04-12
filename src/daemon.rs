@@ -67,6 +67,7 @@ pub async fn run() -> Result<()> {
     // Start HTTP API server if enabled
     let event_tx: broadcast::Sender<crate::ipc::DaemonEvent> = broadcast::channel(256).0;
     if config.http_api.enabled {
+        config.http_api.validate()?;
         if config.http_api.token.is_empty() {
             tracing::warn!("HTTP API enabled but no token configured — refusing to start without auth");
         } else {

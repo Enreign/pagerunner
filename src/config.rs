@@ -304,6 +304,23 @@ fn default_http_port() -> u16 {
     9876
 }
 
+/// Addresses that bind to all interfaces — rejected for security.
+const WILDCARD_ADDRS: &[&str] = &["0.0.0.0", "::", "[::]", "*"];
+
+impl HttpApiConfig {
+    /// Validate the config. Returns an error if the bind address is a wildcard.
+    pub fn validate(&self) -> Result<()> {
+        if self.enabled && WILDCARD_ADDRS.contains(&self.bind_address.as_str()) {
+            return Err(PagerunnerError::Config(format!(
+                "http_api.bind_address = \"{}\" binds to all interfaces and is not allowed. \
+                 Use a specific IP (e.g. 127.0.0.1 for local, or your Tailscale IP 100.x.x.x for remote access).",
+                self.bind_address
+            )));
+        }
+        Ok(())
+    }
+}
+
 impl Default for HttpApiConfig {
     fn default() -> Self {
         Self {
@@ -954,5 +971,94 @@ token = "abc"
         assert_eq!(cfg.http_api.bind_address, "127.0.0.1");
         assert_eq!(cfg.http_api.port, 9876);
         assert_eq!(cfg.http_api.token, "abc");
+    }
+
+    #[test]
+    fn test_http_api_rejects_wildcard_0000() {
+        let cfg = HttpApiConfig {
+            enabled: true,
+            bind_address: "0.0.0.0".into(),
+            port: 9876,
+            token: "t".into(),
+        };
+        assert!(cfg.validate().is_err());
+    }
+
+    #[test]
+    fn test_http_api_rejects_wildcard_ipv6() {
+        let cfg = HttpApiConfig {
+            enabled: true,
+            bind_address: "::".into(),
+            port: 9876,
+            token: "t".into(),
+        };
+        assert!(cfg.validate().is_err());
+    }
+
+    #[test]
+    fn test_http_api_rejects_wildcard_bracketed() {
+        let cfg = HttpApiConfig {
+            enabled: true,
+            bind_address: "[::]".into(),
+            port: 9876,
+            token: "t".into(),
+        };
+        assert!(cfg.validate().is_err());
+    }
+
+    #[test]
+    fn test_http_api_rejects_wildcard_star() {
+        let cfg = HttpApiConfig {
+            enabled: true,
+            bind_address: "*".into(),
+            port: 9876,
+            token: "t".into(),
+        };
+        assert!(cfg.validate().is_err());
+    }
+
+    #[test]
+    fn test_http_api_allows_localhost() {
+        let cfg = HttpApiConfig {
+            enabled: true,
+            bind_address: "127.0.0.1".into(),
+            port: 9876,
+            token: "t".into(),
+        };
+        assert!(cfg.validate().is_ok());
+    }
+
+    #[test]
+    fn test_http_api_allows_tailscale_ip() {
+        let cfg = HttpApiConfig {
+            enabled: true,
+            bind_address: "100.64.0.1".into(),
+            port: 9876,
+            token: "t".into(),
+        };
+        assert!(cfg.validate().is_ok());
+    }
+
+    #[test]
+    fn test_http_api_allows_private_ip() {
+        let cfg = HttpApiConfig {
+            enabled: true,
+            bind_address: "192.168.1.50".into(),
+            port: 9876,
+            token: "t".into(),
+        };
+        assert!(cfg.validate().is_ok());
+    }
+
+    #[test]
+    fn test_http_api_disabled_skips_validation() {
+        let cfg = HttpApiConfig {
+            enabled: false,
+            bind_address: "0.0.0.0".into(),
+            port: 9876,
+            token: "t".into(),
+        };
+        // Validation only rejects wildcards when enabled
+        assert!(cfg.validate().is_ok());
     }
 }
