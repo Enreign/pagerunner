@@ -9,13 +9,17 @@
 /* Begin PBXBuildFile section */
 		00EB67E1A99777269BB9DC6C /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C4B35E601AF290B3016851FD /* ContentView.swift */; };
 		04383D1D5654158F53EE4F97 /* DashboardView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 841D5C67262A1FBBC696E745 /* DashboardView.swift */; };
+		0C1324F635740B5F4A305A67 /* Theme.swift in Sources */ = {isa = PBXBuildFile; fileRef = 04712FC04515C81A77870DDF /* Theme.swift */; };
 		1D07134B7A81A9D432C3A4B2 /* SessionListView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2DCAB6E12B6760E7453B3D7 /* SessionListView.swift */; };
 		1DF5DEF33CD8B124627E9419 /* EventRow.swift in Sources */ = {isa = PBXBuildFile; fileRef = A3F7D5168DBAC729969BA5E3 /* EventRow.swift */; };
 		3D79EEF6CEEF8D73173E2CF8 /* PagerunnerApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 782BCE717E9057D8645B5B36 /* PagerunnerApp.swift */; };
 		506F4B4736EEAE94624F286F /* ObserveView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2159850D67E5293DCAE28536 /* ObserveView.swift */; };
 		6F761C9E9136B78D22CF34BF /* NetworkLogRow.swift in Sources */ = {isa = PBXBuildFile; fileRef = 61C76450EA4FB13A6FD2BF11 /* NetworkLogRow.swift */; };
 		750A9536361D905C3DD5BA0D /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = CDE2A110345DA54EC8E41827 /* Assets.xcassets */; };
+		7E0941A57A3671D69F820D06 /* StatusDot.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1B18367DA4E0402F72700462 /* StatusDot.swift */; };
 		95BE930B1488D91E229907D2 /* AppState.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7172AAAC50AA827A09182790 /* AppState.swift */; };
+		A24A9D8391A20ABAFF145E25 /* ConnectOverlay.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6CA6BCB92A012CE420E99C24 /* ConnectOverlay.swift */; };
+		A40431DB1E7577468A4AB5E4 /* Card.swift in Sources */ = {isa = PBXBuildFile; fileRef = 63E36F852923CA0663E925F9 /* Card.swift */; };
 		C16AF637B5E1CCADC7F7612A /* StatusBadge.swift in Sources */ = {isa = PBXBuildFile; fileRef = C5BCD76E3BCDDEF151C0F30A /* StatusBadge.swift */; };
 		CDA1B27C5EF741B084C53F28 /* AgentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 89DEEE9645A96B41C89B69BA /* AgentView.swift */; };
 		DE83A7F5ACFAC6CDB781D171 /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 624B489098490C4B59A6A1EE /* SettingsView.swift */; };
@@ -24,9 +28,13 @@
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
+		04712FC04515C81A77870DDF /* Theme.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Theme.swift; sourceTree = "<group>"; };
+		1B18367DA4E0402F72700462 /* StatusDot.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StatusDot.swift; sourceTree = "<group>"; };
 		2159850D67E5293DCAE28536 /* ObserveView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ObserveView.swift; sourceTree = "<group>"; };
 		61C76450EA4FB13A6FD2BF11 /* NetworkLogRow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NetworkLogRow.swift; sourceTree = "<group>"; };
 		624B489098490C4B59A6A1EE /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
+		63E36F852923CA0663E925F9 /* Card.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Card.swift; sourceTree = "<group>"; };
+		6CA6BCB92A012CE420E99C24 /* ConnectOverlay.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConnectOverlay.swift; sourceTree = "<group>"; };
 		7172AAAC50AA827A09182790 /* AppState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppState.swift; sourceTree = "<group>"; };
 		73C6AC813400F750FF2F8EEE /* SessionDetailView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionDetailView.swift; sourceTree = "<group>"; };
 		782BCE717E9057D8645B5B36 /* PagerunnerApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PagerunnerApp.swift; sourceTree = "<group>"; };
@@ -53,6 +61,16 @@
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
+		0364576579876FD9465B9ACF /* Theme */ = {
+			isa = PBXGroup;
+			children = (
+				63E36F852923CA0663E925F9 /* Card.swift */,
+				1B18367DA4E0402F72700462 /* StatusDot.swift */,
+				04712FC04515C81A77870DDF /* Theme.swift */,
+			);
+			path = Theme;
+			sourceTree = "<group>";
+		};
 		36731E84B6637608A97D542E /* Packages */ = {
 			isa = PBXGroup;
 			children = (
@@ -72,6 +90,7 @@
 		4D66511A3A7B6EB5A5816959 /* Components */ = {
 			isa = PBXGroup;
 			children = (
+				6CA6BCB92A012CE420E99C24 /* ConnectOverlay.swift */,
 				A3F7D5168DBAC729969BA5E3 /* EventRow.swift */,
 				61C76450EA4FB13A6FD2BF11 /* NetworkLogRow.swift */,
 				C5BCD76E3BCDDEF151C0F30A /* StatusBadge.swift */,
@@ -119,6 +138,7 @@
 			isa = PBXGroup;
 			children = (
 				4D66511A3A7B6EB5A5816959 /* Components */,
+				0364576579876FD9465B9ACF /* Theme */,
 				89DEEE9645A96B41C89B69BA /* AgentView.swift */,
 				C4B35E601AF290B3016851FD /* ContentView.swift */,
 				841D5C67262A1FBBC696E745 /* DashboardView.swift */,
@@ -208,6 +228,8 @@
 			files = (
 				CDA1B27C5EF741B084C53F28 /* AgentView.swift in Sources */,
 				95BE930B1488D91E229907D2 /* AppState.swift in Sources */,
+				A40431DB1E7577468A4AB5E4 /* Card.swift in Sources */,
+				A24A9D8391A20ABAFF145E25 /* ConnectOverlay.swift in Sources */,
 				00EB67E1A99777269BB9DC6C /* ContentView.swift in Sources */,
 				04383D1D5654158F53EE4F97 /* DashboardView.swift in Sources */,
 				1DF5DEF33CD8B124627E9419 /* EventRow.swift in Sources */,
@@ -218,6 +240,8 @@
 				1D07134B7A81A9D432C3A4B2 /* SessionListView.swift in Sources */,
 				DE83A7F5ACFAC6CDB781D171 /* SettingsView.swift in Sources */,
 				C16AF637B5E1CCADC7F7612A /* StatusBadge.swift in Sources */,
+				7E0941A57A3671D69F820D06 /* StatusDot.swift in Sources */,
+				0C1324F635740B5F4A305A67 /* Theme.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

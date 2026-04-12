@@ -6,15 +6,18 @@ struct DashboardView: View {
 
     var body: some View {
         ScrollView {
-            VStack(spacing: 20) {
-                connectionStatusCard
-                sessionSummaryCard
-                profileGrid
-                recentNotificationsCard
+            LazyVStack(alignment: .leading, spacing: Theme.Spacing.section) {
+                connectionCard
+                sessionStats
+                profileSection
+                notificationSection
             }
-            .padding()
+            .padding(.horizontal, Theme.Spacing.loose)
+            .padding(.vertical, Theme.Spacing.regular)
         }
+        .background(Color.operatorBackground)
         .navigationTitle("Dashboard")
+        .navigationBarTitleDisplayMode(.large)
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
                 Button {
@@ -22,257 +25,221 @@ struct DashboardView: View {
                 } label: {
                     Image(systemName: "arrow.clockwise")
                 }
+                .accessibilityLabel("Refresh")
             }
         }
-        .refreshable {
-            await appState.refresh()
-        }
+        .refreshable { await appState.refresh() }
     }
 
-    // MARK: - Connection Status
+    // MARK: Connection card
 
-    private var connectionStatusCard: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack {
-                Circle()
-                    .fill(appState.connection.isConnected ? .green : .red)
-                    .frame(width: 10, height: 10)
-
-                Text(appState.connection.isConnected ? "Connected" : "Disconnected")
-                    .font(.headline)
-
-                Spacer()
-
-                if appState.connection.isConnected {
-                    Text("\(appState.connection.host):\(appState.connection.port)")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .monospaced()
-                }
-            }
-
-            if appState.connection.isConnected {
-                HStack {
-                    Label("Daemon", systemImage: "server.rack")
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
-
+    private var connectionCard: some View {
+        Card {
+            VStack(alignment: .leading, spacing: Theme.Spacing.regular) {
+                HStack(spacing: 10) {
+                    StatusDot(state: appState.connection.isConnected ? .live : .error)
+                    Text(appState.connection.isConnected ? "Connected" : "Disconnected")
+                        .font(.headline)
                     Spacer()
-
-                    if appState.isPolling {
-                        Label("Polling", systemImage: "antenna.radiowaves.left.and.right")
-                            .font(.caption2)
-                            .foregroundStyle(.green)
+                    if appState.isPolling && appState.connection.isConnected {
+                        HStack(spacing: 6) {
+                            StatusDot(state: .live, size: 6)
+                            Text("LIVE")
+                                .font(.statLabel)
+                                .tracking(1.4)
+                                .foregroundStyle(.accent)
+                        }
                     }
                 }
+
+                if appState.connection.isConnected {
+                    HStack(spacing: 6) {
+                        Image(systemName: "server.rack")
+                            .foregroundStyle(.secondary)
+                        Text("\(appState.connection.host):\(appState.connection.port)")
+                            .font(.mono)
+                            .foregroundStyle(.primary)
+                        Spacer()
+                    }
+                    .font(.subheadline)
+                }
             }
         }
-        .padding()
-        .background(Color(.secondarySystemGroupedBackground))
-        .clipShape(RoundedRectangle(cornerRadius: 12))
     }
 
-    // MARK: - Session Summary
+    // MARK: Session stats
 
-    private var sessionSummaryCard: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text("Sessions")
-                .font(.headline)
-
-            HStack(spacing: 16) {
-                summaryItem(
-                    count: appState.sessions.count,
-                    label: "Total",
-                    color: .primary
-                )
-
-                Divider()
-                    .frame(height: 40)
-
-                summaryItem(
-                    count: appState.aliveSessions.count,
-                    label: "Alive",
-                    color: .green
-                )
-
-                Divider()
-                    .frame(height: 40)
-
-                summaryItem(
-                    count: appState.crashedSessions.count,
-                    label: "Crashed",
-                    color: .red
-                )
+    private var sessionStats: some View {
+        VStack(alignment: .leading, spacing: Theme.Spacing.regular) {
+            SectionLabel(text: "SESSIONS")
+            HStack(spacing: Theme.Spacing.regular) {
+                statTile(value: appState.sessions.count,         label: "Total",   tint: .primary)
+                statTile(value: appState.aliveSessions.count,    label: "Alive",   tint: .accent)
+                statTile(value: appState.crashedSessions.count,  label: "Crashed", tint: .red)
             }
-            .frame(maxWidth: .infinity)
         }
-        .padding()
-        .background(Color(.secondarySystemGroupedBackground))
-        .clipShape(RoundedRectangle(cornerRadius: 12))
     }
 
-    private func summaryItem(count: Int, label: String, color: Color) -> some View {
-        VStack(spacing: 4) {
-            Text("\(count)")
-                .font(.title.bold())
-                .foregroundStyle(color)
-
-            Text(label)
-                .font(.caption)
+    private func statTile(value: Int, label: String, tint: Color) -> some View {
+        VStack(alignment: .leading, spacing: Theme.Spacing.tight) {
+            Text("\(value)")
+                .font(.statNumber)
+                .foregroundStyle(tint)
+                .contentTransition(.numericText())
+                .animation(.snappy, value: value)
+            Text(label.uppercased())
+                .font(.statLabel)
+                .tracking(1.2)
                 .foregroundStyle(.secondary)
         }
-        .frame(maxWidth: .infinity)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(Theme.Spacing.loose)
+        .background(.operatorCard, in: RoundedRectangle(cornerRadius: Theme.Radius.card, style: .continuous))
     }
 
-    // MARK: - Profile Grid
+    // MARK: Profiles
 
-    private var profileGrid: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text("Profiles")
-                .font(.headline)
+    private var profileSection: some View {
+        VStack(alignment: .leading, spacing: Theme.Spacing.regular) {
+            SectionLabel(text: "PROFILES · \(appState.profiles.count)")
 
             if appState.profiles.isEmpty {
-                Text("No profiles configured")
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-                    .frame(maxWidth: .infinity, alignment: .center)
-                    .padding(.vertical, 8)
+                Card {
+                    Text("No profiles configured. Add a [[profiles]] entry in config.toml on the daemon host.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                }
             } else {
-                LazyVGrid(columns: [
-                    GridItem(.flexible()),
-                    GridItem(.flexible()),
-                ], spacing: 12) {
+                LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())],
+                          spacing: Theme.Spacing.regular) {
                     ForEach(appState.profiles) { profile in
                         profileCard(profile)
                     }
                 }
             }
         }
-        .padding()
-        .background(Color(.secondarySystemGroupedBackground))
-        .clipShape(RoundedRectangle(cornerRadius: 12))
     }
 
     private func profileCard(_ profile: Profile) -> some View {
         Button {
             appState.selectedTab = .sessions
         } label: {
-            VStack(alignment: .leading, spacing: 8) {
+            VStack(alignment: .leading, spacing: Theme.Spacing.tight) {
                 HStack {
                     Image(systemName: profileIcon(for: profile))
                         .font(.title3)
-                        .foregroundStyle(.tint)
-
+                        .foregroundStyle(.accent)
                     Spacer()
-
                     let count = appState.sessionsForProfile(profile.name).count
                     if count > 0 {
                         Text("\(count)")
-                            .font(.caption.bold())
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(.accent)
                             .padding(.horizontal, 8)
                             .padding(.vertical, 2)
-                            .background(.tint.opacity(0.15))
-                            .clipShape(Capsule())
+                            .background(.accent.opacity(0.15), in: Capsule())
                     }
                 }
-
                 Text(profile.name)
-                    .font(.subheadline.bold())
+                    .font(.subheadline.weight(.semibold))
                     .lineLimit(1)
-
+                    .foregroundStyle(.primary)
                 Text(profile.displayName)
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
             }
-            .padding(12)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(Color(.tertiarySystemGroupedBackground))
-            .clipShape(RoundedRectangle(cornerRadius: 10))
+            .padding(Theme.Spacing.regular + 2)
+            .background(.operatorCard, in: RoundedRectangle(cornerRadius: Theme.Radius.card - 2, style: .continuous))
         }
         .buttonStyle(.plain)
     }
 
     private func profileIcon(for profile: Profile) -> String {
         switch profile.kind {
-        case "agent": return "cpu"
+        case "agent":    return "cpu"
         case "attached": return "link"
         default:
-            if profile.name.lowercased().contains("work") {
-                return "briefcase.fill"
-            } else if profile.name.lowercased().contains("personal") {
-                return "person.fill"
-            } else {
-                return "globe"
-            }
+            let n = profile.name.lowercased()
+            if n.contains("work") { return "briefcase.fill" }
+            if n.contains("personal") { return "person.fill" }
+            return "globe"
         }
     }
 
-    // MARK: - Recent Notifications
+    // MARK: Notifications
 
-    private var recentNotificationsCard: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text("Recent Notifications")
-                .font(.headline)
+    private var notificationSection: some View {
+        VStack(alignment: .leading, spacing: Theme.Spacing.regular) {
+            SectionLabel(text: "ACTIVITY")
 
-            if appState.recentNotifications.isEmpty {
-                Text("No recent notifications")
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-                    .frame(maxWidth: .infinity, alignment: .center)
-                    .padding(.vertical, 8)
-            } else {
-                ForEach(appState.recentNotifications) { notification in
-                    HStack(spacing: 10) {
-                        Image(systemName: notificationIcon(notification))
-                            .foregroundStyle(notificationColor(notification))
-                            .frame(width: 24)
-
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(notification.title)
-                                .font(.subheadline)
-                                .lineLimit(1)
-
-                            if let body = notification.body {
-                                Text(body)
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                                    .lineLimit(2)
+            Card(padding: Theme.Spacing.regular) {
+                if appState.recentNotifications.isEmpty {
+                    HStack {
+                        Image(systemName: "tray")
+                            .foregroundStyle(.secondary)
+                        Text("No recent activity")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                        Spacer()
+                    }
+                    .padding(Theme.Spacing.tight)
+                } else {
+                    VStack(spacing: 0) {
+                        ForEach(appState.recentNotifications) { notification in
+                            notificationRow(notification)
+                            if notification.id != appState.recentNotifications.last?.id {
+                                Divider().padding(.leading, 34)
                             }
                         }
-
-                        Spacer()
-
-                        Text(Date(timeIntervalSince1970: Double(notification.createdAt) / 1_000_000), style: .relative)
-                            .font(.caption2)
-                            .foregroundStyle(.tertiary)
-                    }
-                    .padding(.vertical, 4)
-
-                    if notification.id != appState.recentNotifications.last?.id {
-                        Divider()
                     }
                 }
             }
         }
-        .padding()
-        .background(Color(.secondarySystemGroupedBackground))
-        .clipShape(RoundedRectangle(cornerRadius: 12))
     }
 
-    private func notificationIcon(_ notification: DaemonNotification) -> String {
-        switch notification.level {
-        case "error": "exclamationmark.triangle.fill"
+    private func notificationRow(_ n: DaemonNotification) -> some View {
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: notificationIcon(n))
+                .foregroundStyle(notificationColor(n))
+                .frame(width: 24)
+                .padding(.top, 2)
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(n.title)
+                    .font(.subheadline.weight(.medium))
+                    .lineLimit(1)
+                if let body = n.body {
+                    Text(body)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
+                }
+            }
+
+            Spacer()
+
+            Text(Date(timeIntervalSince1970: Double(n.createdAt) / 1_000_000), style: .relative)
+                .font(.monoCaption)
+                .foregroundStyle(.tertiary)
+        }
+        .padding(.vertical, Theme.Spacing.tight)
+    }
+
+    private func notificationIcon(_ n: DaemonNotification) -> String {
+        switch n.level {
+        case "error":   "exclamationmark.triangle.fill"
         case "warning": "exclamationmark.circle.fill"
-        default: "info.circle.fill"
+        default:        "info.circle.fill"
         }
     }
 
-    private func notificationColor(_ notification: DaemonNotification) -> Color {
-        switch notification.level {
-        case "error": .red
+    private func notificationColor(_ n: DaemonNotification) -> Color {
+        switch n.level {
+        case "error":   .red
         case "warning": .orange
-        default: .blue
+        default:        .accent
         }
     }
 }
