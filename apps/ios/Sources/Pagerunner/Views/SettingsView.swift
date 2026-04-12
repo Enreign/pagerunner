@@ -24,7 +24,6 @@ struct SettingsView: View {
                 connectionForm
                 actions
                 statusStrip
-                tailscaleHint
                 about
             }
             .padding(.horizontal, Theme.Spacing.loose)
@@ -232,25 +231,6 @@ struct SettingsView: View {
                 .minimumScaleFactor(0.7)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-    }
-
-    // MARK: Tailscale hint
-
-    private var tailscaleHint: some View {
-        HStack(alignment: .top, spacing: 10) {
-            Image(systemName: "lock.shield")
-                .foregroundStyle(.accent)
-            VStack(alignment: .leading, spacing: 4) {
-                Text("Tip")
-                    .font(.footnote.weight(.semibold))
-                Text("Bind the daemon to your Tailscale IP (100.x.x.x) so your phone can reach it over the tunnel without public exposure.")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-            }
-        }
-        .padding(Theme.Spacing.regular)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(.accent.opacity(0.08), in: RoundedRectangle(cornerRadius: Theme.Radius.chip, style: .continuous))
     }
 
     // MARK: About

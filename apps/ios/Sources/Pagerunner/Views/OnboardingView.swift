@@ -42,7 +42,6 @@ struct OnboardingView: View {
                     errorBanner(error)
                         .transition(.move(edge: .top).combined(with: .opacity))
                 }
-                tailscaleHint
                 Spacer(minLength: 0)
             }
             .padding(.horizontal, Theme.Spacing.loose)
@@ -263,23 +262,6 @@ struct OnboardingView: View {
         .padding(.horizontal, Theme.Spacing.loose)
         .padding(.vertical, Theme.Spacing.regular)
         .background(Color.red.opacity(0.12), in: RoundedRectangle(cornerRadius: Theme.Radius.chip, style: .continuous))
-    }
-
-    private var tailscaleHint: some View {
-        HStack(alignment: .top, spacing: 10) {
-            Image(systemName: "lock.shield")
-                .foregroundStyle(.accent)
-            VStack(alignment: .leading, spacing: 4) {
-                Text("Tailscale tip")
-                    .font(.footnote.weight(.semibold))
-                Text("Bind the daemon to your Tailscale IP (100.x.x.x) to reach it over the tunnel from anywhere — no public exposure.")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-            }
-        }
-        .padding(Theme.Spacing.regular)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(.accent.opacity(0.08), in: RoundedRectangle(cornerRadius: Theme.Radius.chip, style: .continuous))
     }
 
     // MARK: Logic
