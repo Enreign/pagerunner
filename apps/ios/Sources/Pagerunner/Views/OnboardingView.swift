@@ -208,7 +208,7 @@ struct OnboardingView: View {
             HStack(spacing: 10) {
                 Image(systemName: "checkmark.circle.fill").foregroundStyle(.accent)
                 Text(mode == .tailscale
-                     ? "Daemon reachable · Tailscale auth (no token)"
+                     ? "Daemon reachable · Tailscale auth"
                      : "Daemon reachable · Token required")
                     .font(.footnote)
                 Spacer()
