@@ -34,7 +34,7 @@ jobs:
           fi
 
       - name: Create draft GitHub release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ steps.resolve-tag.outputs.tag_name }}
           draft: true
@@ -66,7 +66,7 @@ jobs:
           shasum -a 256 pagerunner-macos-arm64 > pagerunner-macos-arm64.sha256
 
       - name: Upload to release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ needs.create-release.outputs.tag_name }}
           files: |
@@ -93,7 +93,7 @@ jobs:
           shasum -a 256 pagerunner-macos-x86_64 > pagerunner-macos-x86_64.sha256
 
       - name: Upload to release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ needs.create-release.outputs.tag_name }}
           files: |
@@ -120,7 +120,7 @@ jobs:
           sha256sum pagerunner-linux-x86_64 > pagerunner-linux-x86_64.sha256
 
       - name: Upload to release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ needs.create-release.outputs.tag_name }}
           files: |
@@ -133,7 +133,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Remove draft status
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ needs.create-release.outputs.tag_name }}
           draft: false
