@@ -3,7 +3,7 @@ import PackageDescription
 
 let package = Package(
     name: "PagerunnerMobile",
-    platforms: [.iOS(.v17)],
+    platforms: [.iOS(.v18)],
     products: [
         .library(name: "PagerunnerKit", targets: ["PagerunnerKit"]),
     ],
@@ -11,12 +11,6 @@ let package = Package(
         .target(
             name: "PagerunnerKit",
             path: "Sources/PagerunnerKit",
-            swiftSettings: [.swiftLanguageMode(.v6)]
-        ),
-        .executableTarget(
-            name: "Pagerunner",
-            dependencies: ["PagerunnerKit"],
-            path: "Sources/Pagerunner",
             swiftSettings: [.swiftLanguageMode(.v6)]
         ),
         .testTarget(

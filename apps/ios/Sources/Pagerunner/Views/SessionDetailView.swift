@@ -14,7 +14,7 @@ struct SessionDetailView: View {
     @State private var showingNavigateSheet = false
     @State private var navigateTargetId: String?
 
-    private var tabs: [Tab] {
+    private var tabs: [PagerunnerKit.Tab] {
         appState.tabs[session.id] ?? []
     }
 
@@ -155,7 +155,7 @@ struct SessionDetailView: View {
         }
     }
 
-    private func tabRow(_ tab: Tab) -> some View {
+    private func tabRow(_ tab: PagerunnerKit.Tab) -> some View {
         HStack(spacing: 12) {
             faviconView(for: tab.url)
 

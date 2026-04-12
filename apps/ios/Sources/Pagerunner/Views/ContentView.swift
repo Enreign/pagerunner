@@ -40,7 +40,7 @@ struct ContentView: View {
                 }
             }
 
-            if !appState.connection.isConnected {
+            if !appState.connection.isConnected && appState.selectedTab != .settings {
                 notConnectedOverlay
             }
         }
