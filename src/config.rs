@@ -280,6 +280,41 @@ impl Default for OverlayConfig {
     }
 }
 
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct HttpApiConfig {
+    /// Enable the HTTP API server alongside the Unix socket (default: false).
+    #[serde(default)]
+    pub enabled: bool,
+    /// Bind address — use a Tailscale IP (100.x.x.x) to restrict to your tailnet.
+    #[serde(default = "default_http_bind")]
+    pub bind_address: String,
+    /// TCP port (default: 9876).
+    #[serde(default = "default_http_port")]
+    pub port: u16,
+    /// Bearer token for authentication. **Required** when enabled.
+    #[serde(default)]
+    pub token: String,
+}
+
+fn default_http_bind() -> String {
+    "127.0.0.1".into()
+}
+
+fn default_http_port() -> u16 {
+    9876
+}
+
+impl Default for HttpApiConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            bind_address: default_http_bind(),
+            port: default_http_port(),
+            token: String::new(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize, Default)]
 pub struct AgentDaemonConfig {
     #[serde(default)]
@@ -312,6 +347,8 @@ pub struct PagerunnerConfig {
     pub overlay: OverlayConfig,
     #[serde(default)]
     pub agent: AgentDaemonConfig,
+    #[serde(default)]
+    pub http_api: HttpApiConfig,
 }
 
 impl PagerunnerConfig {
@@ -872,5 +909,50 @@ fps = 5
         assert_eq!(cfg.recording.format, RecordingFormat::Webm);
         assert!(cfg.recording.auto_record);
         assert_eq!(cfg.recording.fps, 5);
+    }
+
+    #[test]
+    fn test_http_api_config_absent_gives_defaults() {
+        let toml = r#"
+[[profiles]]
+name = "test"
+display_name = "Test"
+user_data_dir = "/tmp/t"
+"#;
+        let cfg: PagerunnerConfig = toml::from_str(toml).unwrap();
+        assert!(!cfg.http_api.enabled);
+        assert_eq!(cfg.http_api.bind_address, "127.0.0.1");
+        assert_eq!(cfg.http_api.port, 9876);
+        assert!(cfg.http_api.token.is_empty());
+    }
+
+    #[test]
+    fn test_http_api_config_from_toml() {
+        let toml = r#"
+[http_api]
+enabled = true
+bind_address = "100.64.0.1"
+port = 9877
+token = "my-secret-token"
+"#;
+        let cfg: PagerunnerConfig = toml::from_str(toml).unwrap();
+        assert!(cfg.http_api.enabled);
+        assert_eq!(cfg.http_api.bind_address, "100.64.0.1");
+        assert_eq!(cfg.http_api.port, 9877);
+        assert_eq!(cfg.http_api.token, "my-secret-token");
+    }
+
+    #[test]
+    fn test_http_api_config_partial() {
+        let toml = r#"
+[http_api]
+enabled = true
+token = "abc"
+"#;
+        let cfg: PagerunnerConfig = toml::from_str(toml).unwrap();
+        assert!(cfg.http_api.enabled);
+        assert_eq!(cfg.http_api.bind_address, "127.0.0.1");
+        assert_eq!(cfg.http_api.port, 9876);
+        assert_eq!(cfg.http_api.token, "abc");
     }
 }
