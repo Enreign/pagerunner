@@ -86,21 +86,32 @@ public final class APIClient: Sendable {
         return envelope.data
     }
 
-    /// Take a screenshot (returns base64-encoded PNG).
+    /// Take a screenshot. Returns raw base64-encoded PNG (no data-URL prefix).
     public func screenshot(sessionId: String, targetId: String) async throws -> String {
         let raw: AnyCodableValue = try await post(
             "/api/sessions/\(sessionId)/screenshot/\(targetId)",
             body: EmptyBody()
         )
-        // The daemon returns the tool result directly, which contains "base64" key
-        if let base64 = raw["base64"]?.stringValue {
-            return base64
+        // The daemon wraps the screenshot as either `{"data": "data:image/png;base64,…"}`
+        // or `{"base64": "…"}` depending on how the tool serialised it. Handle both.
+        for key in ["data", "base64", "image"] {
+            if let s = raw[key]?.stringValue {
+                return stripDataURL(s)
+            }
         }
-        // Fallback: maybe it's a string directly
         if let s = raw.stringValue {
-            return s
+            return stripDataURL(s)
         }
         throw PagerunnerError.decodingFailed("Expected base64 screenshot data")
+    }
+
+    /// Strip the `data:image/png;base64,` prefix if present so callers can
+    /// decode the body directly with `Data(base64Encoded:)`.
+    private func stripDataURL(_ s: String) -> String {
+        if let range = s.range(of: ";base64,") {
+            return String(s[range.upperBound...])
+        }
+        return s
     }
 
     /// Fetch network log entries for a session.

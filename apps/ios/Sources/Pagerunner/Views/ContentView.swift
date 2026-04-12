@@ -30,15 +30,7 @@ struct ContentView: View {
     }
 
     private var authenticatedRoot: some View {
-        @Bindable var state = appState
-        return TabView(selection: $state.selectedTab) {
-            Tab("Chat", systemImage: "bubble.left.and.bubble.right", value: .agent) {
-                NavigationStack { ChatView() }
-            }
-            Tab(AppTab.settings.title, systemImage: AppTab.settings.icon, value: .settings) {
-                NavigationStack { SettingsView() }
-            }
-        }
+        NavigationStack { ChatView() }
     }
 }
 

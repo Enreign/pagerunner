@@ -7,6 +7,7 @@ struct ChatView: View {
     @State private var draft = ""
     @State private var isSending = false
     @State private var showSessions = false
+    @State private var showSettings = false
     @State private var inspectorContext: InspectorContext?
     @FocusState private var composerFocused: Bool
 
@@ -33,6 +34,14 @@ struct ChatView: View {
                 }
                 .accessibilityLabel("Sessions")
             }
+            ToolbarItem(placement: .topBarTrailing) {
+                Button {
+                    showSettings = true
+                } label: {
+                    Image(systemName: "gearshape")
+                }
+                .accessibilityLabel("Settings")
+            }
         }
         .sheet(isPresented: $showSessions) {
             SessionsSheet(onOpenInspector: { ctx in
@@ -41,6 +50,9 @@ struct ChatView: View {
             })
             .presentationDetents([.medium, .large])
             .presentationDragIndicator(.visible)
+        }
+        .sheet(isPresented: $showSettings) {
+            NavigationStack { SettingsView() }
         }
         .sheet(item: $inspectorContext) { ctx in
             NavigationStack {
@@ -64,6 +76,10 @@ struct ChatView: View {
                             }
                             .id(item.id)
                         }
+                        if appState.isAgentRunning {
+                            workingRow
+                                .id("working-indicator")
+                        }
                     }
                 }
                 .padding(.horizontal, Theme.Spacing.loose)
@@ -76,6 +92,25 @@ struct ChatView: View {
                     }
                 }
             }
+        }
+    }
+
+    private var workingRow: some View {
+        HStack(alignment: .center, spacing: 10) {
+            Image(systemName: "figure.run")
+                .font(.caption)
+                .foregroundStyle(.accent)
+                .frame(width: 24, height: 24)
+                .background(.operatorCard, in: Circle())
+            HStack(spacing: 4) {
+                Circle().fill(.accent).frame(width: 6, height: 6).animatedDot(offset: 0)
+                Circle().fill(.accent).frame(width: 6, height: 6).animatedDot(offset: 0.2)
+                Circle().fill(.accent).frame(width: 6, height: 6).animatedDot(offset: 0.4)
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 10)
+            .background(.operatorCard, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+            Spacer()
         }
     }
 
