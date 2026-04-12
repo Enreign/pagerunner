@@ -21,8 +21,8 @@ public final class APIClient: Sendable {
 
     // MARK: Internal plumbing
 
-    nonisolated(unsafe) private let session: URLSession
-    nonisolated(unsafe) private let decoder: JSONDecoder
+    private let session: URLSession
+    private let decoder: JSONDecoder
 
     /// Base URL derived from configuration (e.g. `https://192.168.1.10:9876`).
     public var baseURL: String {

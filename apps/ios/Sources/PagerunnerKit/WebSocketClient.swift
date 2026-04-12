@@ -141,7 +141,7 @@ public final class WebSocketClient {
         while !Task.isCancelled {
             do {
                 let message = try await task.receive()
-                await handleMessage(message)
+                handleMessage(message)
             } catch {
                 // WebSocket closed or errored
                 break
@@ -149,7 +149,7 @@ public final class WebSocketClient {
         }
 
         // If we get here, the connection dropped
-        await handleDisconnect()
+        handleDisconnect()
     }
 
     @MainActor
@@ -221,7 +221,7 @@ public final class WebSocketClient {
         reconnectTask = Task { [weak self] in
             try? await Task.sleep(for: .seconds(delay))
             guard !Task.isCancelled else { return }
-            await self?.performConnect()
+            self?.performConnect()
         }
     }
 }
