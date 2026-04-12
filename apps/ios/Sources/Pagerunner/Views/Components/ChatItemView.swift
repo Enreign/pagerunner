@@ -15,6 +15,8 @@ struct ChatItemView: View {
             toolCallRow(name: name, args: args, sessionId: sid, targetId: tid)
         case .toolResult(_, _, let summary, let isError):
             toolResultRow(summary: summary, isError: isError)
+        case .screenshot(_, let base64, let sid, let tid):
+            screenshotCard(base64: base64, sessionId: sid, targetId: tid)
         case .agentDone(_, let summary):
             doneRow(summary)
         case .approval(_, _, let action, let description):
@@ -43,8 +45,7 @@ struct ChatItemView: View {
     private func thinkingRow(_ text: String) -> some View {
         HStack(alignment: .top, spacing: 10) {
             agentAvatar
-            Text(text)
-                .font(.callout)
+            markdownText(text)
                 .italic()
                 .foregroundStyle(.secondary)
             Spacer(minLength: 40)
@@ -56,9 +57,7 @@ struct ChatItemView: View {
             agentAvatar
             VStack(alignment: .leading, spacing: 6) {
                 if !summary.isEmpty {
-                    Text(summary)
-                        .font(.callout)
-                        .foregroundStyle(.primary)
+                    markdownText(summary)
                 }
                 HStack(spacing: 6) {
                     Image(systemName: "checkmark.circle.fill")
@@ -71,6 +70,25 @@ struct ChatItemView: View {
             }
             Spacer(minLength: 40)
         }
+    }
+
+    /// Render Markdown-ish text the way iMessage/Linear/Claude do: bold,
+    /// italics, inline code, and bullet lists. Falls back to plain text if
+    /// the parser rejects the string.
+    private func markdownText(_ raw: String) -> some View {
+        let opts = AttributedString.MarkdownParsingOptions(
+            interpretedSyntax: .inlineOnlyPreservingWhitespace
+        )
+        let attr: AttributedString
+        if let parsed = try? AttributedString(markdown: raw, options: opts) {
+            attr = parsed
+        } else {
+            attr = AttributedString(raw)
+        }
+        return Text(attr)
+            .font(.callout)
+            .foregroundStyle(.primary)
+            .textSelection(.enabled)
     }
 
     // MARK: Tool
@@ -125,6 +143,57 @@ struct ChatItemView: View {
             Spacer(minLength: 0)
         }
         .padding(.horizontal, Theme.Spacing.regular)
+    }
+
+    private func screenshotCard(base64: String, sessionId: String?, targetId: String?) -> some View {
+        let img: UIImage? = {
+            let stripped: String = {
+                if let r = base64.range(of: ";base64,") { return String(base64[r.upperBound...]) }
+                return base64
+            }()
+            guard let data = Data(base64Encoded: stripped) else { return nil }
+            return UIImage(data: data)
+        }()
+
+        return HStack(alignment: .top, spacing: 10) {
+            agentAvatar
+            Button {
+                if let sid = sessionId {
+                    onOpenInspector(.init(sessionId: sid, targetId: targetId))
+                }
+            } label: {
+                VStack(alignment: .leading, spacing: 6) {
+                    if let img {
+                        Image(uiImage: img)
+                            .resizable()
+                            .scaledToFit()
+                            .frame(maxWidth: .infinity)
+                            .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.chip, style: .continuous))
+                    } else {
+                        RoundedRectangle(cornerRadius: Theme.Radius.chip, style: .continuous)
+                            .fill(.operatorCard)
+                            .frame(height: 160)
+                            .overlay(Image(systemName: "photo").foregroundStyle(.secondary))
+                    }
+                    HStack(spacing: 4) {
+                        Image(systemName: "camera.fill").font(.caption2)
+                        Text("screenshot")
+                            .font(.caption)
+                        if sessionId != nil {
+                            Spacer()
+                            Text("tap to inspect")
+                                .font(.caption2)
+                                .foregroundStyle(.tertiary)
+                            Image(systemName: "chevron.right")
+                                .font(.caption2)
+                                .foregroundStyle(.tertiary)
+                        }
+                    }
+                    .foregroundStyle(.secondary)
+                }
+            }
+            .buttonStyle(.plain)
+        }
     }
 
     private func errorRow(_ message: String) -> some View {

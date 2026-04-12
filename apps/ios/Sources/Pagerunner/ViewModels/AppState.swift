@@ -129,38 +129,43 @@ final class AppState {
 
     /// Add a user-authored message to the transcript and kick off the agent.
     /// The HTTP call blocks until the agent finishes; live events continue to
-    /// stream in via the WebSocket. We also push the HTTP summary as a
-    /// fallback in case the WebSocket missed the `done` event.
+    /// stream in via the WebSocket. The HTTP summary is always appended as
+    /// the canonical "done" for this turn — duplicate-suppression happened
+    /// before by looking at the last few items, but that incorrectly
+    /// swallowed every follow-up message whose previous turn had a done.
     func sendUserMessage(_ text: String) async {
         guard let client = connection.apiClient else { return }
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
 
+        let turnMarker = chatItems.count
         chatItems.append(.user(id: UUID(), text: trimmed, sent: .now))
         isAgentRunning = true
         defer { isAgentRunning = false }
 
         do {
             let response = try await client.callTool("agent_run", args: ["goal": trimmed])
-            if let summary = response.result?["summary"]?.stringValue, !summary.isEmpty,
-               !chatItemsHasRecentDone() {
-                chatItems.append(.agentDone(id: UUID(), summary: summary))
-            } else if let err = response.error {
+
+            // If the WebSocket already appended a .agentDone for this turn
+            // (any item added after turnMarker), skip the HTTP duplicate.
+            let wsDoneThisTurn = chatItems[turnMarker...].contains { item in
+                if case .agentDone = item { return true }
+                return false
+            }
+
+            if let err = response.error, !err.isEmpty {
                 chatItems.append(.error(id: UUID(), message: err))
+            } else if let summary = response.result?["summary"]?.stringValue,
+                      !summary.isEmpty, !wsDoneThisTurn {
+                chatItems.append(.agentDone(id: UUID(), summary: summary))
+            } else if !wsDoneThisTurn {
+                // Fallback: agent finished but returned no summary. Surface
+                // something so the user sees the turn completed.
+                chatItems.append(.agentDone(id: UUID(), summary: ""))
             }
         } catch {
             chatItems.append(.error(id: UUID(), message: error.localizedDescription))
         }
-    }
-
-    /// True if the last few chat items already include an agent-done marker —
-    /// avoids doubling up when both the WebSocket and the HTTP response
-    /// report completion.
-    private func chatItemsHasRecentDone() -> Bool {
-        for item in chatItems.suffix(6).reversed() {
-            if case .agentDone = item { return true }
-        }
-        return false
     }
 
     var isAgentRunning = false

@@ -8,6 +8,7 @@ enum ChatItem: Identifiable, Sendable {
     case agentThinking(id: UUID, text: String)
     case toolCall(id: UUID, name: String, args: String, sessionId: String?, targetId: String?)
     case toolResult(id: UUID, name: String, summary: String, isError: Bool)
+    case screenshot(id: UUID, base64: String, sessionId: String?, targetId: String?)
     case agentDone(id: UUID, summary: String)
     case approval(id: UUID, runId: String, action: String, description: String)
     case error(id: UUID, message: String)
@@ -18,6 +19,7 @@ enum ChatItem: Identifiable, Sendable {
              .agentThinking(let id, _),
              .toolCall(let id, _, _, _, _),
              .toolResult(let id, _, _, _),
+             .screenshot(let id, _, _, _),
              .agentDone(let id, _),
              .approval(let id, _, _, _),
              .error(let id, _):
@@ -45,6 +47,11 @@ extension ChatItem {
                 targetId: targetIdFromArgs(dict)
             )
         case .toolResult(let name, let result, let isError):
+            // Screenshots come back as JSON carrying base64 data — render
+            // them as an inline image card instead of a text status row.
+            if name.contains("screenshot"), !isError, let base64 = extractScreenshotBase64(result) {
+                return .screenshot(id: UUID(), base64: base64, sessionId: nil, targetId: nil)
+            }
             return .toolResult(id: UUID(), name: name, summary: summarise(result), isError: isError)
         case .done(let summary):
             return .agentDone(id: UUID(), summary: summary)
@@ -74,6 +81,19 @@ extension ChatItem {
 
     private static func targetIdFromArgs(_ args: [String: AnyCodableValue]) -> String? {
         args["target_id"]?.stringValue
+    }
+
+    /// Pull the base64 payload out of a screenshot tool result. The daemon
+    /// serialises it as either `{"data": "data:image/png;base64,…"}` or
+    /// `{"base64": "…"}`.
+    private static func extractScreenshotBase64(_ result: String) -> String? {
+        guard let data = result.data(using: .utf8),
+              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        else { return nil }
+        for key in ["data", "base64", "image"] {
+            if let s = obj[key] as? String, !s.isEmpty { return s }
+        }
+        return nil
     }
 
     private static func summarise(_ result: String) -> String {
