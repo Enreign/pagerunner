@@ -104,9 +104,7 @@ struct DaemonResponse {
 /// `AgentEvent` as `{"type": "variant_name", ...}` thanks to serde
 /// `rename_all = "snake_case"` + tag.
 fn event_type(v: &serde_json::Value) -> &str {
-    v.get("type")
-        .and_then(|t| t.as_str())
-        .unwrap_or("unknown")
+    v.get("type").and_then(|t| t.as_str()).unwrap_or("unknown")
 }
 
 /// True if the transcribed text is an affirmative approval response.
@@ -247,10 +245,7 @@ pub async fn run_voice_session(config: VoiceSessionConfig) -> Result<()> {
                 }
 
                 // Terminal events end the agent run
-                if matches!(
-                    etype,
-                    "done" | "error" | "interrupted" | "budget_exceeded"
-                ) {
+                if matches!(etype, "done" | "error" | "interrupted" | "budget_exceeded") {
                     break;
                 }
 

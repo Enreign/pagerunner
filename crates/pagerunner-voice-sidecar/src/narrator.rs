@@ -106,10 +106,7 @@ mod tests {
     #[test]
     fn narrate_error() {
         let v = json!({"message": "Session expired", "recoverable": false});
-        assert_eq!(
-            narrate("error", &v),
-            Some("Error: Session expired".into())
-        );
+        assert_eq!(narrate("error", &v), Some("Error: Session expired".into()));
     }
 
     #[test]
