@@ -65,9 +65,7 @@ impl AutonomyPolicy {
     /// A pattern of `"*"` matches any tool name.  All other patterns are
     /// matched as exact strings (case-sensitive).
     fn matches_any(patterns: &[String], tool: &str) -> bool {
-        patterns
-            .iter()
-            .any(|p| p == "*" || p.as_str() == tool)
+        patterns.iter().any(|p| p == "*" || p.as_str() == tool)
     }
 }
 

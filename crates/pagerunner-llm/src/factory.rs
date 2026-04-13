@@ -105,15 +105,9 @@ fn read_api_key(env_var: &str) -> Result<String> {
 pub fn create_provider(config: &ProviderConfig) -> Result<Arc<dyn LlmProvider>> {
     match config.name.as_str() {
         "anthropic" => {
-            let env_var = config
-                .api_key_env
-                .as_deref()
-                .unwrap_or("ANTHROPIC_API_KEY");
+            let env_var = config.api_key_env.as_deref().unwrap_or("ANTHROPIC_API_KEY");
             let api_key = read_api_key(env_var)?;
-            let model = config
-                .model
-                .clone()
-                .unwrap_or_else(|| default_model_name());
+            let model = config.model.clone().unwrap_or_else(default_model_name);
             Ok(Arc::new(AnthropicProvider::new(api_key, model)))
         }
         "openai-compat" => {
@@ -123,19 +117,13 @@ pub fn create_provider(config: &ProviderConfig) -> Result<Arc<dyn LlmProvider>> 
                 .base_url
                 .clone()
                 .unwrap_or_else(|| "https://api.openai.com/v1".to_string());
-            let model = config
-                .model
-                .clone()
-                .unwrap_or_else(|| "gpt-4o".to_string());
+            let model = config.model.clone().unwrap_or_else(|| "gpt-4o".to_string());
             Ok(Arc::new(OpenAiCompatProvider::new(
                 api_key, base_url, model,
             )))
         }
         "ollama" => {
-            let model = config
-                .model
-                .clone()
-                .unwrap_or_else(|| "llama3".to_string());
+            let model = config.model.clone().unwrap_or_else(|| "llama3".to_string());
             Ok(Arc::new(OllamaProvider::new(
                 config.base_url.as_deref().map(|s| s.to_string()),
                 model,
@@ -234,8 +222,14 @@ mod tests {
         "#;
         let cfg: AgentLlmConfig = toml::from_str(toml).unwrap();
         assert_eq!(cfg.providers.len(), 2);
-        assert_eq!(cfg.providers[0].api_key_env.as_deref(), Some("MY_ANTHROPIC_KEY"));
-        assert_eq!(cfg.providers[1].base_url.as_deref(), Some("http://localhost:11434"));
+        assert_eq!(
+            cfg.providers[0].api_key_env.as_deref(),
+            Some("MY_ANTHROPIC_KEY")
+        );
+        assert_eq!(
+            cfg.providers[1].base_url.as_deref(),
+            Some("http://localhost:11434")
+        );
     }
 
     // --- Ollama creation (no env var needed) ---
@@ -275,7 +269,10 @@ mod tests {
         let cfg = ProviderConfig::new("grok");
         match create_provider(&cfg) {
             Err(LlmError::NotConfigured(msg)) => assert!(msg.contains("grok")),
-            other => panic!("expected NotConfigured, got something else: is_ok={}", other.is_ok()),
+            other => panic!(
+                "expected NotConfigured, got something else: is_ok={}",
+                other.is_ok()
+            ),
         }
     }
 

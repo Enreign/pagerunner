@@ -1329,7 +1329,9 @@ pub fn dispatch_tool<'a>(
     sessions: Arc<Mutex<SessionManager>>,
     db: Arc<crate::db::Db>,
     audit: Option<Arc<crate::audit::AuditLog>>,
-) -> std::pin::Pin<Box<dyn std::future::Future<Output = crate::error::Result<ToolResponse>> + Send + 'a>> {
+) -> std::pin::Pin<
+    Box<dyn std::future::Future<Output = crate::error::Result<ToolResponse>> + Send + 'a>,
+> {
     Box::pin(dispatch_tool_impl(tool, args, config, sessions, db, audit))
 }
 
@@ -2185,7 +2187,7 @@ async fn dispatch_tool_inner(
                                 None,
                                 format_str.to_string(),
                             );
-                            let fps = config.recording.fps.max(1).min(15);
+                            let fps = config.recording.fps.clamp(1, 15);
                             if let Ok(mut handle) = crate::recording::RecordingHandle::start(
                                 state,
                                 rec_dir,
@@ -4434,7 +4436,7 @@ async fn dispatch_tool_inner(
                 format_str.to_string(),
             );
 
-            let fps = config.recording.fps.max(1).min(10);
+            let fps = config.recording.fps.clamp(1, 10);
             let mut handle = crate::recording::RecordingHandle::start(
                 state,
                 rec_dir,
@@ -4791,7 +4793,9 @@ async fn dispatch_tool_inner(
                     config,
                     Arc::clone(&sessions),
                     Arc::clone(&db),
-                ).await {
+                )
+                .await
+                {
                     Ok(ctx) => {
                         agent_config.system_prompt_extra = Some(format!(
                             "SESSION CONTEXT (use these IDs directly):\n\
@@ -4841,7 +4845,8 @@ async fn dispatch_tool_inner(
                 interrupt_rx,
                 approval_rx,
                 run_id,
-            ).await;
+            )
+            .await;
 
             let response = serde_json::json!({
                 "outcome": format!("{:?}", result.outcome),
