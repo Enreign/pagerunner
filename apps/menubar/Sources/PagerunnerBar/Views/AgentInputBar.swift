@@ -17,13 +17,12 @@ struct AgentInputBar: View {
 
     var body: some View {
         HStack(spacing: 6) {
-            // Text field or voice listening indicator
-            if voiceActive && voiceStatus == .listening {
+            if let voiceIndicator = voiceIndicator {
                 HStack(spacing: 6) {
                     Circle()
-                        .fill(Color(red: 0.133, green: 0.773, blue: 0.369))
+                        .fill(voiceIndicator.color)
                         .frame(width: 8, height: 8)
-                    Text("Listening...")
+                    Text(voiceIndicator.text)
                         .font(.system(size: 13))
                         .foregroundColor(Color(red: 0.533, green: 0.533, blue: 0.533))
                 }
@@ -34,7 +33,7 @@ struct AgentInputBar: View {
                 .clipShape(.rect(cornerRadius: 12))
                 .overlay(
                     RoundedRectangle(cornerRadius: 12)
-                        .stroke(Color(red: 0.133, green: 0.773, blue: 0.369).opacity(0.3), lineWidth: 1)
+                        .stroke(voiceIndicator.color.opacity(0.3), lineWidth: 1)
                 )
             } else {
                 TextField(placeholder, text: $text, axis: .vertical)
@@ -82,6 +81,22 @@ struct AgentInputBar: View {
                 .buttonStyle(.plain)
                 .disabled(text.isEmpty)
             }
+        }
+    }
+
+    private var voiceIndicator: (text: String, color: Color)? {
+        guard voiceActive else { return nil }
+        switch voiceStatus {
+        case .starting:
+            return ("Starting voice…", Color(red: 0, green: 0.478, blue: 1))
+        case .listening:
+            return ("Listening…", Color(red: 0.133, green: 0.773, blue: 0.369))
+        case .processing:
+            return ("Transcribing…", Color(red: 0, green: 0.478, blue: 1))
+        case .speaking:
+            return ("Speaking…", Color(red: 0, green: 0.478, blue: 1))
+        case .idle:
+            return nil
         }
     }
 

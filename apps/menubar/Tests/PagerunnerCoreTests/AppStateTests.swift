@@ -11,6 +11,48 @@ struct AppStateTests {
         #expect(state.navigation == .agent)
     }
 
+    @Test("starting voice without a resolved binary surfaces an actionable error")
+    func startVoiceWithoutBinarySetsVoiceError() {
+        let state = AppState()
+
+        state.startVoice()
+
+        #expect(state.voiceActive == false)
+        #expect(state.voiceError != nil)
+    }
+
+    @Test("voice-first defaults use push-to-talk with the Fn trigger")
+    func voiceFirstDefaults() {
+        let state = AppState()
+
+        #expect(state.voiceMode == .pushToTalk)
+        #expect(state.globalPushToTalkEnabled)
+        #expect(state.globalHotkeyTrigger == .functionKey)
+        #expect(state.shouldShowVoiceHUD)
+        #expect(state.isVoiceHUDExpanded == false)
+    }
+
+    @Test("voice HUD becomes visible while the global hold-to-talk key is down")
+    func voiceHUDVisibilityTracksHotkey() {
+        let state = AppState()
+
+        state.globalPushToTalkPressed = true
+
+        #expect(state.shouldShowVoiceHUD)
+        #expect(state.voiceHUDTitle == "Hold to talk")
+        #expect(state.voiceHUDDetail == "Hold Fn to talk, or tap Command-Fn to start and stop dictation")
+    }
+
+    @Test("continuous dictation shortcut switches voice into always-listening mode")
+    func continuousDictationShortcutPrefersAlwaysListening() {
+        let state = AppState()
+
+        state.toggleContinuousDictation()
+
+        #expect(state.voiceMode == .alwaysListening)
+        #expect(state.voiceError != nil)
+    }
+
     @Test("checkpointsFor returns checkpoints for matching profile only")
     func checkpointsForFiltersCorrectly() {
         let state = AppState()

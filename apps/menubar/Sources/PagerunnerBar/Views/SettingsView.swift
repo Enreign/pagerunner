@@ -88,6 +88,8 @@ struct SettingsView: View {
             }
             behaviorSection
             Divider()
+            agentSection
+            Divider()
             notificationsSection
         }
         .padding(12)
@@ -177,6 +179,18 @@ struct SettingsView: View {
             Text("0.3.0")
                 .font(.system(size: 11, design: .monospaced))
                 .foregroundColor(.secondary)
+        }
+    }
+
+    @ViewBuilder
+    private var agentSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("AGENT")
+                .font(.system(size: 9, weight: .semibold))
+                .foregroundStyle(.secondary)
+                .kerning(0.5)
+
+            AgentSettingsPopover(appState: appState)
         }
     }
 

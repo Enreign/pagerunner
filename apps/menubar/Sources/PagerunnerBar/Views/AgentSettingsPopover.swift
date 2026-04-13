@@ -72,6 +72,27 @@ struct AgentSettingsPopover: View {
                     .pickerStyle(.menu)
                     .frame(maxWidth: .infinity, alignment: .leading)
                 }
+
+                controlCard("Hold to Talk") {
+                    Toggle(isOn: $appState.globalPushToTalkEnabled) {
+                        Text("Global shortcut")
+                            .font(.system(size: 11))
+                            .foregroundStyle(primaryText)
+                    }
+                    .toggleStyle(.switch)
+                    .controlSize(.small)
+                }
+
+                controlCard("Hold Key") {
+                    Picker("Hold Key", selection: $appState.globalHotkeyTrigger) {
+                        ForEach(AppState.GlobalHotkeyTrigger.allCases, id: \.self) { trigger in
+                            Text(trigger.label).tag(trigger)
+                        }
+                    }
+                    .labelsHidden()
+                    .pickerStyle(.menu)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                }
             }
 
             VStack(alignment: .leading, spacing: 8) {
@@ -80,6 +101,9 @@ struct AgentSettingsPopover: View {
                     statusChip(appState.narrationMode.label, tint: Color(red: 0.533, green: 0.533, blue: 0.533))
                     if appState.voiceMode == .pushToTalk {
                         statusChip("Push to Talk", tint: Color(red: 0.133, green: 0.773, blue: 0.369))
+                    }
+                    if appState.globalPushToTalkEnabled {
+                        statusChip(appState.globalHotkeyTrigger.label, tint: Color(red: 0.114, green: 0.114, blue: 0.122))
                     }
                 }
 
@@ -92,6 +116,12 @@ struct AgentSettingsPopover: View {
                         .font(.system(size: 11, design: .monospaced))
                         .foregroundStyle(primaryText.opacity(0.75))
                         .multilineTextAlignment(.trailing)
+                }
+
+                if appState.globalPushToTalkEnabled {
+                    Text("\(sentenceCase(appState.voiceShortcutHint)). The floating HUD appears while listening, transcribing, and speaking.")
+                        .font(.system(size: 10))
+                        .foregroundStyle(secondaryText)
                 }
 
                 if appState.voiceActive {
@@ -138,5 +168,10 @@ struct AgentSettingsPopover: View {
                 Capsule()
                     .fill(tint.opacity(0.1))
             )
+    }
+
+    private func sentenceCase(_ text: String) -> String {
+        guard let first = text.first else { return text }
+        return first.uppercased() + text.dropFirst()
     }
 }

@@ -6,7 +6,6 @@ struct AgentFeedView: View {
     @Environment(\.daemonClient) private var client
     @State private var isPressing: Bool = false
     @State private var followUpText: String = ""
-    @State private var showSettings: Bool = false
 
     private let secondaryText = Color(red: 0.533, green: 0.533, blue: 0.533)
     private let primaryText = Color(red: 0.114, green: 0.114, blue: 0.122)
@@ -18,103 +17,76 @@ struct AgentFeedView: View {
 
             ScrollViewReader { proxy in
                 ScrollView {
-                    VStack(alignment: .leading, spacing: 14) {
-                        if appState.voiceStatus == .listening && !appState.agentGoal.isEmpty {
-                            HStack(spacing: 8) {
-                                Image(systemName: "waveform")
-                                    .font(.system(size: 12, weight: .medium))
-                                    .foregroundStyle(accentBlue)
-                                Text("“\(appState.agentGoal)”")
-                                    .font(.system(size: 13))
-                                    .foregroundStyle(primaryText)
-                                    .italic()
-                            }
-                            .padding(12)
-                            .background(
-                                RoundedRectangle(cornerRadius: 12)
-                                    .fill(Color.white.opacity(0.9))
-                            )
-                            .overlay(
-                                RoundedRectangle(cornerRadius: 12)
-                                    .stroke(accentBlue.opacity(0.14), lineWidth: 0.5)
-                            )
+                    VStack(alignment: .leading, spacing: 12) {
+                        if let voiceError = appState.voiceError {
+                            voiceErrorBanner(message: voiceError)
                         }
 
-                        VStack(alignment: .leading, spacing: 10) {
-                            HStack {
-                                Text(feedTitle)
-                                    .font(.system(size: 11, weight: .semibold))
-                                    .foregroundStyle(secondaryText)
-                                    .textCase(.uppercase)
-                                    .tracking(0.5)
-                                Spacer()
-                                Text(feedStatus)
-                                    .font(.system(size: 10, weight: .medium))
-                                    .foregroundStyle(feedStatusColor)
+                        if !appState.agentGoal.isEmpty {
+                            Text(appState.agentGoal)
+                                .font(.system(size: 12))
+                                .foregroundStyle(secondaryText)
+                                .lineLimit(3)
+                                .padding(.horizontal, 2)
+                        }
+
+                        LazyVStack(alignment: .leading, spacing: 8) {
+                            ForEach(appState.agentEvents) { event in
+                                AgentEventRow(kind: event.kind)
+                                    .id(event.id)
                             }
 
-                            LazyVStack(alignment: .leading, spacing: 8) {
-                                ForEach(appState.agentEvents) { event in
-                                    AgentEventRow(kind: event.kind)
-                                        .id(event.id)
-                                }
+                            if let approval = appState.agentApproval {
+                                AgentApprovalCard(
+                                    action: approval.action,
+                                    description: approval.description,
+                                    onApprove: { appState.approveAgent(approved: true, client: client) },
+                                    onDeny: { appState.approveAgent(approved: false, client: client) }
+                                )
+                                .id("approval")
+                            }
 
-                                if let approval = appState.agentApproval {
-                                    AgentApprovalCard(
-                                        action: approval.action,
-                                        description: approval.description,
-                                        onApprove: { appState.approveAgent(approved: true, client: client) },
-                                        onDeny: { appState.approveAgent(approved: false, client: client) }
-                                    )
-                                    .id("approval")
+                            if appState.agentState == .running {
+                                HStack(spacing: 6) {
+                                    ProgressView()
+                                        .scaleEffect(0.65)
+                                        .frame(width: 12, height: 12)
+                                    Text("Working…")
+                                        .font(.system(size: 11))
+                                        .foregroundStyle(secondaryText)
                                 }
+                                .padding(.horizontal, 12)
+                                .id("spinner")
+                            }
 
-                                if appState.agentState == .running {
-                                    HStack(spacing: 6) {
-                                        ProgressView()
-                                            .scaleEffect(0.65)
-                                            .frame(width: 12, height: 12)
-                                        Text("Working through the current step…")
-                                            .font(.system(size: 11))
-                                            .foregroundStyle(secondaryText)
+                            if appState.agentState == .completed, let summary = appState.agentSummary {
+                                AgentResultCard(
+                                    summary: summary,
+                                    steps: appState.agentSteps,
+                                    tokens: appState.agentTokens,
+                                    voiceActive: appState.voiceActive,
+                                    onReplay: {
+                                        appState.voiceReplay(text: summary)
+                                    },
+                                    onCopy: {
+                                        NSPasteboard.general.clearContents()
+                                        NSPasteboard.general.setString(summary, forType: .string)
                                     }
-                                    .padding(.horizontal, 12)
-                                    .id("spinner")
-                                }
-
-                                if appState.agentState == .completed, let summary = appState.agentSummary {
-                                    AgentResultCard(
-                                        summary: summary,
-                                        steps: appState.agentSteps,
-                                        tokens: appState.agentTokens,
-                                        voiceActive: appState.voiceActive,
-                                        onReplay: {
-                                            appState.voiceReplay(text: summary)
-                                        },
-                                        onCopy: {
-                                            NSPasteboard.general.clearContents()
-                                            NSPasteboard.general.setString(summary, forType: .string)
-                                        }
-                                    )
-                                    .id("result-card")
-                                }
+                                )
+                                .id("result-card")
                             }
                         }
                         .padding(12)
                         .background(
-                            RoundedRectangle(cornerRadius: 16)
-                                .fill(Color.white.opacity(0.92))
+                            RoundedRectangle(cornerRadius: 14)
+                                .fill(Color.white.opacity(0.9))
                         )
                         .overlay(
-                            RoundedRectangle(cornerRadius: 16)
+                            RoundedRectangle(cornerRadius: 14)
                                 .stroke(Color.black.opacity(0.07), lineWidth: 0.5)
                         )
 
                         bottomBar
-
-                        if showSettings {
-                            AgentSettingsPopover(appState: appState)
-                        }
                     }
                     .padding(.horizontal, 12)
                     .padding(.vertical, 12)
@@ -137,6 +109,47 @@ struct AgentFeedView: View {
                 }
             }
         }
+    }
+
+    private func voiceErrorBanner(message: String) -> some View {
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: "mic.slash.fill")
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(Color(red: 0.937, green: 0.267, blue: 0.267))
+                .frame(width: 20, height: 20)
+                .background(
+                    Circle()
+                        .fill(Color(red: 0.937, green: 0.267, blue: 0.267).opacity(0.1))
+                )
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Voice is offline")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(primaryText)
+                Text(message)
+                    .font(.system(size: 11))
+                    .foregroundStyle(secondaryText)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            Spacer(minLength: 8)
+
+            Button("Retry") {
+                appState.retryVoice()
+            }
+            .buttonStyle(.plain)
+            .font(.system(size: 11, weight: .medium))
+            .foregroundStyle(accentBlue)
+        }
+        .padding(12)
+        .background(
+            RoundedRectangle(cornerRadius: 12)
+                .fill(Color(red: 0.937, green: 0.267, blue: 0.267).opacity(0.07))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 12)
+                .stroke(Color(red: 0.937, green: 0.267, blue: 0.267).opacity(0.14), lineWidth: 0.5)
+        )
     }
 
     @ViewBuilder
@@ -190,7 +203,6 @@ struct AgentFeedView: View {
                                 .foregroundStyle(secondaryText)
                         }
                         Spacer()
-                        controlsButton
                     }
                 }
 
@@ -233,7 +245,6 @@ struct AgentFeedView: View {
                             .font(.system(size: 11, weight: .medium))
                             .buttonStyle(.plain)
                             .foregroundStyle(accentBlue)
-                        controlsButton
                     }
                 }
 
@@ -260,7 +271,6 @@ struct AgentFeedView: View {
                         Button("New Goal") { appState.resetAgent() }
                             .font(.system(size: 12, weight: .medium))
                             .buttonStyle(.plain)
-                        controlsButton
                     }
                 }
 
@@ -270,12 +280,12 @@ struct AgentFeedView: View {
         }
         .padding(12)
         .background(
-            RoundedRectangle(cornerRadius: 16)
-                .fill(Color(red: 0, green: 0.478, blue: 1).opacity(0.05))
+            RoundedRectangle(cornerRadius: 14)
+                .fill(Color.white.opacity(0.9))
         )
         .overlay(
-            RoundedRectangle(cornerRadius: 16)
-                .stroke(Color(red: 0, green: 0.478, blue: 1).opacity(0.12), lineWidth: 0.5)
+            RoundedRectangle(cornerRadius: 14)
+                .stroke(Color.black.opacity(0.07), lineWidth: 0.5)
         )
     }
 
@@ -311,68 +321,6 @@ struct AgentFeedView: View {
             return "\(tokens / 1000)K tk"
         }
         return "\(tokens) tk"
-    }
-
-    private var controlsButton: some View {
-        Button {
-            withAnimation(.easeInOut(duration: 0.18)) {
-                showSettings.toggle()
-            }
-        } label: {
-            Label(showSettings ? "Hide controls" : "Controls", systemImage: "slider.horizontal.3")
-                .font(.system(size: 11, weight: .medium))
-                .foregroundStyle(accentBlue)
-        }
-        .buttonStyle(.plain)
-    }
-
-    private var feedTitle: String {
-        switch appState.agentState {
-        case .waitingApproval:
-            return "Approval needed"
-        case .completed:
-            return "Run summary"
-        case .error:
-            return "Run failed"
-        case .running:
-            return "Live agent feed"
-        case .idle:
-            return "Agent"
-        }
-    }
-
-    private var feedStatus: String {
-        if appState.voiceStatus == .listening {
-            return "Mic hot"
-        }
-        if appState.voiceStatus == .speaking {
-            return "Narrating"
-        }
-        switch appState.agentState {
-        case .waitingApproval:
-            return "Paused"
-        case .completed:
-            return "Complete"
-        case .error:
-            return "Needs retry"
-        case .running:
-            return "Active"
-        case .idle:
-            return "Ready"
-        }
-    }
-
-    private var feedStatusColor: Color {
-        switch appState.agentState {
-        case .waitingApproval:
-            return Color(red: 0.961, green: 0.620, blue: 0.043)
-        case .completed:
-            return Color(red: 0.133, green: 0.773, blue: 0.369)
-        case .error:
-            return Color(red: 0.937, green: 0.267, blue: 0.267)
-        case .running, .idle:
-            return accentBlue
-        }
     }
 }
 

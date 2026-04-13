@@ -315,6 +315,13 @@ pub async fn run_voice_session(config: VoiceSessionConfig) -> Result<()> {
             None => continue,
         };
 
+        let Some(goal) = maybe_extend_goal(&mut pipeline, &mic_rx, &goal).await? else {
+            if json_mode {
+                emit_json("listening", serde_json::json!({}));
+            }
+            continue;
+        };
+
         let trimmed = goal.trim();
         if trimmed.is_empty() {
             continue;
@@ -644,6 +651,132 @@ fn is_whisper_noise(text: &str) -> bool {
         || (t.len() < 3 && !t.chars().any(|c| c.is_alphabetic()))
 }
 
+fn goal_tokens(text: &str) -> Vec<String> {
+    let tokens: Vec<String> = text
+        .split_whitespace()
+        .map(|token| {
+            token
+                .trim_matches(|c: char| {
+                    !c.is_alphanumeric()
+                        && c != '.'
+                        && c != '/'
+                        && c != ':'
+                        && c != '@'
+                        && c != '-'
+                        && c != '_'
+                })
+                .to_lowercase()
+        })
+        .filter(|token| !token.is_empty())
+        .collect();
+
+    let mut index = 0;
+    while index < tokens.len() {
+        match tokens[index].as_str() {
+            "okay" | "ok" | "hey" | "hi" | "please" | "um" | "uh" | "hmm" => index += 1,
+            "can" | "could" | "would" | "will"
+                if tokens.get(index + 1).map(|t| t.as_str()) == Some("you") =>
+            {
+                index += 2
+            }
+            "i" if tokens.get(index + 1).map(|t| t.as_str()) == Some("want")
+                && tokens.get(index + 2).map(|t| t.as_str()) == Some("to") =>
+            {
+                index += 3
+            }
+            _ => break,
+        }
+    }
+
+    tokens.into_iter().skip(index).collect()
+}
+
+fn normalize_goal_fragment(text: &str) -> String {
+    goal_tokens(text).join(" ")
+}
+
+fn looks_incomplete_goal(text: &str) -> bool {
+    let normalized = normalize_goal_fragment(text);
+    matches!(
+        normalized.as_str(),
+        "" | "open"
+            | "open up"
+            | "go"
+            | "go to"
+            | "navigate"
+            | "navigate to"
+            | "search"
+            | "search for"
+            | "look"
+            | "look up"
+            | "find"
+            | "show"
+            | "show me"
+            | "click"
+            | "type"
+            | "fill"
+            | "read"
+            | "summarize"
+            | "tell me"
+            | "tell me about"
+    )
+}
+
+fn merge_goal_fragments(first: &str, second: &str) -> String {
+    let first = normalize_goal_fragment(first);
+    let second = second.trim();
+
+    match (first.is_empty(), second.is_empty()) {
+        (true, true) => String::new(),
+        (true, false) => second.to_string(),
+        (false, true) => first,
+        (false, false) => format!("{first} {second}"),
+    }
+}
+
+async fn listen_for_utterance_with_timeout(
+    pipeline: &mut VoicePipeline,
+    mic_rx: &std::sync::mpsc::Receiver<Vec<f32>>,
+    timeout: std::time::Duration,
+) -> Result<Option<String>> {
+    match tokio::time::timeout(timeout, listen_for_utterance(pipeline, mic_rx)).await {
+        Ok(result) => result,
+        Err(_) => Ok(None),
+    }
+}
+
+async fn maybe_extend_goal(
+    pipeline: &mut VoicePipeline,
+    mic_rx: &std::sync::mpsc::Receiver<Vec<f32>>,
+    initial: &str,
+) -> Result<Option<String>> {
+    let mut merged = initial.trim().to_string();
+
+    while looks_incomplete_goal(&merged) {
+        tracing::info!(goal = merged, "Utterance looks incomplete; waiting for continuation");
+
+        let Some(next) = listen_for_utterance_with_timeout(
+            pipeline,
+            mic_rx,
+            std::time::Duration::from_millis(1800),
+        )
+        .await?
+        else {
+            tracing::info!(goal = merged, "Discarding incomplete utterance without continuation");
+            return Ok(None);
+        };
+
+        let next = next.trim();
+        if next.is_empty() || is_whisper_noise(next) {
+            continue;
+        }
+
+        merged = merge_goal_fragments(&merged, next);
+    }
+
+    Ok(Some(merged))
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -690,5 +823,27 @@ mod tests {
 
         let v = serde_json::json!({"name": "navigate"});
         assert_eq!(event_type(&v), "unknown");
+    }
+
+    #[test]
+    fn test_incomplete_goal_detection() {
+        assert!(looks_incomplete_goal("okay, can you open?"));
+        assert!(looks_incomplete_goal("search for"));
+        assert!(looks_incomplete_goal("please navigate to"));
+        assert!(!looks_incomplete_goal("open openai.com"));
+        assert!(!looks_incomplete_goal("can you open google"));
+        assert!(!looks_incomplete_goal("summarize the top stories on Hacker News"));
+    }
+
+    #[test]
+    fn test_merge_goal_fragments() {
+        assert_eq!(
+            merge_goal_fragments("okay, can you open?", "openai.com"),
+            "open openai.com"
+        );
+        assert_eq!(
+            merge_goal_fragments("please go to", "linear.app and summarize my inbox"),
+            "go to linear.app and summarize my inbox"
+        );
     }
 }

@@ -411,6 +411,8 @@ private struct DiscoveredProfileRow: View {
             if let img = profile.avatarImage {
                 Image(nsImage: img)
                     .resizable()
+                    .interpolation(.high)
+                    .antialiased(true)
                     .aspectRatio(contentMode: .fill)
                     .frame(width: 32, height: 32)
                     .clipShape(Circle())

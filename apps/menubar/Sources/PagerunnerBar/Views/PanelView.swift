@@ -64,7 +64,7 @@ struct PanelView: View {
                 BottomBar(appState: appState)
             }
         }
-        .frame(width: 352)
+        .frame(width: 320)
         .foregroundColor(Color(red: 0.114, green: 0.114, blue: 0.122)) // #1d1d1f
         .colorScheme(.light)
     }
@@ -186,26 +186,22 @@ struct NavigationStrip: View {
         HStack(spacing: 0) {
             agentTab
 
-            Rectangle().fill(Color.primary.opacity(0.1)).frame(width: 0.5)
-                .padding(.vertical, 6)
-
             // Overview tab — compact secondary tab
             Button {
                 appState.navigation = .overview
             } label: {
-                VStack(spacing: 2) {
-                    Image(systemName: "square.grid.2x2")
-                        .font(.system(size: 13, weight: .medium))
-                    Text("Overview")
-                        .font(.system(size: 10, weight: appState.navigation == .overview ? .medium : .regular))
-                }
-                .foregroundStyle(appState.navigation == .overview
-                                 ? Color(red: 0, green: 0.478, blue: 1)
-                                 : Color(red: 0.4, green: 0.4, blue: 0.4))
-                .frame(width: 58)
-                .padding(.vertical, 7)
-                .contentShape(Rectangle())
+                Image(systemName: "square.grid.2x2")
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(appState.navigation == .overview
+                                     ? Color(red: 0, green: 0.478, blue: 1)
+                                     : Color(red: 0.4, green: 0.4, blue: 0.4))
+                    .frame(width: 38, height: 32)
+                    .padding(.vertical, 7)
+                    .contentShape(Rectangle())
             }
+            .background(appState.navigation == .overview
+                        ? Color(red: 0, green: 0.478, blue: 1).opacity(0.06)
+                        : Color.clear)
             .buttonStyle(.plain)
             .help("Overview")
 
@@ -257,55 +253,18 @@ struct NavigationStrip: View {
         Button {
             appState.navigation = .agent
         } label: {
-            HStack(spacing: 8) {
-                ZStack(alignment: .topTrailing) {
-                    Image(systemName: "waveform.circle.fill")
-                        .font(.system(size: 18))
-                        .foregroundStyle(appState.navigation == .agent ? Color(red: 0, green: 0.478, blue: 1) : agentAccent)
-                    if appState.agentState != .idle || appState.voiceStatus != .idle {
-                        Circle()
-                            .fill(agentAccent)
-                            .frame(width: 7, height: 7)
-                            .overlay(Circle().stroke(Color.white, lineWidth: 1.5))
-                            .offset(x: 4, y: -4)
-                    }
-                }
-
-                VStack(alignment: .leading, spacing: 1) {
-                    Text("Agent")
-                        .font(.system(size: 12, weight: .semibold))
-                    Text(agentTabSubtitle)
-                        .font(.system(size: 10))
-                }
-                .foregroundStyle(appState.navigation == .agent
-                                 ? Color(red: 0, green: 0.478, blue: 1)
-                                 : Color(red: 0.4, green: 0.4, blue: 0.4))
-            }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 7)
-            .frame(width: 112, alignment: .leading)
-            .background(
-                RoundedRectangle(cornerRadius: 9)
-                    .fill(appState.navigation == .agent
-                          ? Color(red: 0, green: 0.478, blue: 1).opacity(0.09)
-                          : Color.clear)
-            )
-            .contentShape(Rectangle())
+            Image(systemName: "waveform.circle.fill")
+                .font(.system(size: 18))
+                .foregroundStyle(appState.navigation == .agent ? Color(red: 0, green: 0.478, blue: 1) : agentAccent)
+                .frame(width: 38, height: 32)
+                .padding(.vertical, 7)
+                .contentShape(Rectangle())
         }
+        .background(appState.navigation == .agent
+                    ? Color(red: 0, green: 0.478, blue: 1).opacity(0.06)
+                    : Color.clear)
         .buttonStyle(.plain)
         .help("Pagerunner Agent")
-    }
-
-    private var agentTabSubtitle: String {
-        if appState.voiceStatus == .listening { return "Listening" }
-        if appState.voiceStatus == .speaking { return "Speaking" }
-        switch appState.agentState {
-        case .running: return "Working"
-        case .waitingApproval: return "Approve"
-        case .completed: return "Ready"
-        case .error: return "Needs retry"
-        case .idle: return "Ready"
-        }
     }
 
     private func profileTab(_ profile: Profile, index: Int, style: IconStyle) -> some View {
@@ -336,13 +295,6 @@ struct NavigationStrip: View {
             .frame(maxHeight: .infinity)
             .padding(.horizontal, 8)
             .background(isActive ? Color(red: 0, green: 0.478, blue: 1).opacity(0.06) : Color.clear)
-            .overlay(alignment: .bottom) {
-                if isActive {
-                    Rectangle()
-                        .fill(Color(red: 0, green: 0.478, blue: 1))
-                        .frame(height: 2)
-                }
-            }
         }
         .buttonStyle(.plain)
         .help(profile.displayName)

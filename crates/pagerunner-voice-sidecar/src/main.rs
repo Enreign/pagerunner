@@ -11,6 +11,7 @@ mod session;
 use clap::Parser;
 use pagerunner_voice::PipelineConfig;
 use session::VoiceSessionConfig;
+use serde_json::json;
 use std::fs::File;
 use std::io::Write;
 
@@ -39,7 +40,7 @@ struct Cli {
     wake_word: Option<String>,
 
     /// Silence timeout in seconds before ending an utterance.
-    #[arg(long, default_value = "0.3")]
+    #[arg(long, default_value = "0.6")]
     silence_timeout: f32,
 
     /// Output events as JSON lines to stdout (for integration with menu bar).
@@ -67,26 +68,31 @@ async fn main() -> anyhow::Result<()> {
         .init();
 
     let cli = Cli::parse();
+    match run(cli).await {
+        Ok(()) => Ok(()),
+        Err(error) => {
+            emit_startup_error(&error, std::env::args().any(|arg| arg == "--json"));
+            Err(error)
+        }
+    }
+}
 
+async fn run(cli: Cli) -> anyhow::Result<()> {
     // Acquire instance lock — prevents multiple sidecars fighting over the mic
     let _lock = acquire_instance_lock()?;
 
-    // Validate threshold
     if !(0.0..=1.0).contains(&cli.vad_threshold) {
         anyhow::bail!("--vad-threshold must be between 0.0 and 1.0");
     }
 
-    // Validate mode
     if !matches!(cli.mode.as_str(), "always" | "ptt") {
         anyhow::bail!("--mode must be 'always' or 'ptt'");
     }
 
-    // Validate narration
     if !matches!(cli.narration.as_str(), "full" | "summary" | "off") {
         anyhow::bail!("--narration must be 'full', 'summary', or 'off'");
     }
 
-    // Check audio devices
     if !audio::has_input_device() {
         anyhow::bail!("No microphone found. Please connect an audio input device.");
     }
@@ -121,12 +127,20 @@ async fn main() -> anyhow::Result<()> {
         "Starting voice session"
     );
 
-    if let Err(e) = session::run_voice_session(session_config).await {
-        eprintln!("error: {e}");
-        std::process::exit(1);
-    }
+    session::run_voice_session(session_config).await
+}
 
-    Ok(())
+fn emit_startup_error(error: &anyhow::Error, json_mode: bool) {
+    if json_mode {
+        println!("{}", json!({
+            "type": "error",
+            "data": {
+                "message": error.to_string(),
+            }
+        }));
+        std::io::stdout().flush().ok();
+    }
+    eprintln!("error: {error}");
 }
 
 /// Acquire an exclusive file lock to prevent multiple voice sidecar instances.

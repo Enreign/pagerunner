@@ -15,6 +15,8 @@ struct PagerunnerBarApp {
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusItemController: StatusItemController!
+    private var voiceHUDController: VoiceHUDController!
+    private var globalPushToTalkController: GlobalPushToTalkController!
     var appState = AppState()
     private var pollingService: PollingService!
     var notificationService: NotificationService?
@@ -62,6 +64,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         statusItemController = StatusItemController(appState: appState, pollingService: pollingService)
+        voiceHUDController = VoiceHUDController(appState: appState)
+        globalPushToTalkController = GlobalPushToTalkController(appState: appState)
         notificationService?.configure(appState: appState, controller: statusItemController)
         pollingService.start()
 
@@ -113,6 +117,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         for profile in toReopen where !aliveProfiles.contains(profile) {
             _ = try? await client.call(tool: "open_session", args: ["profile": profile])
         }
+    }
+
+    func applicationWillTerminate(_ notification: Notification) {
+        appState.stopVoice()
     }
 
     func poll(client: DaemonClient) async {

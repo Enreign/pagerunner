@@ -16,6 +16,8 @@
     <string>0.1.0</string>
     <key>CFBundleIconFile</key>
     <string>AppIcon</string>
+    <key>NSMicrophoneUsageDescription</key>
+    <string>Pagerunner uses the microphone so you can speak agent tasks and approvals.</string>
     <key>NSUserNotificationsUsageDescription</key>
     <string>Pagerunner notifies you about session crashes and daemon status changes.</string>
 </dict>

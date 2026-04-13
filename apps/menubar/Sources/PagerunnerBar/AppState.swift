@@ -1,6 +1,7 @@
 import Foundation
 import Observation
 import ServiceManagement
+import AVFoundation
 import PagerunnerCore
 
 /// Navigation state for the panel.
@@ -83,6 +84,32 @@ final class AppState {
         }
     }
 
+    enum GlobalHotkeyTrigger: String, CaseIterable, Sendable {
+        case functionKey = "fn"
+        case rightOption = "right_option"
+
+        var label: String {
+            switch self {
+            case .functionKey: return "Fn"
+            case .rightOption: return "Right Option"
+            }
+        }
+
+        var hint: String {
+            switch self {
+            case .functionKey: return "Hold Fn to talk"
+            case .rightOption: return "Hold Right Option to talk"
+            }
+        }
+
+        var continuousHint: String? {
+            switch self {
+            case .functionKey: return "tap Command-Fn to start and stop dictation"
+            case .rightOption: return nil
+            }
+        }
+    }
+
     enum NarrationMode: String, CaseIterable, Sendable {
         case full = "full"
         case summary = "summary"
@@ -100,7 +127,8 @@ final class AppState {
     var voiceActive: Bool = false
     var voiceProcess: Process?
     var voiceStatus: VoiceStatus = .idle
-    var voiceMode: VoiceMode = .alwaysListening {
+    var voiceError: String?
+    var voiceMode: VoiceMode = .pushToTalk {
         didSet {
             guard voiceMode != oldValue else { return }
             restartVoiceIfNeeded()
@@ -125,72 +153,90 @@ final class AppState {
     var voiceInputPipe: Pipe?
     /// Background task reading voice sidecar stdout.
     var voiceReadTask: Task<Void, Never>?
+    /// Pending async startup task while we wait on permission checks.
+    var voiceStartTask: Task<Void, Never>?
+    /// True while the global hold-to-talk key is physically held down.
+    var globalPushToTalkPressed: Bool = false
+    /// Enables the Wispr-style hold-to-talk shortcut from anywhere.
+    var globalPushToTalkEnabled: Bool = true
+    /// Which modifier key acts as the hold-to-talk trigger.
+    var globalHotkeyTrigger: GlobalHotkeyTrigger = .functionKey
+    /// Last recognised utterance, used by the floating voice HUD.
+    var voiceTranscriptPreview: String = ""
+
+    var shouldShowVoiceHUD: Bool {
+        globalPushToTalkEnabled || voiceStatus != .idle || voiceError != nil
+    }
+
+    var isVoiceHUDExpanded: Bool {
+        globalPushToTalkPressed || voiceStatus != .idle || voiceError != nil || !voiceTranscriptPreview.isEmpty
+    }
+
+    var voiceHUDTitle: String {
+        if voiceError != nil { return "Voice unavailable" }
+        switch voiceStatus {
+        case .starting: return "Starting voice"
+        case .listening: return "Listening"
+        case .processing: return "Transcribing"
+        case .speaking: return "Speaking"
+        case .idle:
+            if globalPushToTalkPressed { return "Hold to talk" }
+            return "Voice ready"
+        }
+    }
+
+    var voiceHUDDetail: String {
+        if let voiceError {
+            return voiceError
+        }
+        if !voiceTranscriptPreview.isEmpty {
+            return voiceTranscriptPreview
+        }
+        if globalPushToTalkEnabled && !voiceActive && voiceStatus == .idle {
+            return voiceShortcutHint
+        }
+        if voiceMode == .pushToTalk {
+            return voiceShortcutHint
+        }
+        return "Voice is always listening"
+    }
+
+    var voiceShortcutHint: String {
+        if let continuousHint = globalHotkeyTrigger.continuousHint {
+            return "\(globalHotkeyTrigger.hint), or \(continuousHint)"
+        }
+        return globalHotkeyTrigger.hint
+    }
 
     func startVoice() {
-        guard !voiceActive, let binary = binaryPath else { return }
-        voiceActive = true
-        voiceStatus = .starting
-
-        let voiceBinaryPath: String
-        if binary.hasSuffix("/pagerunner") {
-            voiceBinaryPath = String(binary.dropLast("/pagerunner".count)) + "/pagerunner-voice"
-        } else {
-            voiceBinaryPath = binary + "-voice"
+        guard !voiceActive, voiceStartTask == nil else { return }
+        guard let binary = binaryPath else {
+            voiceError = "Pagerunner is not installed yet. Reopen the app after installing pagerunner and pagerunner-voice."
+            return
         }
 
-        let profile = agentProfile.isEmpty ? profiles.first?.name ?? "personal" : agentProfile
-
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: voiceBinaryPath)
-        process.arguments = [
-            "--profile", profile,
-            "--json",
-            "--mode", voiceMode.rawValue,
-            "--narration", narrationMode.rawValue,
-        ]
-
-        let outPipe = Pipe()
-        process.standardOutput = outPipe
-        process.standardError = FileHandle.nullDevice
-
-        let inPipe = Pipe()
-        process.standardInput = inPipe
-        voiceInputPipe = inPipe
-
-        voiceProcess = process
-
-        voiceReadTask = Task { [weak self] in
-            do {
-                try process.run()
-            } catch {
-                await MainActor.run {
-                    self?.voiceActive = false
-                    self?.voiceStatus = .idle
-                }
-                return
-            }
-
-            let handle = outPipe.fileHandleForReading
-            do {
-                for try await line in handle.bytes.lines {
-                    guard let self, !Task.isCancelled else { break }
-                    await MainActor.run {
-                        self.handleVoiceEvent(line)
-                    }
-                }
-            } catch {
-                // Stream ended or read error — fall through to cleanup
-            }
-
-            // Process ended
+        clearVoiceError()
+        voiceStatus = .starting
+        voiceStartTask = Task { [weak self] in
+            let granted = await Self.ensureMicrophonePermission()
+            guard !Task.isCancelled else { return }
             await MainActor.run {
-                self?.voiceActive = false
-                self?.voiceStatus = .idle
+                guard let self else { return }
+                self.voiceStartTask = nil
+                guard granted else {
+                    self.voiceActive = false
+                    self.voiceStatus = .idle
+                    self.voiceError = "Allow microphone access for Pagerunner in System Settings > Privacy & Security > Microphone, then retry voice."
+                    return
+                }
+                self.launchVoiceProcess(binary: binary)
             }
         }
     }
 
-    func stopVoice() {
+    func stopVoice(clearError: Bool = false) {
+        voiceStartTask?.cancel()
+        voiceStartTask = nil
         voiceReadTask?.cancel()
         voiceReadTask = nil
         voiceProcess?.terminate()
@@ -198,12 +244,60 @@ final class AppState {
         voiceInputPipe = nil
         voiceActive = false
         voiceStatus = .idle
+        if clearError {
+            voiceError = nil
+        }
+    }
+
+    func retryVoice() {
+        stopVoice(clearError: true)
+        startVoice()
+    }
+
+    func beginGlobalPushToTalk() {
+        guard globalPushToTalkEnabled else { return }
+        globalPushToTalkPressed = true
+        clearVoiceError()
+        voiceTranscriptPreview = ""
+
+        if voiceMode != .pushToTalk {
+            voiceMode = .pushToTalk
+            if !voiceActive {
+                startVoice()
+            }
+            return
+        }
+
+        if voiceActive {
+            voicePushToTalkStart()
+        } else {
+            startVoice()
+        }
+    }
+
+    func endGlobalPushToTalk() {
+        guard globalPushToTalkPressed else { return }
+        globalPushToTalkPressed = false
+        voicePushToTalkStop()
+    }
+
+    func toggleContinuousDictation() {
+        clearVoiceError()
+        voiceTranscriptPreview = ""
+
+        if voiceMode == .alwaysListening, voiceActive || voiceStartTask != nil {
+            stopVoice(clearError: true)
+            return
+        }
+
+        voiceMode = .alwaysListening
+        startVoice()
     }
 
     private func restartVoiceIfNeeded() {
         guard voiceActive else { return }
         let muted = voiceMuted
-        stopVoice()
+        stopVoice(clearError: true)
         startVoice()
         voiceMuted = muted
     }
@@ -246,10 +340,15 @@ final class AppState {
 
         switch eventType {
         case "listening":
+            clearVoiceError()
+            if globalPushToTalkPressed || voiceMode == .pushToTalk {
+                voiceTranscriptPreview = ""
+            }
             voiceStatus = .listening
         case "utterance":
             if let text = eventData?["text"] as? String {
                 agentGoal = text
+                voiceTranscriptPreview = text
                 voiceStatus = .processing
             }
         case "agent_event":
@@ -272,9 +371,14 @@ final class AppState {
                 }
             }
         case "speaking":
+            clearVoiceError()
             voiceStatus = .speaking
         case "idle":
+            clearVoiceError()
             voiceStatus = voiceMode == .pushToTalk ? .idle : .listening
+            if voiceMode == .pushToTalk, globalPushToTalkPressed, voiceActive {
+                voicePushToTalkStart()
+            }
             // If agent was running, mark completed
             if agentState == .running || agentState == .completed {
                 if agentState != .completed && agentState != .error {
@@ -287,12 +391,119 @@ final class AppState {
             voiceStatus = .processing
         case "error":
             if let message = eventData?["message"] as? String {
-                agentState = .error
-                agentError = message
+                voiceError = message
+                voiceTranscriptPreview = ""
             }
             stopVoice()
         default:
             break
+        }
+    }
+
+    private func clearVoiceError() {
+        voiceError = nil
+    }
+
+    private func launchVoiceProcess(binary: String) {
+        stopLingeringVoiceSidecars()
+        voiceActive = true
+        voiceStatus = .starting
+        voiceTranscriptPreview = ""
+
+        let voiceBinaryPath: String
+        if binary.hasSuffix("/pagerunner") {
+            voiceBinaryPath = String(binary.dropLast("/pagerunner".count)) + "/pagerunner-voice"
+        } else {
+            voiceBinaryPath = binary + "-voice"
+        }
+
+        let profile = agentProfile.isEmpty ? profiles.first?.name ?? "personal" : agentProfile
+
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: voiceBinaryPath)
+        process.arguments = [
+            "--profile", profile,
+            "--json",
+            "--mode", voiceMode.rawValue,
+            "--narration", narrationMode.rawValue,
+        ]
+
+        let outPipe = Pipe()
+        process.standardOutput = outPipe
+        process.standardError = FileHandle.nullDevice
+
+        let inPipe = Pipe()
+        process.standardInput = inPipe
+        voiceInputPipe = inPipe
+
+        voiceProcess = process
+
+        voiceReadTask = Task { [weak self] in
+            do {
+                try process.run()
+            } catch {
+                await MainActor.run {
+                    self?.voiceActive = false
+                    self?.voiceStatus = .idle
+                    self?.voiceError = "Unable to start voice: \(error.localizedDescription)"
+                }
+                return
+            }
+
+            let handle = outPipe.fileHandleForReading
+            do {
+                for try await line in handle.bytes.lines {
+                    guard let self, !Task.isCancelled else { break }
+                    await MainActor.run {
+                        self.handleVoiceEvent(line)
+                    }
+                }
+            } catch {
+                // Stream ended or read error — fall through to cleanup
+            }
+
+            await MainActor.run {
+                if let self,
+                   self.voiceProcess === process,
+                   self.voiceActive,
+                   self.voiceError == nil,
+                   process.terminationStatus != 0
+                {
+                    self.voiceError = "Voice stopped unexpectedly. Try starting it again."
+                }
+                if let self, self.voiceProcess === process {
+                    self.voiceActive = false
+                    self.voiceStatus = .idle
+                    self.voiceProcess = nil
+                    self.voiceInputPipe = nil
+                }
+            }
+        }
+    }
+
+    /// The menu bar app owns the voice engine. If an earlier run crashed or the
+    /// app was force-quit, clear any orphaned sidecar before launching a fresh one.
+    private func stopLingeringVoiceSidecars() {
+        let pkill = Process()
+        pkill.executableURL = URL(fileURLWithPath: "/usr/bin/pkill")
+        pkill.arguments = ["-x", "pagerunner-voice"]
+        try? pkill.run()
+        pkill.waitUntilExit()
+        if pkill.terminationStatus == 0 {
+            Thread.sleep(forTimeInterval: 0.15)
+        }
+    }
+
+    private static func ensureMicrophonePermission() async -> Bool {
+        switch AVCaptureDevice.authorizationStatus(for: .audio) {
+        case .authorized:
+            return true
+        case .notDetermined:
+            return await AVCaptureDevice.requestAccess(for: .audio)
+        case .denied, .restricted:
+            return false
+        @unknown default:
+            return false
         }
     }
 
