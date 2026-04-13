@@ -28,10 +28,7 @@ fn main() {
     let spec = reader.spec();
     println!(
         "Format: {} channels, {} Hz, {:?} {}bit",
-        spec.channels,
-        spec.sample_rate,
-        spec.sample_format,
-        spec.bits_per_sample
+        spec.channels, spec.sample_rate, spec.sample_format, spec.bits_per_sample
     );
 
     // Convert to f32 mono
@@ -80,14 +77,19 @@ fn main() {
     };
 
     let duration_secs = audio_16k.len() as f32 / 16000.0;
-    println!("Audio: {:.1}s ({} samples at 16kHz)", duration_secs, audio_16k.len());
+    println!(
+        "Audio: {:.1}s ({} samples at 16kHz)",
+        duration_secs,
+        audio_16k.len()
+    );
     println!();
 
     // Load whisper model
     println!("Loading whisper-tiny model (first run downloads ~75MB)...");
     let load_start = Instant::now();
 
-    let stt = pagerunner_voice::WhisperStt::new("whisper-tiny").expect("Failed to load Whisper model");
+    let stt =
+        pagerunner_voice::WhisperStt::new("whisper-tiny").expect("Failed to load Whisper model");
     println!("Model loaded in {:.1}s", load_start.elapsed().as_secs_f32());
     println!();
 
