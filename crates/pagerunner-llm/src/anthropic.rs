@@ -64,7 +64,7 @@ impl AnthropicProvider {
             .messages
             .iter()
             .filter(|m| m.role != Role::System)
-            .map(|m| translate_message_to_anthropic(m))
+            .map(translate_message_to_anthropic)
             .collect();
 
         let model = if request.model.is_empty() {
@@ -155,14 +155,8 @@ impl AnthropicProvider {
 
         // Usage.
         let usage = body.get("usage").map_or(Usage::default(), |u| Usage {
-            input_tokens: u
-                .get("input_tokens")
-                .and_then(|v| v.as_u64())
-                .unwrap_or(0),
-            output_tokens: u
-                .get("output_tokens")
-                .and_then(|v| v.as_u64())
-                .unwrap_or(0),
+            input_tokens: u.get("input_tokens").and_then(|v| v.as_u64()).unwrap_or(0),
+            output_tokens: u.get("output_tokens").and_then(|v| v.as_u64()).unwrap_or(0),
         });
 
         // Stop reason.
@@ -261,7 +255,10 @@ pub fn parse_sse_line(line: &str) -> Option<StreamChunk> {
             // Extract initial usage (input tokens).
             let msg = event.get("message")?;
             let usage = msg.get("usage")?;
-            let input_tokens = usage.get("input_tokens").and_then(|v| v.as_u64()).unwrap_or(0);
+            let input_tokens = usage
+                .get("input_tokens")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0);
             if input_tokens > 0 {
                 Some(StreamChunk::Usage(Usage {
                     input_tokens,
@@ -303,7 +300,7 @@ fn translate_message_to_anthropic(msg: &Message) -> Value {
     let content: Vec<Value> = msg
         .content
         .iter()
-        .map(|block| translate_content_block_to_anthropic(block))
+        .map(translate_content_block_to_anthropic)
         .collect();
 
     if content.len() == 1 {
@@ -651,7 +648,9 @@ mod tests {
             "error": {"type": "authentication_error", "message": "Invalid API key"}
         });
         let err = provider().parse_response(&body).unwrap_err();
-        assert!(matches!(err, LlmError::Api { message, .. } if message.contains("Invalid API key")));
+        assert!(
+            matches!(err, LlmError::Api { message, .. } if message.contains("Invalid API key"))
+        );
     }
 
     #[test]
@@ -692,7 +691,13 @@ mod tests {
     fn sse_message_start_with_usage() {
         let line = r#"data: {"type":"message_start","message":{"usage":{"input_tokens":15,"output_tokens":0}}}"#;
         let chunk = parse_sse_line(line).unwrap();
-        assert!(matches!(chunk, StreamChunk::Usage(Usage { input_tokens: 15, .. })));
+        assert!(matches!(
+            chunk,
+            StreamChunk::Usage(Usage {
+                input_tokens: 15,
+                ..
+            })
+        ));
     }
 
     #[test]
@@ -736,9 +741,13 @@ mod tests {
     fn sse_message_delta_output_tokens() {
         let line = r#"data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":42}}"#;
         let chunk = parse_sse_line(line).unwrap();
-        assert!(
-            matches!(chunk, StreamChunk::Usage(Usage { output_tokens: 42, .. }))
-        );
+        assert!(matches!(
+            chunk,
+            StreamChunk::Usage(Usage {
+                output_tokens: 42,
+                ..
+            })
+        ));
     }
 
     #[test]

@@ -62,7 +62,9 @@ impl ToolExecutor for FakeBrowser {
                     "Clicked element matching selector '{sel}'. Page updated."
                 )))
             }
-            _ => Ok(ToolResponse::ok(&format!("Executed tool '{name}' successfully."))),
+            _ => Ok(ToolResponse::ok(&format!(
+                "Executed tool '{name}' successfully."
+            ))),
         }
     }
 
@@ -126,12 +128,10 @@ async fn main() {
     println!("{BOLD}{CYAN}╚═══════════════════════════════════════════════════════════╝{RESET}");
     println!();
 
-    let goal = std::env::args()
-        .skip(1)
-        .collect::<Vec<_>>()
-        .join(" ");
+    let goal = std::env::args().skip(1).collect::<Vec<_>>().join(" ");
     let goal = if goal.is_empty() {
-        "Go to Hacker News, get the page content, and give me a summary of the top 3 stories.".to_string()
+        "Go to Hacker News, get the page content, and give me a summary of the top 3 stories."
+            .to_string()
     } else {
         goal
     };
@@ -144,9 +144,10 @@ async fn main() {
     println!();
 
     // Real Ollama provider
-    let provider: Arc<dyn LlmProvider> = Arc::new(
-        pagerunner_llm::ollama::OllamaProvider::new(None::<String>, "qwen2.5:7b".to_string()),
-    );
+    let provider: Arc<dyn LlmProvider> = Arc::new(pagerunner_llm::ollama::OllamaProvider::new(
+        None::<String>,
+        "qwen2.5:7b".to_string(),
+    ));
 
     let executor: Arc<dyn ToolExecutor> = Arc::new(FakeBrowser);
 
@@ -175,7 +176,10 @@ async fn main() {
                     let lines: Vec<&str> = text.lines().collect();
                     let preview = if lines.len() > 6 {
                         let mut s = lines[..5].join("\n");
-                        s.push_str(&format!("\n{DIM}  ... ({} more lines){RESET}", lines.len() - 5));
+                        s.push_str(&format!(
+                            "\n{DIM}  ... ({} more lines){RESET}",
+                            lines.len() - 5
+                        ));
                         s
                     } else {
                         text
@@ -195,7 +199,11 @@ async fn main() {
                     };
                     println!("  {YELLOW}▶{RESET} {BOLD}{name}{RESET} {DIM}{display}{RESET}");
                 }
-                AgentEvent::ToolResult { name, result, is_error } => {
+                AgentEvent::ToolResult {
+                    name,
+                    result,
+                    is_error,
+                } => {
                     let icon = if is_error {
                         format!("{RED}✗{RESET}")
                     } else {
@@ -210,7 +218,9 @@ async fn main() {
                     println!();
                 }
                 AgentEvent::Done { summary, .. } => {
-                    println!("{DIM}───────────────────────────────────────────────────────────{RESET}");
+                    println!(
+                        "{DIM}───────────────────────────────────────────────────────────{RESET}"
+                    );
                     println!();
                     println!("{BOLD}{GREEN}✓ Agent completed{RESET}");
                     println!();
@@ -252,10 +262,7 @@ async fn main() {
     println!("{DIM}───────────────────────────────────────────────────────────{RESET}");
     println!(
         "{DIM}Steps: {} | Tokens: {} in + {} out | Outcome: {:?}{RESET}",
-        result.total_steps,
-        result.usage.input_tokens,
-        result.usage.output_tokens,
-        result.outcome,
+        result.total_steps, result.usage.input_tokens, result.usage.output_tokens, result.outcome,
     );
     println!();
 }

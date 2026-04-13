@@ -106,9 +106,7 @@ pub fn strip_session_params(tools: &mut [ToolSchema]) {
         }
         if let Some(req) = tool.input_schema.get_mut("required") {
             if let Some(arr) = req.as_array_mut() {
-                arr.retain(|v| {
-                    v.as_str().map_or(true, |s| !STRIP.contains(&s))
-                });
+                arr.retain(|v| v.as_str().is_none_or(|s| !STRIP.contains(&s)));
             }
         }
     }
@@ -120,10 +118,16 @@ pub fn strip_session_params(tools: &mut [ToolSchema]) {
 pub fn inject_session_params(args: &mut Value, ctx: &SessionContext) {
     if let Some(obj) = args.as_object_mut() {
         if !obj.contains_key("session_id") {
-            obj.insert("session_id".to_string(), Value::String(ctx.session_id.clone()));
+            obj.insert(
+                "session_id".to_string(),
+                Value::String(ctx.session_id.clone()),
+            );
         }
         if !obj.contains_key("target_id") {
-            obj.insert("target_id".to_string(), Value::String(ctx.target_id.clone()));
+            obj.insert(
+                "target_id".to_string(),
+                Value::String(ctx.target_id.clone()),
+            );
         }
     }
 }
@@ -170,7 +174,8 @@ pub async fn run_agent(
     // Keep original tools for session param injection checks.
     let original_tools: Vec<ToolSchema> = tool_executor.available_tools();
     // Filter to core tools if configured (reduces schema tokens sent to LLM).
-    let mut tools: Vec<ToolSchema> = filter_tools(original_tools.clone(), &config.context.core_tools);
+    let mut tools: Vec<ToolSchema> =
+        filter_tools(original_tools.clone(), &config.context.core_tools);
 
     // If session context is set, strip session_id/target_id from schemas.
     if config.session_context.is_some() {
@@ -226,8 +231,11 @@ pub async fn run_agent(
         }
 
         // 3. Build completion request
-        let mut request =
-            CompletionRequest::new(messages.clone(), &config.model, config.budget.max_tokens_per_step);
+        let mut request = CompletionRequest::new(
+            messages.clone(),
+            &config.model,
+            config.budget.max_tokens_per_step,
+        );
         request.system = Some(system_prompt.clone());
         request.tools = tools.clone();
 
@@ -282,9 +290,7 @@ pub async fn run_agent(
         if response.stop_reason == StopReason::MaxTokens {
             debug!(run_id = %run_id, "max tokens hit, continuing");
             messages.push(Message::assistant(response.content));
-            messages.push(Message::user(
-                "Continue from where you left off.",
-            ));
+            messages.push(Message::user("Continue from where you left off."));
             continue;
         }
 
@@ -317,7 +323,8 @@ pub async fn run_agent(
             match decision {
                 ToolDecision::Block => {
                     debug!(run_id = %run_id, tool = %tool_name, "tool blocked by policy");
-                    let blocked_msg = format!("Tool '{tool_name}' is blocked by the autonomy policy.");
+                    let blocked_msg =
+                        format!("Tool '{tool_name}' is blocked by the autonomy policy.");
                     emit(AgentEvent::ToolResult {
                         name: tool_name.clone(),
                         result: blocked_msg.clone(),
@@ -364,15 +371,17 @@ pub async fn run_agent(
                     };
 
                     if approved {
-                        let (_full, truncated) =
-                            execute_tool(&tool_executor, tool_name, &tool_args, config.context.max_result_chars, &emit).await;
-                        messages.push(make_tool_result_message(
-                            tool_use_id,
-                            &truncated,
-                        ));
+                        let (_full, truncated) = execute_tool(
+                            &tool_executor,
+                            tool_name,
+                            &tool_args,
+                            config.context.max_result_chars,
+                            &emit,
+                        )
+                        .await;
+                        messages.push(make_tool_result_message(tool_use_id, &truncated));
                     } else {
-                        let denied_msg =
-                            format!("Tool '{tool_name}' was denied by the user.");
+                        let denied_msg = format!("Tool '{tool_name}' was denied by the user.");
                         emit(AgentEvent::ToolResult {
                             name: tool_name.clone(),
                             result: denied_msg.clone(),
@@ -389,12 +398,15 @@ pub async fn run_agent(
                     }
                 }
                 ToolDecision::AutoApprove => {
-                    let (_full, truncated) =
-                        execute_tool(&tool_executor, tool_name, &tool_args, config.context.max_result_chars, &emit).await;
-                    messages.push(make_tool_result_message(
-                        tool_use_id,
-                        &truncated,
-                    ));
+                    let (_full, truncated) = execute_tool(
+                        &tool_executor,
+                        tool_name,
+                        &tool_args,
+                        config.context.max_result_chars,
+                        &emit,
+                    )
+                    .await;
+                    messages.push(make_tool_result_message(tool_use_id, &truncated));
                 }
             }
         }
@@ -493,17 +505,15 @@ mod tests {
             _request: CompletionRequest,
         ) -> pagerunner_llm::Result<CompletionResponse> {
             let mut responses = self.responses.lock().unwrap();
-            responses
-                .pop()
-                .unwrap_or_else(|| {
-                    Ok(CompletionResponse {
-                        content: vec![ContentBlock::Text {
-                            text: "No more responses".to_string(),
-                        }],
-                        usage: Usage::default(),
-                        stop_reason: StopReason::EndTurn,
-                    })
+            responses.pop().unwrap_or_else(|| {
+                Ok(CompletionResponse {
+                    content: vec![ContentBlock::Text {
+                        text: "No more responses".to_string(),
+                    }],
+                    usage: Usage::default(),
+                    stop_reason: StopReason::EndTurn,
                 })
+            })
         }
 
         async fn complete_stream(
@@ -549,10 +559,7 @@ mod tests {
     #[async_trait]
     impl ToolExecutor for MockExecutor {
         async fn execute(&self, name: &str, args: Value) -> Result<ToolResponse, String> {
-            self.calls
-                .lock()
-                .unwrap()
-                .push((name.to_string(), args));
+            self.calls.lock().unwrap().push((name.to_string(), args));
             Ok(self.default_response.clone())
         }
 
@@ -614,7 +621,14 @@ mod tests {
         let (event_tx, event_rx) = broadcast::channel(64);
         let (interrupt_tx, interrupt_rx) = watch::channel(false);
         let (approval_tx, approval_rx) = mpsc::channel(16);
-        (event_tx, event_rx, interrupt_tx, interrupt_rx, approval_tx, approval_rx)
+        (
+            event_tx,
+            event_rx,
+            interrupt_tx,
+            interrupt_rx,
+            approval_tx,
+            approval_rx,
+        )
     }
 
     // --- Tests ---
@@ -768,10 +782,7 @@ mod tests {
             .collect();
 
         let provider = Arc::new(MockProvider::new(responses));
-        let executor = Arc::new(MockExecutor::new(
-            make_tools(),
-            ToolResponse::ok("ok"),
-        ));
+        let executor = Arc::new(MockExecutor::new(make_tools(), ToolResponse::ok("ok")));
         let (event_tx, _event_rx, _interrupt_tx, interrupt_rx, _approval_tx, approval_rx) =
             setup_channels();
 
@@ -796,7 +807,9 @@ mod tests {
 
     #[tokio::test]
     async fn agent_handles_interrupt() {
-        let provider = Arc::new(MockProvider::new(vec![Ok(text_response("should not see this"))]));
+        let provider = Arc::new(MockProvider::new(vec![Ok(text_response(
+            "should not see this",
+        ))]));
         let executor = Arc::new(MockExecutor::new(make_tools(), ToolResponse::ok("ok")));
         let (event_tx, _event_rx, interrupt_tx, interrupt_rx, _approval_tx, approval_rx) =
             setup_channels();
@@ -930,10 +943,7 @@ mod tests {
             )),
             Ok(text_response("Clicked successfully.")),
         ]));
-        let executor = Arc::new(MockExecutor::new(
-            make_tools(),
-            ToolResponse::ok("clicked"),
-        ));
+        let executor = Arc::new(MockExecutor::new(make_tools(), ToolResponse::ok("clicked")));
         let (event_tx, _event_rx, _interrupt_tx, interrupt_rx, approval_tx, approval_rx) =
             setup_channels();
 
@@ -1053,7 +1063,10 @@ mod tests {
 
         // list_profiles should be unaffected
         let lp = &tools[1];
-        assert!(lp.input_schema["properties"].as_object().unwrap().is_empty());
+        assert!(lp.input_schema["properties"]
+            .as_object()
+            .unwrap()
+            .is_empty());
     }
 
     #[test]

@@ -4,7 +4,6 @@ on:
   push:
     branches: [main]
   pull_request:
-    branches: [main]
 
 env:
   CARGO_TERM_COLOR: always
@@ -16,8 +15,8 @@ jobs:
     name: Format
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@1.93
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt
       - name: Check formatting
@@ -27,7 +26,7 @@ jobs:
     name: Clippy
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy
@@ -39,9 +38,11 @@ jobs:
     name: Test
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
+      - name: Install test system packages
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg libasound2-dev
       - name: Run tests
         # Chrome live tests and the NER live test are #[ignore] — they require
         # a local Chrome profile and/or --features ner build + model file.
@@ -52,7 +53,7 @@ jobs:
     name: Deny
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: Install cargo-deny
         uses: taiki-e/install-action@v2
         with:

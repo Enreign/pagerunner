@@ -35,18 +35,31 @@ fn main() {
     println!("Loading: {wav_path}");
     let reader = hound::WavReader::open(&wav_path).expect("Failed to open WAV");
     let spec = reader.spec();
-    println!("Format: {}ch, {} Hz, {:?} {}bit", spec.channels, spec.sample_rate, spec.sample_format, spec.bits_per_sample);
+    println!(
+        "Format: {}ch, {} Hz, {:?} {}bit",
+        spec.channels, spec.sample_rate, spec.sample_format, spec.bits_per_sample
+    );
 
     let samples: Vec<f32> = match spec.sample_format {
         hound::SampleFormat::Int => {
             let max = (1 << (spec.bits_per_sample - 1)) as f32;
-            reader.into_samples::<i32>().filter_map(|s| s.ok()).map(|s| s as f32 / max).collect()
+            reader
+                .into_samples::<i32>()
+                .filter_map(|s| s.ok())
+                .map(|s| s as f32 / max)
+                .collect()
         }
-        hound::SampleFormat::Float => reader.into_samples::<f32>().filter_map(|s| s.ok()).collect(),
+        hound::SampleFormat::Float => reader
+            .into_samples::<f32>()
+            .filter_map(|s| s.ok())
+            .collect(),
     };
 
     let mono: Vec<f32> = if spec.channels > 1 {
-        samples.chunks(spec.channels as usize).map(|c| c[0]).collect()
+        samples
+            .chunks(spec.channels as usize)
+            .map(|c| c[0])
+            .collect()
     } else {
         samples
     };
@@ -54,20 +67,26 @@ fn main() {
     let audio_16k: Vec<f32> = if spec.sample_rate != 16000 {
         let ratio = spec.sample_rate as f64 / 16000.0;
         let new_len = (mono.len() as f64 / ratio) as usize;
-        (0..new_len).map(|i| {
-            let pos = i as f64 * ratio;
-            let idx = pos as usize;
-            let frac = pos - idx as f64;
-            let a = mono.get(idx).copied().unwrap_or(0.0);
-            let b = mono.get(idx + 1).copied().unwrap_or(a);
-            a + (b - a) * frac as f32
-        }).collect()
+        (0..new_len)
+            .map(|i| {
+                let pos = i as f64 * ratio;
+                let idx = pos as usize;
+                let frac = pos - idx as f64;
+                let a = mono.get(idx).copied().unwrap_or(0.0);
+                let b = mono.get(idx + 1).copied().unwrap_or(a);
+                a + (b - a) * frac as f32
+            })
+            .collect()
     } else {
         mono
     };
 
     let audio_duration = audio_16k.len() as f32 / 16000.0;
-    println!("Audio: {:.1}s ({} samples at 16kHz)", audio_duration, audio_16k.len());
+    println!(
+        "Audio: {:.1}s ({} samples at 16kHz)",
+        audio_duration,
+        audio_16k.len()
+    );
     println!();
 
     // ── Load models ─────────────────────────────────────────────────
@@ -77,17 +96,28 @@ fn main() {
     let t = Instant::now();
     let vad = pagerunner_voice::SileroVad::new(Some(0.5)).expect("Failed to load Silero VAD");
     let vad_time = t.elapsed();
-    println!("  ✓ Silero VAD     {:>6.1}s  (~2MB model)", vad_time.as_secs_f32());
+    println!(
+        "  ✓ Silero VAD     {:>6.1}s  (~2MB model)",
+        vad_time.as_secs_f32()
+    );
 
     let t = Instant::now();
-    let stt = pagerunner_voice::WhisperStt::new("whisper-tiny").expect("Failed to load Whisper STT");
+    let stt =
+        pagerunner_voice::WhisperStt::new("whisper-tiny").expect("Failed to load Whisper STT");
     let stt_time = t.elapsed();
-    println!("  ✓ Whisper STT    {:>6.1}s  (~77MB model, whisper-tiny)", stt_time.as_secs_f32());
+    println!(
+        "  ✓ Whisper STT    {:>6.1}s  (~77MB model, whisper-tiny)",
+        stt_time.as_secs_f32()
+    );
 
     let t = Instant::now();
-    let tts = pagerunner_voice::PiperTts::new(Some("en_US-amy-low")).expect("Failed to load Piper TTS");
+    let tts =
+        pagerunner_voice::PiperTts::new(Some("en_US-amy-low")).expect("Failed to load Piper TTS");
     let tts_time = t.elapsed();
-    println!("  ✓ Piper TTS      {:>6.1}s  (~17MB model, en_US-amy-low)", tts_time.as_secs_f32());
+    println!(
+        "  ✓ Piper TTS      {:>6.1}s  (~17MB model, en_US-amy-low)",
+        tts_time.as_secs_f32()
+    );
 
     let total_load = vad_time + stt_time + tts_time;
     println!();
@@ -96,8 +126,10 @@ fn main() {
 
     // ── Build pipeline ──────────────────────────────────────────────
     let config = pagerunner_voice::PipelineConfig::default();
-    println!("Pipeline config: silence_timeout={:.1}s, vad_chunk={}, model={}",
-        config.silence_timeout_secs, config.vad_chunk_size, config.stt_model);
+    println!(
+        "Pipeline config: silence_timeout={:.1}s, vad_chunk={}, model={}",
+        config.silence_timeout_secs, config.vad_chunk_size, config.stt_model
+    );
     println!();
 
     let mut pipeline = pagerunner_voice::VoicePipeline::with_config(stt, tts, vad, config);
@@ -106,7 +138,10 @@ fn main() {
     println!("─── Processing Audio ─────────────────────────────────────");
     println!();
 
-    let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
 
     let chunk_size = 512; // 32ms at 16kHz — matches VAD expectation
     let mut utterances: Vec<(f32, f32, String)> = Vec::new(); // (start, end, text)
@@ -149,7 +184,10 @@ fn main() {
                 let text = text.trim().to_string();
                 if !text.is_empty() {
                     let start = speech_start.map(|s| s as f32 / 16000.0).unwrap_or(0.0);
-                    println!("  [{:5.1}s → {:5.1}s] \"{}\" (flushed)", start, audio_duration, text);
+                    println!(
+                        "  [{:5.1}s → {:5.1}s] \"{}\" (flushed)",
+                        start, audio_duration, text
+                    );
                     utterances.push((start, audio_duration, text));
                 }
             }
@@ -167,7 +205,11 @@ fn main() {
     if utterances.is_empty() {
         println!("  (no utterances detected)");
     } else {
-        let full_text: String = utterances.iter().map(|(_, _, t)| t.as_str()).collect::<Vec<_>>().join(" ");
+        let full_text: String = utterances
+            .iter()
+            .map(|(_, _, t)| t.as_str())
+            .collect::<Vec<_>>()
+            .join(" ");
         println!("  Full transcription:");
         println!("  \"{}\"", full_text);
         println!();
@@ -199,8 +241,13 @@ fn main() {
                     let audio_secs = samples.len() as f32 / pipeline.tts_sample_rate() as f32;
                     total_tts_audio += audio_secs;
                     total_tts_time += elapsed;
-                    println!("  \"{}\"\n    → {:.1}s audio in {:.0}ms ({:.1}x RT)",
-                        text, audio_secs, elapsed.as_millis(), audio_secs / elapsed.as_secs_f32());
+                    println!(
+                        "  \"{}\"\n    → {:.1}s audio in {:.0}ms ({:.1}x RT)",
+                        text,
+                        audio_secs,
+                        elapsed.as_millis(),
+                        audio_secs / elapsed.as_secs_f32()
+                    );
                 }
                 Err(e) => eprintln!("  TTS error: {e}"),
             }
@@ -211,7 +258,10 @@ fn main() {
         let _ = pipeline.speak("Navigating...").await;
         let cached_time = t.elapsed();
         println!();
-        println!("  Cache hit: \"Navigating...\" → {:.0}ms (vs first call above)", cached_time.as_millis());
+        println!(
+            "  Cache hit: \"Navigating...\" → {:.0}ms (vs first call above)",
+            cached_time.as_millis()
+        );
     });
 
     println!();
@@ -220,15 +270,29 @@ fn main() {
     println!("─── Summary ──────────────────────────────────────────────");
     println!();
     println!("  Input audio:     {:.1}s", audio_duration);
-    println!("  VAD + STT time:  {:.2}s ({:.1}x realtime)", process_time.as_secs_f32(), audio_duration / process_time.as_secs_f32());
-    println!("  TTS total:       {:.1}s audio in {:.0}ms ({:.1}x realtime)",
-        total_tts_audio, total_tts_time.as_millis(), total_tts_audio / total_tts_time.as_secs_f32());
-    println!("  Model load:      {:.1}s (one-time)", total_load.as_secs_f32());
+    println!(
+        "  VAD + STT time:  {:.2}s ({:.1}x realtime)",
+        process_time.as_secs_f32(),
+        audio_duration / process_time.as_secs_f32()
+    );
+    println!(
+        "  TTS total:       {:.1}s audio in {:.0}ms ({:.1}x realtime)",
+        total_tts_audio,
+        total_tts_time.as_millis(),
+        total_tts_audio / total_tts_time.as_secs_f32()
+    );
+    println!(
+        "  Model load:      {:.1}s (one-time)",
+        total_load.as_secs_f32()
+    );
     println!();
 
     // Write first TTS output to file for playback
     rt.block_on(async {
-        if let Ok(samples) = pipeline.speak("Hello, I am the Pagerunner voice agent. How can I help you?").await {
+        if let Ok(samples) = pipeline
+            .speak("Hello, I am the Pagerunner voice agent. How can I help you?")
+            .await
+        {
             let out_path = "/tmp/pipeline_tts_output.wav";
             let spec = hound::WavSpec {
                 channels: 1,

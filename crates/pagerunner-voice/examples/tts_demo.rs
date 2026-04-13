@@ -9,10 +9,7 @@
 use std::time::Instant;
 
 fn main() {
-    let text = std::env::args()
-        .skip(1)
-        .collect::<Vec<_>>()
-        .join(" ");
+    let text = std::env::args().skip(1).collect::<Vec<_>>().join(" ");
 
     if text.is_empty() {
         eprintln!("Usage: tts_demo <text to speak>");
@@ -51,11 +48,12 @@ fn main() {
         .build()
         .unwrap();
 
-    let samples = rt.block_on(async {
-        use pagerunner_voice::TtsProvider;
-        tts.synthesize(&text).await
-    })
-    .expect("Synthesis failed");
+    let samples = rt
+        .block_on(async {
+            use pagerunner_voice::TtsProvider;
+            tts.synthesize(&text).await
+        })
+        .expect("Synthesis failed");
 
     let synth_elapsed = synth_start.elapsed();
     let sample_rate = {
@@ -86,12 +84,15 @@ fn main() {
         sample_format: hound::SampleFormat::Int,
     };
 
-    let mut writer = hound::WavWriter::create(output_path, spec).expect("Failed to create WAV file");
+    let mut writer =
+        hound::WavWriter::create(output_path, spec).expect("Failed to create WAV file");
     for &sample in &samples {
         // Clamp and convert f32 [-1, 1] to i16
         let clamped = sample.clamp(-1.0, 1.0);
         let int_sample = (clamped * 32767.0) as i16;
-        writer.write_sample(int_sample).expect("Failed to write sample");
+        writer
+            .write_sample(int_sample)
+            .expect("Failed to write sample");
     }
     writer.finalize().expect("Failed to finalize WAV");
 

@@ -432,11 +432,7 @@ mod tests {
 
     #[test]
     fn completion_request_minimal() {
-        let req = CompletionRequest::new(
-            vec![Message::user("hi")],
-            "claude-opus-4-5",
-            1024,
-        );
+        let req = CompletionRequest::new(vec![Message::user("hi")], "claude-opus-4-5", 1024);
         let v: Value = serde_json::to_value(&req).unwrap();
         assert_eq!(v["model"], "claude-opus-4-5");
         assert_eq!(v["max_tokens"], 1024);
@@ -496,7 +492,11 @@ mod tests {
 
     #[test]
     fn stop_reason_roundtrip() {
-        for sr in [StopReason::EndTurn, StopReason::ToolUse, StopReason::MaxTokens] {
+        for sr in [
+            StopReason::EndTurn,
+            StopReason::ToolUse,
+            StopReason::MaxTokens,
+        ] {
             let json = serde_json::to_string(&sr).unwrap();
             let decoded: StopReason = serde_json::from_str(&json).unwrap();
             assert_eq!(decoded, sr);

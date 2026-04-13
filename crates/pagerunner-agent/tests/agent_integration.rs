@@ -41,19 +41,15 @@ impl LlmProvider for ScriptedProvider {
         &self,
         _request: CompletionRequest,
     ) -> pagerunner_llm::Result<CompletionResponse> {
-        self.responses
-            .lock()
-            .unwrap()
-            .pop()
-            .unwrap_or_else(|| {
-                Ok(CompletionResponse {
-                    content: vec![ContentBlock::Text {
-                        text: "Fallback: no more scripted responses.".to_string(),
-                    }],
-                    usage: Usage::default(),
-                    stop_reason: StopReason::EndTurn,
-                })
+        self.responses.lock().unwrap().pop().unwrap_or_else(|| {
+            Ok(CompletionResponse {
+                content: vec![ContentBlock::Text {
+                    text: "Fallback: no more scripted responses.".to_string(),
+                }],
+                usage: Usage::default(),
+                stop_reason: StopReason::EndTurn,
             })
+        })
     }
 
     async fn complete_stream(
@@ -168,7 +164,14 @@ fn setup_channels() -> (
     let (event_tx, event_rx) = broadcast::channel(128);
     let (interrupt_tx, interrupt_rx) = watch::channel(false);
     let (approval_tx, approval_rx) = mpsc::channel(16);
-    (event_tx, event_rx, interrupt_tx, interrupt_rx, approval_tx, approval_rx)
+    (
+        event_tx,
+        event_rx,
+        interrupt_tx,
+        interrupt_rx,
+        approval_tx,
+        approval_rx,
+    )
 }
 
 /// Collect all events from a broadcast receiver (non-blocking).
@@ -239,7 +242,11 @@ async fn multi_step_browse_and_report() {
     // Outcome
     assert_eq!(result.outcome, AgentOutcome::Completed);
     assert_eq!(result.total_steps, 4);
-    assert!(result.summary.as_deref().unwrap().contains("Example Domain"));
+    assert!(result
+        .summary
+        .as_deref()
+        .unwrap()
+        .contains("Example Domain"));
 
     // Tool calls in correct order
     let calls = executor.call_log();

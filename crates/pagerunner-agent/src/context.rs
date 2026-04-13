@@ -142,9 +142,7 @@ pub fn truncate_result(result: &str, max_chars: usize) -> String {
     }
 
     // Find a clean break point — prefer line boundary
-    let cut = cleaned[..max_chars]
-        .rfind('\n')
-        .unwrap_or(max_chars);
+    let cut = cleaned[..max_chars].rfind('\n').unwrap_or(max_chars);
     let cut = cut.max(max_chars / 2); // don't cut more than half
 
     let truncated = &cleaned[..cut];
@@ -181,31 +179,30 @@ fn estimate_context_size(messages: &[Message]) -> usize {
 /// Summarize tool call arguments for compact display (e.g. "url=https://...")
 fn summarize_tool_args(input: &serde_json::Value) -> String {
     match input.as_object() {
-        Some(obj) if !obj.is_empty() => {
-            obj.iter()
-                .map(|(k, v)| {
-                    let val_str = match v {
-                        serde_json::Value::String(s) => {
-                            if s.len() > 60 {
-                                format!("{}...", &s[..57])
-                            } else {
-                                s.clone()
-                            }
+        Some(obj) if !obj.is_empty() => obj
+            .iter()
+            .map(|(k, v)| {
+                let val_str = match v {
+                    serde_json::Value::String(s) => {
+                        if s.len() > 60 {
+                            format!("{}...", &s[..57])
+                        } else {
+                            s.clone()
                         }
-                        other => {
-                            let s = other.to_string();
-                            if s.len() > 60 {
-                                format!("{}...", &s[..57])
-                            } else {
-                                s
-                            }
+                    }
+                    other => {
+                        let s = other.to_string();
+                        if s.len() > 60 {
+                            format!("{}...", &s[..57])
+                        } else {
+                            s
                         }
-                    };
-                    format!("{k}={val_str}")
-                })
-                .collect::<Vec<_>>()
-                .join(", ")
-        }
+                    }
+                };
+                format!("{k}={val_str}")
+            })
+            .collect::<Vec<_>>()
+            .join(", "),
         _ => String::new(),
     }
 }
@@ -215,7 +212,7 @@ fn summarize_tool_args(input: &serde_json::Value) -> String {
 /// Keeps the first message (user goal) and the last `keep_recent` message
 /// pairs intact. Everything in between has its tool results replaced with
 /// "[Previous: tool_name returned N chars — see above for context]".
-pub fn compact_messages(messages: &mut Vec<Message>, config: &ContextConfig) {
+pub fn compact_messages(messages: &mut [Message], config: &ContextConfig) {
     if config.max_context_chars == 0 {
         return;
     }
@@ -367,7 +364,10 @@ mod tests {
     fn truncate_result_preserves_untrusted_wrapper() {
         let wrapper = "<<<UNTRUSTED_WEB_CONTENT domain=\"example.com\">>>\nshort content\n<<<END_UNTRUSTED_WEB_CONTENT>>>";
         let r = truncate_result(wrapper, 1000);
-        assert!(r.contains("UNTRUSTED_WEB_CONTENT"), "wrapper must be preserved for prompt injection safety");
+        assert!(
+            r.contains("UNTRUSTED_WEB_CONTENT"),
+            "wrapper must be preserved for prompt injection safety"
+        );
         assert!(r.contains("short content"));
     }
 
@@ -515,7 +515,10 @@ keep_recent = 2
 
         // Old tool results (index 2, 4) should be compacted
         if let ContentBlock::ToolResult { content, .. } = &messages[2].content[0] {
-            assert!(content.contains("Compacted"), "old result should be compacted: {content}");
+            assert!(
+                content.contains("Compacted"),
+                "old result should be compacted: {content}"
+            );
             assert!(content.len() < 200);
         }
 
@@ -531,10 +534,14 @@ keep_recent = 2
         let big = "x".repeat(5000);
         let mut messages = vec![
             Message::user("goal"),
-            Message::assistant(vec![ContentBlock::Text { text: long_thinking.clone() }]),
+            Message::assistant(vec![ContentBlock::Text {
+                text: long_thinking.clone(),
+            }]),
             Message::tool_result("tu-1", &big),
             // Recent (protected)
-            Message::assistant(vec![ContentBlock::Text { text: "recent".into() }]),
+            Message::assistant(vec![ContentBlock::Text {
+                text: "recent".into(),
+            }]),
             Message::tool_result("tu-2", "recent result"),
         ];
 
@@ -570,7 +577,9 @@ keep_recent = 2
             }]),
             Message::tool_result("tu-1", &big),
             // Recent (protected)
-            Message::assistant(vec![ContentBlock::Text { text: "recent".into() }]),
+            Message::assistant(vec![ContentBlock::Text {
+                text: "recent".into(),
+            }]),
             Message::tool_result("tu-2", "recent result"),
         ];
 
@@ -600,7 +609,10 @@ keep_recent = 2
                 false
             }
         });
-        assert!(has_empty_tool_use, "should keep ToolUse with empty input for API pairing");
+        assert!(
+            has_empty_tool_use,
+            "should keep ToolUse with empty input for API pairing"
+        );
     }
 
     #[test]
@@ -655,9 +667,11 @@ keep_recent = 2
 
     #[test]
     fn filter_tools_nonexistent_names_ignored() {
-        let tools = vec![
-            pagerunner_llm::ToolSchema::new("navigate", "nav", serde_json::json!({})),
-        ];
+        let tools = vec![pagerunner_llm::ToolSchema::new(
+            "navigate",
+            "nav",
+            serde_json::json!({}),
+        )];
         let core = vec!["navigate".to_string(), "nonexistent".to_string()];
         let filtered = filter_tools(tools, &core);
         assert_eq!(filtered.len(), 1);
@@ -668,9 +682,19 @@ keep_recent = 2
     fn default_core_tools_contains_essential_browsing_tools() {
         let defaults = default_core_tools();
         for expected in &[
-            "navigate", "get_content", "screenshot", "click", "fill",
-            "scroll", "select", "type_text", "wait_for", "evaluate",
-            "list_tabs", "new_tab", "close_tab",
+            "navigate",
+            "get_content",
+            "screenshot",
+            "click",
+            "fill",
+            "scroll",
+            "select",
+            "type_text",
+            "wait_for",
+            "evaluate",
+            "list_tabs",
+            "new_tab",
+            "close_tab",
         ] {
             assert!(
                 defaults.contains(&expected.to_string()),

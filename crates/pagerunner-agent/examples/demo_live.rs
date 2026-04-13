@@ -40,9 +40,12 @@ impl DaemonExecutor {
     async fn connect(profile: String) -> std::result::Result<Self, String> {
         let home = dirs::home_dir().ok_or("no home dir")?;
         let path = home.join(".pagerunner/daemon.sock");
-        let stream = UnixStream::connect(&path)
-            .await
-            .map_err(|e| format!("Cannot connect to daemon at {:?}: {}. Is `pagerunner daemon` running?", path, e))?;
+        let stream = UnixStream::connect(&path).await.map_err(|e| {
+            format!(
+                "Cannot connect to daemon at {:?}: {}. Is `pagerunner daemon` running?",
+                path, e
+            )
+        })?;
         Ok(Self {
             stream: Mutex::new(stream),
             session_id: Mutex::new(None),
@@ -74,13 +77,16 @@ impl DaemonExecutor {
             .await
             .map_err(|e| format!("read error: {e}"))?;
 
-        let resp: Value = serde_json::from_str(line.trim())
-            .map_err(|e| format!("parse error: {e}"))?;
+        let resp: Value =
+            serde_json::from_str(line.trim()).map_err(|e| format!("parse error: {e}"))?;
 
         if let Some(err) = resp["error"].as_str() {
             Err(err.to_string())
         } else if let Some(result) = resp.get("result") {
-            Ok(result.as_str().unwrap_or(&resp["result"].to_string()).to_string())
+            Ok(result
+                .as_str()
+                .unwrap_or(&resp["result"].to_string())
+                .to_string())
         } else {
             Err("empty daemon response".into())
         }
@@ -100,20 +106,17 @@ impl DaemonExecutor {
         }
 
         // Try to find an existing alive session for this profile
-        let sessions_result = self
-            .call_daemon("list_sessions", json!({}))
-            .await?;
+        let sessions_result = self.call_daemon("list_sessions", json!({})).await?;
         let sessions: Value = serde_json::from_str(&sessions_result).unwrap_or(json!({}));
         // Response may be {"data": [...]} or just [...]
         let session_arr = sessions["data"].as_array().or_else(|| sessions.as_array());
 
-        let existing = session_arr
-            .and_then(|arr| {
-                arr.iter().find(|s| {
-                    s["profile"].as_str() == Some(&self.profile)
-                        && s["status"].as_str() == Some("alive")
-                })
-            });
+        let existing = session_arr.and_then(|arr| {
+            arr.iter().find(|s| {
+                s["profile"].as_str() == Some(&self.profile)
+                    && s["status"].as_str() == Some("alive")
+            })
+        });
 
         let sid = if let Some(session) = existing {
             eprintln!(
@@ -143,7 +146,10 @@ impl DaemonExecutor {
             if attempt > 0 {
                 tokio::time::sleep(std::time::Duration::from_millis(500)).await;
             }
-            match self.call_daemon("list_tabs", json!({"session_id": &sid})).await {
+            match self
+                .call_daemon("list_tabs", json!({"session_id": &sid}))
+                .await
+            {
                 Ok(tabs_result) => {
                     let tabs: Value = serde_json::from_str(&tabs_result).unwrap_or(json!([]));
                     if let Some(first) = tabs.as_array().and_then(|a| a.first()) {
@@ -207,9 +213,20 @@ impl ToolExecutor for DaemonExecutor {
             // Inject target_id if not present and tool needs it
             let needs_target = matches!(
                 name,
-                "navigate" | "get_content" | "screenshot" | "click" | "fill"
-                    | "type_text" | "select" | "scroll" | "evaluate" | "wait_for"
-                    | "new_tab" | "close_tab" | "save_snapshot" | "restore_snapshot"
+                "navigate"
+                    | "get_content"
+                    | "screenshot"
+                    | "click"
+                    | "fill"
+                    | "type_text"
+                    | "select"
+                    | "scroll"
+                    | "evaluate"
+                    | "wait_for"
+                    | "new_tab"
+                    | "close_tab"
+                    | "save_snapshot"
+                    | "restore_snapshot"
             );
             if needs_target && !obj.contains_key("target_id") {
                 obj.insert("target_id".into(), json!(tid));
@@ -333,8 +350,8 @@ async fn main() {
     // Provider selection priority: Anthropic → OpenRouter → OpenAI → Ollama
     let (provider, provider_name, model): (Arc<dyn LlmProvider>, String, String) =
         if let Ok(api_key) = std::env::var("ANTHROPIC_API_KEY") {
-            let model = std::env::var("LLM_MODEL")
-                .unwrap_or_else(|_| "claude-haiku-4-5-20251001".into());
+            let model =
+                std::env::var("LLM_MODEL").unwrap_or_else(|_| "claude-haiku-4-5-20251001".into());
             let p = pagerunner_llm::anthropic::AnthropicProvider::new(api_key, model.clone());
             (Arc::new(p), "Anthropic".into(), model)
         } else if let Ok(api_key) = std::env::var("OPENROUTER_API_KEY") {
@@ -423,16 +440,21 @@ async fn main() {
                 AgentEvent::ToolCall { name, args } => {
                     let args_str = serde_json::to_string(&args).unwrap_or_default();
                     // Strip session_id and target_id from display
-                    let display: String = if let Ok(mut v) = serde_json::from_str::<Value>(&args_str) {
-                        if let Some(obj) = v.as_object_mut() {
-                            obj.remove("session_id");
-                            obj.remove("target_id");
-                        }
-                        let s = serde_json::to_string(&v).unwrap_or_default();
-                        if s.len() > 80 { format!("{}...", &s[..77]) } else { s }
-                    } else {
-                        args_str
-                    };
+                    let display: String =
+                        if let Ok(mut v) = serde_json::from_str::<Value>(&args_str) {
+                            if let Some(obj) = v.as_object_mut() {
+                                obj.remove("session_id");
+                                obj.remove("target_id");
+                            }
+                            let s = serde_json::to_string(&v).unwrap_or_default();
+                            if s.len() > 80 {
+                                format!("{}...", &s[..77])
+                            } else {
+                                s
+                            }
+                        } else {
+                            args_str
+                        };
                     println!("  {YELLOW}▶{RESET} {BOLD}{name}{RESET} {DIM}{display}{RESET}");
                 }
                 AgentEvent::ToolResult {
@@ -495,10 +517,7 @@ async fn main() {
     println!("{DIM}{SEP}{RESET}");
     println!(
         "{DIM}Steps: {} | Tokens: {} in + {} out | Outcome: {:?}{RESET}",
-        result.total_steps,
-        result.usage.input_tokens,
-        result.usage.output_tokens,
-        result.outcome,
+        result.total_steps, result.usage.input_tokens, result.usage.output_tokens, result.outcome,
     );
     println!();
 }
