@@ -29,6 +29,7 @@ pub const SOCKET_SUBPATH: &str = ".pagerunner/daemon.sock";
 /// The daemon tries to parse incoming lines as `DaemonMessage` first; if that
 /// fails it falls back to the legacy `DaemonRequest` format for backward
 /// compatibility.
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum DaemonMessage {
@@ -205,7 +206,10 @@ mod tests {
         let legacy = r#"{"id":"abc","tool":"open_session","args":{"profile":"personal"}}"#;
         // Should NOT parse as DaemonMessage (requires "type" field)
         let msg_result: std::result::Result<DaemonMessage, _> = serde_json::from_str(legacy);
-        assert!(msg_result.is_err(), "legacy format should not parse as DaemonMessage");
+        assert!(
+            msg_result.is_err(),
+            "legacy format should not parse as DaemonMessage"
+        );
         // But SHOULD parse as DaemonRequest
         let req: DaemonRequest = serde_json::from_str(legacy).unwrap();
         assert_eq!(req.tool, "open_session");

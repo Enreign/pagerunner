@@ -129,8 +129,7 @@ impl OllamaProvider {
                     if args_obj.is_object() || args_obj.is_array() {
                         args_obj.clone()
                     } else if let Some(s) = args_obj.as_str() {
-                        serde_json::from_str(s)
-                            .unwrap_or(Value::Object(Default::default()))
+                        serde_json::from_str(s).unwrap_or(Value::Object(Default::default()))
                     } else {
                         Value::Object(Default::default())
                     }
@@ -147,10 +146,7 @@ impl OllamaProvider {
                 .get("prompt_eval_count")
                 .and_then(|v| v.as_u64())
                 .unwrap_or(0),
-            output_tokens: body
-                .get("eval_count")
-                .and_then(|v| v.as_u64())
-                .unwrap_or(0),
+            output_tokens: body.get("eval_count").and_then(|v| v.as_u64()).unwrap_or(0),
         };
 
         // Stop reason: Ollama uses `done_reason` ("stop", "length", etc.).
@@ -161,7 +157,10 @@ impl OllamaProvider {
         {
             "length" => StopReason::MaxTokens,
             // Ollama reports tool calls via message.tool_calls, not done_reason.
-            _ if !content_blocks.iter().all(|b| !matches!(b, ContentBlock::ToolUse { .. })) => {
+            _ if !content_blocks
+                .iter()
+                .all(|b| !matches!(b, ContentBlock::ToolUse { .. })) =>
+            {
                 StopReason::ToolUse
             }
             _ => StopReason::EndTurn,
@@ -204,10 +203,7 @@ pub fn parse_ndjson_line(line: &str) -> Option<StreamChunk> {
         return None;
     }
 
-    let done = event
-        .get("done")
-        .and_then(|d| d.as_bool())
-        .unwrap_or(false);
+    let done = event.get("done").and_then(|d| d.as_bool()).unwrap_or(false);
 
     if done {
         // Final message — may include usage.
@@ -344,10 +340,7 @@ fn translate_message_to_ollama(msg: &Message) -> Value {
             v
         }
         Role::Tool => {
-            if let Some(ContentBlock::ToolResult {
-                content, ..
-            }) = msg.content.first()
-            {
+            if let Some(ContentBlock::ToolResult { content, .. }) = msg.content.first() {
                 json!({ "role": "tool", "content": content })
             } else {
                 json!({ "role": "tool", "content": "" })
@@ -614,14 +607,16 @@ mod tests {
 
     #[test]
     fn ndjson_text_delta() {
-        let line = r#"{"model":"llama3.2","message":{"role":"assistant","content":"Hello"},"done":false}"#;
+        let line =
+            r#"{"model":"llama3.2","message":{"role":"assistant","content":"Hello"},"done":false}"#;
         let chunk = parse_ndjson_line(line).unwrap();
         assert!(matches!(chunk, StreamChunk::TextDelta { ref text } if text == "Hello"));
     }
 
     #[test]
     fn ndjson_empty_content_returns_none() {
-        let line = r#"{"model":"llama3.2","message":{"role":"assistant","content":""},"done":false}"#;
+        let line =
+            r#"{"model":"llama3.2","message":{"role":"assistant","content":""},"done":false}"#;
         assert!(parse_ndjson_line(line).is_none());
     }
 
@@ -629,9 +624,13 @@ mod tests {
     fn ndjson_done_with_usage() {
         let line = r#"{"model":"llama3.2","message":{"role":"assistant","content":""},"done":true,"done_reason":"stop","prompt_eval_count":8,"eval_count":4}"#;
         let chunk = parse_ndjson_line(line).unwrap();
-        assert!(
-            matches!(chunk, StreamChunk::Usage(Usage { input_tokens: 8, output_tokens: 4 }))
-        );
+        assert!(matches!(
+            chunk,
+            StreamChunk::Usage(Usage {
+                input_tokens: 8,
+                output_tokens: 4
+            })
+        ));
     }
 
     #[test]

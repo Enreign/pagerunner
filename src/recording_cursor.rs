@@ -76,6 +76,7 @@ pub fn move_cursor_js(x: f64, y: f64) -> String {
 }
 
 /// JavaScript to remove the cursor overlay.
+#[allow(dead_code)]
 pub const REMOVE_CURSOR_JS: &str = r#"
 (() => {
     const c = document.getElementById('__pr_cursor');
