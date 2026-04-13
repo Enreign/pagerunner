@@ -875,6 +875,7 @@ pub async fn move_recording_cursor(
 }
 
 /// Remove the recording cursor overlay.
+#[allow(dead_code)]
 pub async fn remove_recording_cursor(session: &mut Session, target_id: &str) -> Result<()> {
     let session_id = attach_to_target(session, target_id).await?;
     let _ = session
@@ -984,6 +985,7 @@ pub async fn animated_fill(
 
 /// Apply CSS zoom to the page — zooms into (x, y) at the given scale.
 /// Used during recording to auto-zoom into interaction areas.
+#[allow(dead_code)]
 pub async fn apply_css_zoom(session: &mut Session, target_id: &str, x: f64, y: f64, scale: f64) {
     if let Ok(sid) = attach_to_target(session, target_id).await {
         // Get viewport dimensions
@@ -1020,6 +1022,7 @@ pub async fn apply_css_zoom(session: &mut Session, target_id: &str, x: f64, y: f
 }
 
 /// Reset CSS zoom to normal.
+#[allow(dead_code)]
 pub async fn reset_css_zoom(session: &mut Session, target_id: &str) {
     if let Ok(sid) = attach_to_target(session, target_id).await {
         let _ = session.cdp.send_on_session(
@@ -1032,6 +1035,7 @@ pub async fn reset_css_zoom(session: &mut Session, target_id: &str) {
 
 /// Start CDP screencast — Chrome will push frames as events.
 /// Enables the Page domain first (required for screencast events).
+#[allow(dead_code)]
 pub async fn start_screencast(
     session: &mut Session,
     target_id: &str,
@@ -1067,6 +1071,7 @@ pub async fn start_screencast(
 }
 
 /// Stop CDP screencast.
+#[allow(dead_code)]
 pub async fn stop_screencast(session: &mut Session, target_id: &str) -> Result<()> {
     let session_id = attach_to_target(session, target_id).await?;
     session

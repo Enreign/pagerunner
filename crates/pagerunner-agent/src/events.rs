@@ -46,10 +46,7 @@ pub enum AgentEvent {
     },
 
     /// User responded to an approval request.
-    ApprovalResponse {
-        run_id: String,
-        approved: bool,
-    },
+    ApprovalResponse { run_id: String, approved: bool },
 
     /// The agent completed successfully.
     Done {
@@ -199,8 +196,12 @@ mod tests {
         let ev = AgentEvent::Done {
             summary: "Done".to_string(),
             artifacts: vec![
-                Artifact::Text { content: "hello".into() },
-                Artifact::Screenshot { data: vec![1, 2, 3] },
+                Artifact::Text {
+                    content: "hello".into(),
+                },
+                Artifact::Screenshot {
+                    data: vec![1, 2, 3],
+                },
             ],
         };
         let v: serde_json::Value = serde_json::to_value(&ev).unwrap();
