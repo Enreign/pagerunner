@@ -10,7 +10,7 @@ mod session;
 
 use clap::Parser;
 use pagerunner_voice::PipelineConfig;
-use session::VoiceSessionConfig;
+use session::{NarrationMode, VoiceMode, VoiceSessionConfig};
 
 #[derive(Parser)]
 #[command(
@@ -39,6 +39,18 @@ struct Cli {
     /// Silence timeout in seconds before ending an utterance.
     #[arg(long, default_value = "0.3")]
     silence_timeout: f32,
+
+    /// Emit machine-readable JSON events on stdout.
+    #[arg(long, default_value_t = false)]
+    json: bool,
+
+    /// Listening mode: always-on or push-to-talk.
+    #[arg(long, default_value = "always")]
+    mode: VoiceMode,
+
+    /// Narration level for spoken agent updates.
+    #[arg(long, default_value = "full")]
+    narration: NarrationMode,
 }
 
 #[tokio::main]
@@ -78,6 +90,9 @@ async fn main() -> anyhow::Result<()> {
         pipeline: pipeline_config,
         vad_threshold: cli.vad_threshold,
         wake_word: cli.wake_word,
+        json_output: cli.json,
+        mode: cli.mode,
+        narration: cli.narration,
     };
 
     if session_config.wake_word.is_some() {

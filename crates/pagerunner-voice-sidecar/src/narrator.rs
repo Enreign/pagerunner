@@ -5,13 +5,40 @@
 
 use serde_json::Value;
 
+fn clean_text_for_speech(text: &str) -> Option<String> {
+    let cleaned = text
+        .replace(['*', '`', '_', '#'], " ")
+        .replace('\n', " ")
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+
+    if cleaned.is_empty() {
+        None
+    } else {
+        Some(cleaned)
+    }
+}
+
+fn summarize_for_speech(text: &str) -> Option<String> {
+    let cleaned = clean_text_for_speech(text)?;
+    if cleaned.len() <= 180 {
+        Some(cleaned)
+    } else {
+        let truncated: String = cleaned.chars().take(177).collect();
+        Some(format!("{}...", truncated.trim_end()))
+    }
+}
+
 /// Convert an agent event into an optional spoken phrase.
 ///
 /// Returns `None` for events that should not be narrated (e.g. raw tool
 /// results, interruptions).
 pub fn narrate(event_type: &str, event_json: &Value) -> Option<String> {
     match event_type {
-        "thinking" => event_json["text"].as_str().map(|s| s.to_string()),
+        "thinking" => event_json["text"]
+            .as_str()
+            .and_then(clean_text_for_speech),
 
         "tool_call" => {
             let name = event_json["name"].as_str().unwrap_or("unknown");
@@ -32,14 +59,18 @@ pub fn narrate(event_type: &str, event_json: &Value) -> Option<String> {
 
         "progress" => event_json["message"].as_str().map(|s| s.to_string()),
 
-        "done" => event_json["summary"].as_str().map(|s| s.to_string()),
+        "done" => event_json["summary"]
+            .as_str()
+            .and_then(summarize_for_speech),
 
         "error" => event_json["message"]
             .as_str()
+            .and_then(clean_text_for_speech)
             .map(|s| format!("Error: {}", s)),
 
         "approval_required" => event_json["description"]
             .as_str()
+            .and_then(clean_text_for_speech)
             .map(|s| format!("Should I {}?", s)),
 
         _ => None,
@@ -127,5 +158,14 @@ mod tests {
     fn narrate_progress() {
         let v = json!({"message": "Step 3 of 5"});
         assert_eq!(narrate("progress", &v), Some("Step 3 of 5".into()));
+    }
+
+    #[test]
+    fn narrate_done_strips_markdown() {
+        let v = json!({"summary": "1. **Working on a task** that needs `browser` help."});
+        assert_eq!(
+            narrate("done", &v),
+            Some("1. Working on a task that needs browser help.".into())
+        );
     }
 }
