@@ -36,7 +36,8 @@ impl Vault {
 
         // Generate new 6-char hex nonce
         let mut bytes = [0u8; 3]; // 3 bytes = 6 hex chars
-        rand::rngs::OsRng.try_fill_bytes(&mut bytes)
+        rand::rngs::OsRng
+            .try_fill_bytes(&mut bytes)
             .expect("OsRng fill failed");
         let nonce = hex::encode(bytes);
         let token = format!("[{}:{}]", entity_type, nonce);
