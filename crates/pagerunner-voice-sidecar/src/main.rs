@@ -151,9 +151,7 @@ fn acquire_instance_lock() -> anyhow::Result<File> {
     let result = unsafe { libc::flock(fd, libc::LOCK_EX | libc::LOCK_NB) };
 
     if result != 0 {
-        anyhow::bail!(
-            "Another pagerunner-voice instance is already running. Stop it first."
-        );
+        anyhow::bail!("Another pagerunner-voice instance is already running. Stop it first.");
     }
 
     // Write PID for diagnostics

@@ -126,9 +126,7 @@ struct DaemonResponse {
 /// `AgentEvent` as `{"type": "variant_name", ...}` thanks to serde
 /// `rename_all = "snake_case"` + tag.
 fn event_type(v: &serde_json::Value) -> &str {
-    v.get("type")
-        .and_then(|t| t.as_str())
-        .unwrap_or("unknown")
+    v.get("type").and_then(|t| t.as_str()).unwrap_or("unknown")
 }
 
 /// True if the transcribed text is an affirmative approval response.
@@ -179,9 +177,8 @@ pub async fn run_voice_session(config: VoiceSessionConfig) -> Result<()> {
         match std::os::unix::net::UnixStream::connect(&sock_path) {
             Ok(_) => {} // daemon is reachable
             Err(e) => {
-                let msg = format!(
-                    "Cannot connect to daemon: {e}. Start it with: pagerunner daemon"
-                );
+                let msg =
+                    format!("Cannot connect to daemon: {e}. Start it with: pagerunner daemon");
                 if config.json {
                     emit_json("error", serde_json::json!({"message": &msg}));
                 }
@@ -279,15 +276,26 @@ pub async fn run_voice_session(config: VoiceSessionConfig) -> Result<()> {
             };
 
             match cmd.r#type.as_str() {
-                "mute" => { muted.store(true, Ordering::Relaxed); }
-                "unmute" => { muted.store(false, Ordering::Relaxed); }
+                "mute" => {
+                    muted.store(true, Ordering::Relaxed);
+                }
+                "unmute" => {
+                    muted.store(false, Ordering::Relaxed);
+                }
                 "speak" => {
                     if let Some(text) = cmd.text {
                         if !muted.load(Ordering::Relaxed) {
                             if json_mode {
                                 emit_json("speaking", serde_json::json!({"text": &text}));
                             }
-                            speak_interruptible(&mut pipeline, &text, tts_rate, &mic_rx, &interrupted).await?;
+                            speak_interruptible(
+                                &mut pipeline,
+                                &text,
+                                tts_rate,
+                                &mic_rx,
+                                &interrupted,
+                            )
+                            .await?;
                         }
                     }
                 }
@@ -357,10 +365,13 @@ pub async fn run_voice_session(config: VoiceSessionConfig) -> Result<()> {
 
                 // Emit JSON event for menu bar integration
                 if json_mode {
-                    emit_json("agent_event", serde_json::json!({
-                        "event_type": etype,
-                        "event": ev.event,
-                    }));
+                    emit_json(
+                        "agent_event",
+                        serde_json::json!({
+                            "event_type": etype,
+                            "event": ev.event,
+                        }),
+                    );
                 }
 
                 // Narrate the event (respecting narration mode)
@@ -377,8 +388,14 @@ pub async fn run_voice_session(config: VoiceSessionConfig) -> Result<()> {
                         } else {
                             println!("[Agent]: {}", phrase);
                         }
-                        speak_interruptible(&mut pipeline, &phrase, tts_rate, &mic_rx, &interrupted)
-                            .await?;
+                        speak_interruptible(
+                            &mut pipeline,
+                            &phrase,
+                            tts_rate,
+                            &mic_rx,
+                            &interrupted,
+                        )
+                        .await?;
                     }
                 }
 
@@ -386,10 +403,13 @@ pub async fn run_voice_session(config: VoiceSessionConfig) -> Result<()> {
                 if etype == "approval_required" {
                     if let Some(run_id) = &current_run_id {
                         if json_mode {
-                            emit_json("approval", serde_json::json!({
-                                "action": ev.event.get("action").and_then(|v| v.as_str()).unwrap_or("unknown"),
-                                "description": ev.event.get("description").and_then(|v| v.as_str()).unwrap_or(""),
-                            }));
+                            emit_json(
+                                "approval",
+                                serde_json::json!({
+                                    "action": ev.event.get("action").and_then(|v| v.as_str()).unwrap_or("unknown"),
+                                    "description": ev.event.get("description").and_then(|v| v.as_str()).unwrap_or(""),
+                                }),
+                            );
                         }
                         let response =
                             wait_for_approval(&mut pipeline, &mic_rx, &interrupted).await?;
@@ -401,7 +421,10 @@ pub async fn run_voice_session(config: VoiceSessionConfig) -> Result<()> {
                         });
                         conn.send(&approve_msg).await?;
                         if json_mode {
-                            emit_json("approval_response", serde_json::json!({"approved": response}));
+                            emit_json(
+                                "approval_response",
+                                serde_json::json!({"approved": response}),
+                            );
                         } else if response {
                             println!("[You]: Approved.");
                         } else {
@@ -411,10 +434,7 @@ pub async fn run_voice_session(config: VoiceSessionConfig) -> Result<()> {
                 }
 
                 // Terminal events end the agent run
-                if matches!(
-                    etype,
-                    "done" | "error" | "interrupted" | "budget_exceeded"
-                ) {
+                if matches!(etype, "done" | "error" | "interrupted" | "budget_exceeded") {
                     break;
                 }
 
@@ -445,8 +465,12 @@ pub async fn run_voice_session(config: VoiceSessionConfig) -> Result<()> {
         // Drain any pending stdin commands (e.g. stale stop_listening)
         while let Ok(cmd) = stdin_rx.try_recv() {
             match cmd.r#type.as_str() {
-                "mute" => { muted.store(true, Ordering::Relaxed); }
-                "unmute" => { muted.store(false, Ordering::Relaxed); }
+                "mute" => {
+                    muted.store(true, Ordering::Relaxed);
+                }
+                "unmute" => {
+                    muted.store(false, Ordering::Relaxed);
+                }
                 _ => {}
             }
         }
