@@ -6,7 +6,9 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 use async_trait::async_trait;
-use whisper_rs::{FullParams, SamplingStrategy, WhisperContext, WhisperContextParameters, WhisperState};
+use whisper_rs::{
+    FullParams, SamplingStrategy, WhisperContext, WhisperContextParameters, WhisperState,
+};
 
 use crate::stt::{Result as SttResult, SttProvider};
 use crate::VoiceError;
@@ -185,12 +187,13 @@ impl WhisperStt {
         })?;
 
         let model_path = ensure_model(info)?;
-        let model_path_str = model_path.to_str().ok_or_else(|| {
-            VoiceError::Stt("model path contains invalid UTF-8".to_string())
-        })?;
+        let model_path_str = model_path
+            .to_str()
+            .ok_or_else(|| VoiceError::Stt("model path contains invalid UTF-8".to_string()))?;
 
-        let ctx = WhisperContext::new_with_params(model_path_str, WhisperContextParameters::default())
-            .map_err(|e| VoiceError::Stt(format!("failed to load whisper model: {e}")))?;
+        let ctx =
+            WhisperContext::new_with_params(model_path_str, WhisperContextParameters::default())
+                .map_err(|e| VoiceError::Stt(format!("failed to load whisper model: {e}")))?;
 
         let ctx = Box::new(ctx);
 

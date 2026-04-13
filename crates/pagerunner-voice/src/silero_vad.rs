@@ -133,10 +133,7 @@ impl SileroVad {
     /// Create a new Silero VAD from a model file path (skips download).
     ///
     /// Useful for testing or when the model is bundled with the application.
-    pub fn from_file(
-        model_path: &Path,
-        threshold: Option<f32>,
-    ) -> Result<Self, VoiceError> {
+    pub fn from_file(model_path: &Path, threshold: Option<f32>) -> Result<Self, VoiceError> {
         crate::runtime::ensure_ort_initialized();
 
         let session = Session::builder()
@@ -254,7 +251,12 @@ impl VadDetector for SileroVad {
         match self.infer(&input_with_context, sample_rate) {
             Ok(prob) => {
                 self.speaking = prob > self.threshold;
-                tracing::trace!(prob = prob, threshold = self.threshold, speaking = self.speaking, "silero VAD");
+                tracing::trace!(
+                    prob = prob,
+                    threshold = self.threshold,
+                    speaking = self.speaking,
+                    "silero VAD"
+                );
                 self.speaking
             }
             Err(e) => {

@@ -16,7 +16,9 @@ fn main() {
         eprintln!("Usage: vad_demo <path-to-wav>");
         eprintln!();
         eprintln!("Generate test audio:");
-        eprintln!("  say -o /tmp/test.aiff \"Hello world, this is a test of voice activity detection.\"");
+        eprintln!(
+            "  say -o /tmp/test.aiff \"Hello world, this is a test of voice activity detection.\""
+        );
         eprintln!("  afconvert /tmp/test.aiff /tmp/test.wav -d LEI16 -f WAVE -c 1 --mix");
         std::process::exit(1);
     });
@@ -28,10 +30,7 @@ fn main() {
     let spec = reader.spec();
     println!(
         "Format: {} channels, {} Hz, {:?} {}bit",
-        spec.channels,
-        spec.sample_rate,
-        spec.sample_format,
-        spec.bits_per_sample
+        spec.channels, spec.sample_rate, spec.sample_format, spec.bits_per_sample
     );
 
     // Convert to f32 mono
@@ -99,10 +98,7 @@ fn main() {
 
     let mut vad =
         pagerunner_voice::SileroVad::new(Some(threshold)).expect("Failed to load Silero VAD model");
-    println!(
-        "Model loaded in {:.1}s",
-        load_start.elapsed().as_secs_f32()
-    );
+    println!("Model loaded in {:.1}s", load_start.elapsed().as_secs_f32());
     println!();
 
     // Process audio in 512-sample chunks (32ms at 16kHz)
@@ -134,7 +130,11 @@ fn main() {
             // Speech ended
             if let Some(start) = speech_start.take() {
                 segments.push((start, time_sec));
-                println!("  [{:6.2}s] SPEECH END   (duration: {:.2}s)", time_sec, time_sec - start);
+                println!(
+                    "  [{:6.2}s] SPEECH END   (duration: {:.2}s)",
+                    time_sec,
+                    time_sec - start
+                );
             }
         }
 
@@ -169,8 +169,12 @@ fn main() {
 
     let total_speech: f32 = segments.iter().map(|(s, e)| e - s).sum();
     println!();
-    println!("Total speech: {:.2}s / {:.2}s ({:.0}%)",
-        total_speech, duration_secs, total_speech / duration_secs * 100.0);
+    println!(
+        "Total speech: {:.2}s / {:.2}s ({:.0}%)",
+        total_speech,
+        duration_secs,
+        total_speech / duration_secs * 100.0
+    );
     println!(
         "Processing time: {:.2}s ({:.0}x realtime)",
         elapsed.as_secs_f32(),

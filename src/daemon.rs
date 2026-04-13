@@ -406,10 +406,15 @@ impl pagerunner_agent::ToolExecutor for DaemonToolExecutor {
                     return None;
                 }
                 let description = v.get("description")?.as_str()?.to_string();
-                let input_schema = v.get("inputSchema").cloned().unwrap_or_else(|| {
-                    serde_json::json!({"type": "object"})
-                });
-                Some(pagerunner_llm::ToolSchema::new(name, description, input_schema))
+                let input_schema = v
+                    .get("inputSchema")
+                    .cloned()
+                    .unwrap_or_else(|| serde_json::json!({"type": "object"}));
+                Some(pagerunner_llm::ToolSchema::new(
+                    name,
+                    description,
+                    input_schema,
+                ))
             })
             .collect()
     }
@@ -437,7 +442,8 @@ pub async fn prepare_session_context(
     let existing = {
         let mut mgr = sessions.lock().await;
         let list = mgr.list();
-        list.into_iter().find(|s| s.profile_name == profile_name && s.alive)
+        list.into_iter()
+            .find(|s| s.profile_name == profile_name && s.alive)
     };
 
     let session_id = if let Some(s) = existing {
@@ -452,7 +458,9 @@ pub async fn prepare_session_context(
             Arc::clone(&sessions),
             Arc::clone(&db),
             None,
-        ).await.map_err(|e| format!("open_session failed: {e}"))?;
+        )
+        .await
+        .map_err(|e| format!("open_session failed: {e}"))?;
 
         let parsed: serde_json::Value = serde_json::from_str(&result.result)
             .map_err(|e| format!("parse open_session response: {e}"))?;
@@ -476,11 +484,16 @@ pub async fn prepare_session_context(
             Arc::clone(&sessions),
             Arc::clone(&db),
             None,
-        ).await;
+        )
+        .await;
 
         if let Ok(tr) = tabs_result {
             if let Ok(tabs) = serde_json::from_str::<serde_json::Value>(&tr.result) {
-                if let Some(first) = tabs["data"].as_array().or(tabs.as_array()).and_then(|a| a.first()) {
+                if let Some(first) = tabs["data"]
+                    .as_array()
+                    .or(tabs.as_array())
+                    .and_then(|a| a.first())
+                {
                     target_id = first["target_id"].as_str().map(|s| s.to_string());
                     current_url = first["url"].as_str().map(|s| s.to_string());
                     if target_id.is_some() {
@@ -500,10 +513,11 @@ pub async fn prepare_session_context(
             Arc::clone(&sessions),
             Arc::clone(&db),
             None,
-        ).await.map_err(|e| format!("new_tab failed: {e}"))?;
+        )
+        .await
+        .map_err(|e| format!("new_tab failed: {e}"))?;
 
-        let parsed: serde_json::Value = serde_json::from_str(&new_tab.result)
-            .unwrap_or_default();
+        let parsed: serde_json::Value = serde_json::from_str(&new_tab.result).unwrap_or_default();
         target_id = parsed["target_id"].as_str().map(|s| s.to_string());
     }
 
@@ -595,9 +609,14 @@ async fn handle_connection(
                 write_half.write_all(out.as_bytes()).await?;
             }
 
-            DaemonMessage::AgentRun { id, goal, config: agent_config_override } => {
+            DaemonMessage::AgentRun {
+                id,
+                goal,
+                config: agent_config_override,
+            } => {
                 let run_id = uuid::Uuid::new_v4().to_string();
-                let mut agent_config = agent_config_override.unwrap_or_else(|| config.agent.default_config.clone());
+                let mut agent_config =
+                    agent_config_override.unwrap_or_else(|| config.agent.default_config.clone());
 
                 // Create LLM provider
                 let llm_config = {
@@ -646,7 +665,9 @@ async fn handle_connection(
                         &config,
                         Arc::clone(&sessions),
                         Arc::clone(&db),
-                    ).await {
+                    )
+                    .await
+                    {
                         Ok(ctx) => Some(ctx),
                         Err(e) => {
                             tracing::warn!(profile = %profile_name, error = %e, "Failed to prepare session context, agent will bootstrap itself");
@@ -671,7 +692,8 @@ async fn handle_connection(
                     if let Some(url) = &ctx.current_url {
                         let url_extra = format!("Current page: {}", url);
                         agent_config.system_prompt_extra = Some(
-                            agent_config.system_prompt_extra
+                            agent_config
+                                .system_prompt_extra
                                 .map(|s| format!("{}\n\n{}", url_extra, s))
                                 .unwrap_or(url_extra),
                         );
@@ -686,17 +708,21 @@ async fn handle_connection(
                     goal
                 };
 
-                let (event_tx, mut event_rx) = broadcast::channel::<pagerunner_agent::AgentEvent>(256);
+                let (event_tx, mut event_rx) =
+                    broadcast::channel::<pagerunner_agent::AgentEvent>(256);
                 let (interrupt_tx, interrupt_rx) = watch::channel(false);
                 let (approval_tx, approval_rx) = mpsc::channel(16);
 
                 // Track this run
                 {
                     let mut runs = active_runs.lock().await;
-                    runs.insert(run_id.clone(), ActiveRun {
-                        interrupt_tx,
-                        approval_tx,
-                    });
+                    runs.insert(
+                        run_id.clone(),
+                        ActiveRun {
+                            interrupt_tx,
+                            approval_tx,
+                        },
+                    );
                 }
 
                 let run_id_clone = run_id.clone();
@@ -771,7 +797,11 @@ async fn handle_connection(
                 let _ = write_half.write_all(out.as_bytes()).await;
             }
 
-            DaemonMessage::AgentApprove { id, run_id, approved } => {
+            DaemonMessage::AgentApprove {
+                id,
+                run_id,
+                approved,
+            } => {
                 let sent = {
                     let runs = active_runs.lock().await;
                     if let Some(run) = runs.get(&run_id) {
@@ -781,9 +811,17 @@ async fn handle_connection(
                     }
                 };
                 let resp = if sent {
-                    DaemonResponse { id, result: Some("ok".into()), error: None }
+                    DaemonResponse {
+                        id,
+                        result: Some("ok".into()),
+                        error: None,
+                    }
                 } else {
-                    DaemonResponse { id, result: None, error: Some(format!("No active run: {}", run_id)) }
+                    DaemonResponse {
+                        id,
+                        result: None,
+                        error: Some(format!("No active run: {}", run_id)),
+                    }
                 };
                 let mut out = serde_json::to_string(&resp)?;
                 out.push('\n');
@@ -800,9 +838,17 @@ async fn handle_connection(
                     }
                 };
                 let resp = if sent {
-                    DaemonResponse { id, result: Some("ok".into()), error: None }
+                    DaemonResponse {
+                        id,
+                        result: Some("ok".into()),
+                        error: None,
+                    }
                 } else {
-                    DaemonResponse { id, result: None, error: Some(format!("No active run: {}", run_id)) }
+                    DaemonResponse {
+                        id,
+                        result: None,
+                        error: Some(format!("No active run: {}", run_id)),
+                    }
                 };
                 let mut out = serde_json::to_string(&resp)?;
                 out.push('\n');

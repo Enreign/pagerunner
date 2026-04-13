@@ -40,10 +40,7 @@ fn model_url(voice: &str) -> (String, String) {
     let quality = parts[2]; // e.g. low
 
     // lang_region -> lang code (before underscore)
-    let lang = lang_region
-        .split('_')
-        .next()
-        .unwrap_or("en");
+    let lang = lang_region.split('_').next().unwrap_or("en");
 
     let base = format!(
         "https://huggingface.co/rhasspy/piper-voices/resolve/main/{lang}/{lang_region}/{name}/{quality}/{voice}"
@@ -167,10 +164,7 @@ impl PiperConfig {
         if let Some(map) = root["phoneme_id_map"].as_object() {
             for (key, val) in map {
                 if let Some(arr) = val.as_array() {
-                    let ids: Vec<i64> = arr
-                        .iter()
-                        .filter_map(|v| v.as_i64())
-                        .collect();
+                    let ids: Vec<i64> = arr.iter().filter_map(|v| v.as_i64()).collect();
                     phoneme_id_map.insert(key.clone(), ids);
                 }
             }
@@ -211,7 +205,11 @@ fn find_espeak_ng() -> Result<String, VoiceError> {
     }
 
     // Fallback paths
-    for path in &["/opt/homebrew/bin/espeak-ng", "/usr/bin/espeak-ng", "/usr/local/bin/espeak-ng"] {
+    for path in &[
+        "/opt/homebrew/bin/espeak-ng",
+        "/usr/bin/espeak-ng",
+        "/usr/local/bin/espeak-ng",
+    ] {
         if std::path::Path::new(path).exists() {
             return Ok(path.to_string());
         }
@@ -315,18 +313,26 @@ impl PiperTts {
         let phonemes = phonemes.trim();
 
         if phonemes.is_empty() {
-            return Err(VoiceError::Tts("espeak-ng returned empty output".to_string()));
+            return Err(VoiceError::Tts(
+                "espeak-ng returned empty output".to_string(),
+            ));
         }
 
-        let pad_id = self.config.phoneme_id_map
+        let pad_id = self
+            .config
+            .phoneme_id_map
             .get("_")
             .cloned()
             .unwrap_or_else(|| vec![0]);
-        let bos_id = self.config.phoneme_id_map
+        let bos_id = self
+            .config
+            .phoneme_id_map
             .get("^")
             .cloned()
             .unwrap_or_else(|| vec![1]);
-        let eos_id = self.config.phoneme_id_map
+        let eos_id = self
+            .config
+            .phoneme_id_map
             .get("$")
             .cloned()
             .unwrap_or_else(|| vec![2]);
@@ -416,15 +422,13 @@ impl PiperTts {
         let scales_tensor = Tensor::from_array(scales)
             .map_err(|e| VoiceError::Tts(format!("failed to create scales tensor: {e}")))?;
 
-        let mut session = self.session.lock()
+        let mut session = self
+            .session
+            .lock()
             .map_err(|e| VoiceError::Tts(format!("session lock poisoned: {e}")))?;
 
         let outputs = session
-            .run(ort::inputs![
-                input_tensor,
-                lengths_tensor,
-                scales_tensor,
-            ])
+            .run(ort::inputs![input_tensor, lengths_tensor, scales_tensor,])
             .map_err(|e| VoiceError::Tts(format!("piper ONNX inference failed: {e}")))?;
 
         // Output shape: [1, 1, audio_length]
@@ -493,7 +497,11 @@ mod tests {
         if std::path::Path::new("/opt/homebrew/bin/espeak-ng").exists()
             || std::path::Path::new("/usr/bin/espeak-ng").exists()
         {
-            assert!(result.is_ok(), "espeak-ng should be found: {:?}", result.err());
+            assert!(
+                result.is_ok(),
+                "espeak-ng should be found: {:?}",
+                result.err()
+            );
         }
     }
 
@@ -513,7 +521,9 @@ mod tests {
     fn piper_synthesizes_audio() {
         let rt = tokio::runtime::Runtime::new().unwrap();
         let tts = PiperTts::new(None).expect("failed to load piper TTS");
-        let samples = rt.block_on(tts.synthesize("Hello world.")).expect("synthesis failed");
+        let samples = rt
+            .block_on(tts.synthesize("Hello world."))
+            .expect("synthesis failed");
         assert!(!samples.is_empty(), "synthesis produced no audio");
         assert!(
             samples.iter().any(|s| s.abs() > 0.01),
