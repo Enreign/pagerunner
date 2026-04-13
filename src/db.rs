@@ -3,7 +3,7 @@ use aes_gcm::{
     aead::{Aead, AeadCore, KeyInit, OsRng},
     Aes256Gcm, Key, Nonce,
 };
-use redb::{Database, TableDefinition};
+use redb::{Database, ReadableDatabase, TableDefinition};
 
 const TABLE: TableDefinition<&str, &[u8]> = TableDefinition::new("kv");
 
