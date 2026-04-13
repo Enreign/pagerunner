@@ -942,18 +942,3 @@ pub async fn frame_nav_processor(
         }
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn test_profile() -> ChromeProfile {
-        ChromeProfile {
-            name: "test".into(),
-            display_name: "Test".into(),
-            user_data_dir: Some("/tmp/pagerunner-test-profile".into()),
-            debug_port: None,
-            kind: None,
-        }
-    }
-}
