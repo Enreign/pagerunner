@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 /// Build an ffmpeg filter for smooth zoom from keyframes.
 /// Uses simple `between(t,...)` expressions with linear interpolation.
 /// Returns None if there are no zoom keyframes.
+#[allow(dead_code)]
 pub fn build_zoom_filter(
     keyframes: &[crate::recording::ZoomKeyframe],
     _total_duration_ms: u64,
@@ -121,7 +122,7 @@ async fn apply_zoom_keyframes(
     // Build filter_complex: for each zoom segment, create a cropped+scaled overlay
     let transition = 0.5; // transition time for fade
     let n = zoom_segments.len();
-    let mut inputs_count = n + 1; // base + one crop per segment
+    let inputs_count = n + 1; // base + one crop per segment
     let _ = inputs_count;
 
     // Build splits and crop chains
@@ -131,10 +132,10 @@ async fn apply_zoom_keyframes(
     filter_parts.push(format!("[0:v]split={}{}", n + 1, split_labels.join("")));
 
     // For each zoom segment, create a cropped+scaled version
-    for (j, (start, end, x, y, scale)) in zoom_segments.iter().enumerate() {
+    for (j, (_start, _end, x, y, scale)) in zoom_segments.iter().enumerate() {
         // Use static pixel values to avoid expression parsing issues
         let probe2 = tokio::process::Command::new("ffprobe")
-            .args(&[
+            .args([
                 "-v",
                 "error",
                 "-select_streams",
@@ -157,8 +158,8 @@ async fn apply_zoom_keyframes(
         }
         let (vw_f, vh_f) = (dims2[0], dims2[1]);
 
-        let crop_w = ((vw_f / scale) as u32 / 2 * 2) as u32;
-        let crop_h = ((vh_f / scale) as u32 / 2 * 2) as u32;
+        let crop_w = (vw_f / scale) as u32 / 2 * 2;
+        let crop_h = (vh_f / scale) as u32 / 2 * 2;
         let crop_x = ((*x - crop_w as f64 / 2.0)
             .max(0.0)
             .min(vw_f - crop_w as f64)) as u32;
@@ -183,12 +184,12 @@ async fn apply_zoom_keyframes(
     }
 
     // Chain overlays: base → overlay zoomed segments with enable timing
-    let mut prev = format!("[s0]");
+    let mut prev = "[s0]".to_string();
     for (j, (start, end, _, _, _)) in zoom_segments.iter().enumerate() {
         let out = format!("[v{}]", j);
-        let enable_start = start + transition; // fade in complete
-        let enable_end = end; // fade out starts at zoom-out keyframe
-                              // Show the zoomed overlay during the zoom period
+        let _enable_start = start + transition; // fade in complete
+        let _enable_end = end; // fade out starts at zoom-out keyframe
+                               // Show the zoomed overlay during the zoom period
         filter_parts.push(format!(
             "{}[z{}]overlay=0:0:enable='between(t,{:.2},{:.2})'{}",
             prev,
@@ -205,7 +206,7 @@ async fn apply_zoom_keyframes(
 
     tracing::info!(filter = %filter_complex, "Zoom filter_complex");
     let output = tokio::process::Command::new("ffmpeg")
-        .args(&[
+        .args([
             "-i",
             input_path.to_str()?,
             "-filter_complex",
@@ -252,7 +253,7 @@ async fn apply_zoom_keyframes(
 async fn apply_minterpolate(input_path: &Path, output_path: &Path, target_fps: u8) -> bool {
     let filter = format!("minterpolate=fps={}:mi_mode=blend", target_fps);
     let status = tokio::process::Command::new("ffmpeg")
-        .args(&[
+        .args([
             "-i",
             input_path.to_str().unwrap_or(""),
             "-vf",
@@ -290,7 +291,7 @@ pub async fn apply_window_chrome(
 
     // Get video dimensions
     let probe = tokio::process::Command::new("ffprobe")
-        .args(&[
+        .args([
             "-v",
             "error",
             "-select_streams",
@@ -319,7 +320,7 @@ pub async fn apply_window_chrome(
     // Generate a rounded-corner mask for the video
     let mask_path = tmp.join("__pr_mask.png");
     let mask_status = tokio::process::Command::new("magick")
-        .args(&[
+        .args([
             "-size",
             &format!("{}x{}", vid_w, vid_h),
             "xc:none",
@@ -348,7 +349,7 @@ pub async fn apply_window_chrome(
     // Generate gradient background
     let bg_path = tmp.join("__pr_bg.png");
     let bg_status = tokio::process::Command::new("magick")
-        .args(&[
+        .args([
             "-size",
             &format!("{}x{}", canvas_w, canvas_h),
             &format!("gradient:{}-{}", bg_color_start, bg_color_end),
@@ -372,7 +373,7 @@ pub async fn apply_window_chrome(
     );
 
     let status = tokio::process::Command::new("ffmpeg")
-        .args(&[
+        .args([
             "-i",
             input_path.to_str()?,
             "-i",
@@ -418,6 +419,7 @@ pub struct OverlayStyle {
 }
 
 /// Escape special characters for ffmpeg drawtext filter.
+#[allow(dead_code)]
 pub fn escape_ffmpeg_text(s: &str) -> String {
     s.replace('\\', "\\\\")
         .replace('\'', "\\'")
@@ -430,6 +432,7 @@ pub fn escape_ffmpeg_text(s: &str) -> String {
 /// Build an ffmpeg drawtext filter chain from markers.
 /// Each marker is displayed from its timestamp until the next marker (or +5s for the last one).
 /// Returns None if there are no markers.
+#[allow(dead_code)]
 pub fn build_subtitle_filter(markers: &[Marker], total_duration_ms: u64) -> Option<String> {
     if markers.is_empty() {
         return None;
@@ -526,7 +529,7 @@ async fn burn_subtitles_overlay(
 
     // Get video dimensions
     let probe = tokio::process::Command::new("ffprobe")
-        .args(&[
+        .args([
             "-v",
             "error",
             "-select_streams",
@@ -567,7 +570,7 @@ async fn burn_subtitles_overlay(
 
         let out = tmp.join(format!("pagerunner_sub_{}.png", i));
         let status = tokio::process::Command::new("magick")
-            .args(&[
+            .args([
                 "-size",
                 &format!("{}x{}", w, bar_height),
                 "xc:none",
@@ -762,7 +765,7 @@ pub async fn render_annotated(
     // Step 2: Apply window chrome (gradient background + rounded corners)
     let source = subtitled_path
         .as_ref()
-        .map(|p| PathBuf::from(p))
+        .map(PathBuf::from)
         .unwrap_or_else(|| zoom_source.clone());
     let polished_path = dir.join(format!("annotated.{}", entry.format));
     let polished = apply_window_chrome(

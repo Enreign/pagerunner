@@ -48,11 +48,7 @@ pub trait ToolExecutor: Send + Sync + 'static {
     /// Returns `Ok(ToolResponse)` on success (note: `is_error` inside the
     /// response indicates a tool-level error rather than a transport error).
     /// Returns `Err(String)` for unexpected / fatal executor failures.
-    async fn execute(
-        &self,
-        name: &str,
-        args: Value,
-    ) -> Result<ToolResponse, String>;
+    async fn execute(&self, name: &str, args: Value) -> Result<ToolResponse, String>;
 
     /// Return the list of tools available through this executor.
     fn available_tools(&self) -> Vec<ToolSchema>;
@@ -170,7 +166,10 @@ mod tests {
         }
 
         let exec = ToolErrorExecutor;
-        let response = exec.execute("click", json!({"selector": "#missing"})).await.unwrap();
+        let response = exec
+            .execute("click", json!({"selector": "#missing"}))
+            .await
+            .unwrap();
         assert!(response.is_error);
         assert_eq!(response.content, "selector not found");
     }
