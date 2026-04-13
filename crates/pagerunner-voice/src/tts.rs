@@ -1,5 +1,5 @@
-use async_trait::async_trait;
 use crate::VoiceError;
+use async_trait::async_trait;
 
 pub type Result<T> = std::result::Result<T, VoiceError>;
 

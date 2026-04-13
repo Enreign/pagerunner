@@ -50,7 +50,11 @@ impl Default for MockStt {
 
 #[async_trait]
 impl SttProvider for MockStt {
-    async fn transcribe_chunk(&self, _audio: &[f32], _sample_rate: u32) -> SttResult<Option<String>> {
+    async fn transcribe_chunk(
+        &self,
+        _audio: &[f32],
+        _sample_rate: u32,
+    ) -> SttResult<Option<String>> {
         let count = self.chunk_count.fetch_add(1, Ordering::SeqCst) + 1;
         if count >= self.chunks_required {
             self.chunk_count.store(0, Ordering::SeqCst);
@@ -85,7 +89,10 @@ pub struct MockTts {
 
 impl MockTts {
     pub fn new(sample_rate: u32, duration_secs: f32) -> Self {
-        Self { sample_rate, duration_secs }
+        Self {
+            sample_rate,
+            duration_secs,
+        }
     }
 }
 
@@ -132,7 +139,10 @@ pub struct MockVad {
 
 impl MockVad {
     pub fn new(energy_threshold: f32) -> Self {
-        Self { energy_threshold, speaking: false }
+        Self {
+            energy_threshold,
+            speaking: false,
+        }
     }
 }
 
