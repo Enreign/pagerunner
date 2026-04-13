@@ -160,10 +160,7 @@ impl OpenAiCompatProvider {
 
         // Usage.
         let usage = body.get("usage").map_or(Usage::default(), |u| Usage {
-            input_tokens: u
-                .get("prompt_tokens")
-                .and_then(|v| v.as_u64())
-                .unwrap_or(0),
+            input_tokens: u.get("prompt_tokens").and_then(|v| v.as_u64()).unwrap_or(0),
             output_tokens: u
                 .get("completion_tokens")
                 .and_then(|v| v.as_u64())
@@ -494,11 +491,7 @@ mod tests {
     use serde_json::json;
 
     fn provider() -> OpenAiCompatProvider {
-        OpenAiCompatProvider::new(
-            "test-key",
-            "https://api.openai.com/v1",
-            "gpt-4o",
-        )
+        OpenAiCompatProvider::new("test-key", "https://api.openai.com/v1", "gpt-4o")
     }
 
     // --- build_request_body ---
@@ -680,7 +673,9 @@ mod tests {
             "error": {"message": "model not found", "type": "invalid_request_error"}
         });
         let err = provider().parse_response(&body).unwrap_err();
-        assert!(matches!(err, LlmError::Api { message, .. } if message.contains("model not found")));
+        assert!(
+            matches!(err, LlmError::Api { message, .. } if message.contains("model not found"))
+        );
     }
 
     // --- SSE parsing ---
@@ -730,10 +725,15 @@ mod tests {
 
     #[test]
     fn sse_usage_in_final_chunk() {
-        let line = r#"data: {"id":"x","choices":[],"usage":{"prompt_tokens":10,"completion_tokens":20}}"#;
+        let line =
+            r#"data: {"id":"x","choices":[],"usage":{"prompt_tokens":10,"completion_tokens":20}}"#;
         let chunk = parse_sse_line(line).unwrap();
-        assert!(
-            matches!(chunk, StreamChunk::Usage(Usage { input_tokens: 10, output_tokens: 20 }))
-        );
+        assert!(matches!(
+            chunk,
+            StreamChunk::Usage(Usage {
+                input_tokens: 10,
+                output_tokens: 20
+            })
+        ));
     }
 }

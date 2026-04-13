@@ -111,11 +111,8 @@ mod tests {
     #[tokio::test]
     async fn provider_complete() {
         let p = EchoProvider;
-        let req = crate::types::CompletionRequest::new(
-            vec![Message::user("hello")],
-            "test-model",
-            64,
-        );
+        let req =
+            crate::types::CompletionRequest::new(vec![Message::user("hello")], "test-model", 64);
         let resp = p.complete(req).await.unwrap();
         assert_eq!(resp.text(), "echo: hello");
         assert_eq!(resp.stop_reason, StopReason::EndTurn);
@@ -157,11 +154,8 @@ mod tests {
     async fn provider_behind_arc() {
         // Verify the trait object can live behind Arc.
         let p: Arc<dyn LlmProvider> = Arc::new(EchoProvider);
-        let req = crate::types::CompletionRequest::new(
-            vec![Message::user("arc test")],
-            "test-model",
-            64,
-        );
+        let req =
+            crate::types::CompletionRequest::new(vec![Message::user("arc test")], "test-model", 64);
         let resp = p.complete(req).await.unwrap();
         assert!(resp.text().contains("arc test"));
     }

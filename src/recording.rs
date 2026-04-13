@@ -305,7 +305,7 @@ impl RecordingHandle {
         let video_path = recording_dir.join(format!("video.{}", video_ext));
         let video_path_str = video_path.to_str().unwrap().to_string();
         let fps_str = fps.to_string();
-        let out_fps_str = output_fps.to_string();
+        let _out_fps_str = output_fps.to_string();
 
         // Encode at capture fps — motion interpolation applied during render_recording
         let ffmpeg_args: Vec<String> = match format {
@@ -376,7 +376,7 @@ impl RecordingHandle {
                         }
                         bytes_written += len as u64;
                         frames_written += 1;
-                        if frames_written <= 3 || frames_written % 10 == 0 {
+                        if frames_written <= 3 || frames_written.is_multiple_of(10) {
                             tracing::info!(
                                 frame = frames_written,
                                 frame_bytes = len,
