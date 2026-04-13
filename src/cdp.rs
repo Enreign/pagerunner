@@ -305,7 +305,7 @@ async fn ws_writer_task(
             data.pop();
         }
         let text = String::from_utf8_lossy(&data).into_owned();
-        if sink.send(Message::Text(text)).await.is_err() {
+        if sink.send(Message::Text(text.into())).await.is_err() {
             break;
         }
     }
