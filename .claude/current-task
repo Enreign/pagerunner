@@ -1,1 +1,1 @@
-Phase 2: Wire agent crates into daemon (IPC, DaemonToolExecutor, CLI subcommand)
+Piper TTS backend for pagerunner-voice crate
