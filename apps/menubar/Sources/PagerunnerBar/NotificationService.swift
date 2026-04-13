@@ -158,10 +158,12 @@ final class NotificationService: NSObject, UNUserNotificationCenterDelegate {
             switch actionIdentifier {
             case "VIEW", UNNotificationDefaultActionIdentifier:
                 self.controller?.openPopover()
-                if let name = profileName {
+                if runId != nil {
+                    self.appState?.navigation = .agent
+                } else if let name = profileName {
                     self.appState?.navigation = .profile(name)
                 } else {
-                    self.appState?.navigation = .overview
+                    self.appState?.navigation = .agent
                 }
             case "RESTART_SESSION":
                 if let name = profileName {

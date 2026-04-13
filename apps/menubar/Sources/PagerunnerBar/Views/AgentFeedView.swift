@@ -8,77 +8,116 @@ struct AgentFeedView: View {
     @State private var followUpText: String = ""
     @State private var showSettings: Bool = false
 
+    private let secondaryText = Color(red: 0.533, green: 0.533, blue: 0.533)
+    private let primaryText = Color(red: 0.114, green: 0.114, blue: 0.122)
+    private let accentBlue = Color(red: 0, green: 0.478, blue: 1)
+
     var body: some View {
         VStack(spacing: 0) {
-            // Orb header
             AgentOrbHeader(appState: appState)
 
-            // Live transcription when listening
-            if appState.voiceStatus == .listening && !appState.agentGoal.isEmpty {
-                Text("\"\(appState.agentGoal)\"")
-                    .font(.system(size: 13))
-                    .foregroundStyle(Color(red: 0.114, green: 0.114, blue: 0.122))
-                    .italic()
-                    .padding(.horizontal, 16)
-                    .padding(.vertical, 8)
-                    .transition(.opacity)
-            }
-
-            Divider()
-
-            // Event feed
             ScrollViewReader { proxy in
                 ScrollView {
-                    LazyVStack(alignment: .leading, spacing: 8) {
-                        ForEach(appState.agentEvents) { event in
-                            AgentEventRow(kind: event.kind)
-                                .id(event.id)
-                        }
-
-                        // Approval card (inline)
-                        if let approval = appState.agentApproval {
-                            AgentApprovalCard(
-                                action: approval.action,
-                                description: approval.description,
-                                onApprove: { appState.approveAgent(approved: true, client: client) },
-                                onDeny: { appState.approveAgent(approved: false, client: client) }
-                            )
-                            .id("approval")
-                        }
-
-                        // Spinner for running state
-                        if appState.agentState == .running {
-                            HStack(spacing: 6) {
-                                ProgressView()
-                                    .scaleEffect(0.6)
-                                    .frame(width: 12, height: 12)
-                                Text("Working...")
-                                    .font(.system(size: 11))
-                                    .foregroundColor(Color(red: 0.533, green: 0.533, blue: 0.533))
+                    VStack(alignment: .leading, spacing: 14) {
+                        if appState.voiceStatus == .listening && !appState.agentGoal.isEmpty {
+                            HStack(spacing: 8) {
+                                Image(systemName: "waveform")
+                                    .font(.system(size: 12, weight: .medium))
+                                    .foregroundStyle(accentBlue)
+                                Text("“\(appState.agentGoal)”")
+                                    .font(.system(size: 13))
+                                    .foregroundStyle(primaryText)
+                                    .italic()
                             }
-                            .padding(.horizontal, 12)
-                            .id("spinner")
+                            .padding(12)
+                            .background(
+                                RoundedRectangle(cornerRadius: 12)
+                                    .fill(Color.white.opacity(0.9))
+                            )
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 12)
+                                    .stroke(accentBlue.opacity(0.14), lineWidth: 0.5)
+                            )
                         }
 
-                        // Result card when completed
-                        if appState.agentState == .completed, let summary = appState.agentSummary {
-                            AgentResultCard(
-                                summary: summary,
-                                steps: appState.agentSteps,
-                                tokens: appState.agentTokens,
-                                voiceActive: appState.voiceActive,
-                                onReplay: {
-                                    appState.voiceReplay(text: summary)
-                                },
-                                onCopy: {
-                                    NSPasteboard.general.clearContents()
-                                    NSPasteboard.general.setString(summary, forType: .string)
+                        VStack(alignment: .leading, spacing: 10) {
+                            HStack {
+                                Text(feedTitle)
+                                    .font(.system(size: 11, weight: .semibold))
+                                    .foregroundStyle(secondaryText)
+                                    .textCase(.uppercase)
+                                    .tracking(0.5)
+                                Spacer()
+                                Text(feedStatus)
+                                    .font(.system(size: 10, weight: .medium))
+                                    .foregroundStyle(feedStatusColor)
+                            }
+
+                            LazyVStack(alignment: .leading, spacing: 8) {
+                                ForEach(appState.agentEvents) { event in
+                                    AgentEventRow(kind: event.kind)
+                                        .id(event.id)
                                 }
-                            )
-                            .id("result-card")
+
+                                if let approval = appState.agentApproval {
+                                    AgentApprovalCard(
+                                        action: approval.action,
+                                        description: approval.description,
+                                        onApprove: { appState.approveAgent(approved: true, client: client) },
+                                        onDeny: { appState.approveAgent(approved: false, client: client) }
+                                    )
+                                    .id("approval")
+                                }
+
+                                if appState.agentState == .running {
+                                    HStack(spacing: 6) {
+                                        ProgressView()
+                                            .scaleEffect(0.65)
+                                            .frame(width: 12, height: 12)
+                                        Text("Working through the current step…")
+                                            .font(.system(size: 11))
+                                            .foregroundStyle(secondaryText)
+                                    }
+                                    .padding(.horizontal, 12)
+                                    .id("spinner")
+                                }
+
+                                if appState.agentState == .completed, let summary = appState.agentSummary {
+                                    AgentResultCard(
+                                        summary: summary,
+                                        steps: appState.agentSteps,
+                                        tokens: appState.agentTokens,
+                                        voiceActive: appState.voiceActive,
+                                        onReplay: {
+                                            appState.voiceReplay(text: summary)
+                                        },
+                                        onCopy: {
+                                            NSPasteboard.general.clearContents()
+                                            NSPasteboard.general.setString(summary, forType: .string)
+                                        }
+                                    )
+                                    .id("result-card")
+                                }
+                            }
+                        }
+                        .padding(12)
+                        .background(
+                            RoundedRectangle(cornerRadius: 16)
+                                .fill(Color.white.opacity(0.92))
+                        )
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 16)
+                                .stroke(Color.black.opacity(0.07), lineWidth: 0.5)
+                        )
+
+                        bottomBar
+
+                        if showSettings {
+                            AgentSettingsPopover(appState: appState)
                         }
                     }
-                    .padding(.vertical, 8)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 12)
                 }
                 .onChange(of: appState.agentEvents.count) { _, _ in
                     withAnimation(.easeOut(duration: 0.2)) {
@@ -97,11 +136,6 @@ struct AgentFeedView: View {
                     }
                 }
             }
-
-            Divider()
-
-            // Bottom bar: unified input + status
-            bottomBar
         }
     }
 
@@ -110,113 +144,98 @@ struct AgentFeedView: View {
         VStack(spacing: 4) {
             switch appState.agentState {
             case .running, .waitingApproval:
-                AgentInputBar(
-                    text: $followUpText,
-                    placeholder: "Follow up...",
-                    voiceActive: appState.voiceActive,
-                    voiceStatus: appState.voiceStatus,
-                    voiceMode: appState.voiceMode,
-                    isRunning: true,
-                    onSend: {},
-                    onStop: { appState.stopAgent(client: client) },
-                    onMicTap: {
-                        if appState.voiceActive {
-                            appState.stopVoice()
-                        } else {
-                            appState.startVoice()
+                VStack(alignment: .leading, spacing: 8) {
+                    AgentInputBar(
+                        text: $followUpText,
+                        placeholder: "Follow up after this run…",
+                        voiceActive: appState.voiceActive,
+                        voiceStatus: appState.voiceStatus,
+                        voiceMode: appState.voiceMode,
+                        isRunning: true,
+                        onSend: {},
+                        onStop: { appState.stopAgent(client: client) },
+                        onMicTap: {
+                            if appState.voiceActive {
+                                appState.stopVoice()
+                            } else {
+                                appState.startVoice()
+                            }
+                        },
+                        onMicHoldStart: {
+                            if !isPressing {
+                                isPressing = true
+                                appState.voicePushToTalkStart()
+                            }
+                        },
+                        onMicHoldEnd: {
+                            isPressing = false
+                            appState.voicePushToTalkStop()
                         }
-                    },
-                    onMicHoldStart: {
-                        if !isPressing {
-                            isPressing = true
-                            appState.voicePushToTalkStart()
-                        }
-                    },
-                    onMicHoldEnd: {
-                        isPressing = false
-                        appState.voicePushToTalkStop()
-                    }
-                )
-                .padding(.horizontal, 12)
+                    )
 
-                // Status line
-                HStack(spacing: 6) {
-                    if appState.agentState == .waitingApproval {
-                        HStack(spacing: 4) {
-                            Image(systemName: "pause.fill")
-                                .font(.system(size: 9))
-                            Text("Waiting for approval...")
-                        }
-                        .font(.system(size: 11))
-                        .foregroundColor(Color(red: 0.961, green: 0.620, blue: 0.043))
-                    } else if appState.voiceStatus == .speaking && appState.voiceActive {
-                        // Waveform indicator when speaking
-                        waveformIndicator
-                    } else {
-                        Text("Step \(appState.agentSteps)/15 \u{00B7} \(formatTokens(appState.agentTokens))")
+                    HStack(spacing: 6) {
+                        if appState.agentState == .waitingApproval {
+                            HStack(spacing: 4) {
+                                Image(systemName: "pause.fill")
+                                    .font(.system(size: 9))
+                                Text("Waiting for approval...")
+                            }
                             .font(.system(size: 11))
-                            .foregroundColor(Color(red: 0.533, green: 0.533, blue: 0.533))
+                            .foregroundColor(Color(red: 0.961, green: 0.620, blue: 0.043))
+                        } else if appState.voiceStatus == .speaking && appState.voiceActive {
+                            waveformIndicator
+                        } else {
+                            Text("Step \(appState.agentSteps)/15 · \(formatTokens(appState.agentTokens))")
+                                .font(.system(size: 11))
+                                .foregroundStyle(secondaryText)
+                        }
+                        Spacer()
+                        controlsButton
                     }
-                    Spacer()
                 }
-                .padding(.horizontal, 12)
 
             case .completed:
-                AgentInputBar(
-                    text: $followUpText,
-                    placeholder: "Follow up...",
-                    voiceActive: appState.voiceActive,
-                    voiceStatus: appState.voiceStatus,
-                    voiceMode: appState.voiceMode,
-                    isRunning: false,
-                    onSend: startFollowUp,
-                    onStop: {},
-                    onMicTap: {
-                        if appState.voiceActive {
-                            appState.stopVoice()
-                        } else {
-                            appState.startVoice()
+                VStack(alignment: .leading, spacing: 8) {
+                    AgentInputBar(
+                        text: $followUpText,
+                        placeholder: "Ask a follow-up or start another task…",
+                        voiceActive: appState.voiceActive,
+                        voiceStatus: appState.voiceStatus,
+                        voiceMode: appState.voiceMode,
+                        isRunning: false,
+                        onSend: startFollowUp,
+                        onStop: {},
+                        onMicTap: {
+                            if appState.voiceActive {
+                                appState.stopVoice()
+                            } else {
+                                appState.startVoice()
+                            }
+                        },
+                        onMicHoldStart: {
+                            if !isPressing {
+                                isPressing = true
+                                appState.voicePushToTalkStart()
+                            }
+                        },
+                        onMicHoldEnd: {
+                            isPressing = false
+                            appState.voicePushToTalkStop()
                         }
-                    },
-                    onMicHoldStart: {
-                        if !isPressing {
-                            isPressing = true
-                            appState.voicePushToTalkStart()
-                        }
-                    },
-                    onMicHoldEnd: {
-                        isPressing = false
-                        appState.voicePushToTalkStop()
-                    }
-                )
-                .padding(.horizontal, 12)
+                    )
 
-                // Settings line
-                HStack(spacing: 4) {
-                    Text("\u{2713} Done \u{00B7} \(appState.agentSteps) steps \u{00B7} \(formatTokens(appState.agentTokens))")
-                        .font(.system(size: 10))
-                        .foregroundColor(Color(red: 0.133, green: 0.773, blue: 0.369))
-                    Spacer()
-                    Button { appState.resetAgent() } label: {
-                        Text("New")
+                    HStack(spacing: 6) {
+                        Text("Done · \(appState.agentSteps) steps · \(formatTokens(appState.agentTokens))")
                             .font(.system(size: 10, weight: .medium))
-                            .foregroundColor(Color(red: 0, green: 0.478, blue: 1))
-                    }
-                    .buttonStyle(.plain)
-
-                    Button {
-                        showSettings.toggle()
-                    } label: {
-                        Image(systemName: "gearshape")
-                            .font(.system(size: 11))
-                            .foregroundColor(Color(red: 0.533, green: 0.533, blue: 0.533))
-                    }
-                    .buttonStyle(.plain)
-                    .popover(isPresented: $showSettings) {
-                        AgentSettingsPopover(appState: appState)
+                            .foregroundColor(Color(red: 0.133, green: 0.773, blue: 0.369))
+                        Spacer()
+                        Button("New Run") { appState.resetAgent() }
+                            .font(.system(size: 11, weight: .medium))
+                            .buttonStyle(.plain)
+                            .foregroundStyle(accentBlue)
+                        controlsButton
                     }
                 }
-                .padding(.horizontal, 12)
 
             case .error:
                 VStack(spacing: 6) {
@@ -241,15 +260,23 @@ struct AgentFeedView: View {
                         Button("New Goal") { appState.resetAgent() }
                             .font(.system(size: 12, weight: .medium))
                             .buttonStyle(.plain)
+                        controlsButton
                     }
                 }
-                .padding(.horizontal, 12)
 
             case .idle:
                 EmptyView()
             }
         }
-        .padding(.vertical, 8)
+        .padding(12)
+        .background(
+            RoundedRectangle(cornerRadius: 16)
+                .fill(Color(red: 0, green: 0.478, blue: 1).opacity(0.05))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 16)
+                .stroke(Color(red: 0, green: 0.478, blue: 1).opacity(0.12), lineWidth: 0.5)
+        )
     }
 
     @ViewBuilder
@@ -285,6 +312,68 @@ struct AgentFeedView: View {
         }
         return "\(tokens) tk"
     }
+
+    private var controlsButton: some View {
+        Button {
+            withAnimation(.easeInOut(duration: 0.18)) {
+                showSettings.toggle()
+            }
+        } label: {
+            Label(showSettings ? "Hide controls" : "Controls", systemImage: "slider.horizontal.3")
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(accentBlue)
+        }
+        .buttonStyle(.plain)
+    }
+
+    private var feedTitle: String {
+        switch appState.agentState {
+        case .waitingApproval:
+            return "Approval needed"
+        case .completed:
+            return "Run summary"
+        case .error:
+            return "Run failed"
+        case .running:
+            return "Live agent feed"
+        case .idle:
+            return "Agent"
+        }
+    }
+
+    private var feedStatus: String {
+        if appState.voiceStatus == .listening {
+            return "Mic hot"
+        }
+        if appState.voiceStatus == .speaking {
+            return "Narrating"
+        }
+        switch appState.agentState {
+        case .waitingApproval:
+            return "Paused"
+        case .completed:
+            return "Complete"
+        case .error:
+            return "Needs retry"
+        case .running:
+            return "Active"
+        case .idle:
+            return "Ready"
+        }
+    }
+
+    private var feedStatusColor: Color {
+        switch appState.agentState {
+        case .waitingApproval:
+            return Color(red: 0.961, green: 0.620, blue: 0.043)
+        case .completed:
+            return Color(red: 0.133, green: 0.773, blue: 0.369)
+        case .error:
+            return Color(red: 0.937, green: 0.267, blue: 0.267)
+        case .running, .idle:
+            return accentBlue
+        }
+    }
 }
 
 // MARK: - Event row
@@ -304,6 +393,8 @@ struct AgentEventRow: View {
                     .foregroundColor(Color(red: 0.114, green: 0.114, blue: 0.122))
             }
             .padding(.horizontal, 12)
+            .padding(.vertical, 10)
+            .background(RoundedRectangle(cornerRadius: 10).fill(Color.black.opacity(0.03)))
 
         case .toolCall(let name, _):
             HStack(spacing: 6) {
@@ -315,6 +406,8 @@ struct AgentEventRow: View {
                     .foregroundColor(Color(red: 0.114, green: 0.114, blue: 0.122))
             }
             .padding(.horizontal, 12)
+            .padding(.vertical, 10)
+            .background(RoundedRectangle(cornerRadius: 10).fill(Color(red: 0, green: 0.478, blue: 1).opacity(0.04)))
 
         case .toolResult(_, let ok, let summary):
             HStack(alignment: .top, spacing: 6) {
@@ -329,12 +422,16 @@ struct AgentEventRow: View {
                     .lineLimit(2)
             }
             .padding(.horizontal, 12)
+            .padding(.vertical, 10)
+            .background(RoundedRectangle(cornerRadius: 10).fill(Color.black.opacity(0.025)))
 
         case .progress(let msg):
             Text(msg)
                 .font(.system(size: 11))
                 .foregroundColor(Color(red: 0.533, green: 0.533, blue: 0.533))
                 .padding(.horizontal, 12)
+                .padding(.vertical, 10)
+                .background(RoundedRectangle(cornerRadius: 10).fill(Color.black.opacity(0.02)))
 
         case .done(let summary):
             HStack(alignment: .top, spacing: 6) {
@@ -346,6 +443,8 @@ struct AgentEventRow: View {
                     .foregroundColor(Color(red: 0.114, green: 0.114, blue: 0.122))
             }
             .padding(.horizontal, 12)
+            .padding(.vertical, 10)
+            .background(RoundedRectangle(cornerRadius: 10).fill(Color(red: 0.133, green: 0.773, blue: 0.369).opacity(0.08)))
 
         case .error(let msg):
             HStack(alignment: .top, spacing: 6) {
@@ -357,6 +456,8 @@ struct AgentEventRow: View {
                     .foregroundColor(Color(red: 0.937, green: 0.267, blue: 0.267))
             }
             .padding(.horizontal, 12)
+            .padding(.vertical, 10)
+            .background(RoundedRectangle(cornerRadius: 10).fill(Color(red: 0.937, green: 0.267, blue: 0.267).opacity(0.08)))
         }
     }
 }

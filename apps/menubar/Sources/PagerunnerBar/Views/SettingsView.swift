@@ -56,7 +56,7 @@ struct SettingsView: View {
     @ViewBuilder
     private var backHeader: some View {
         HStack(spacing: 6) {
-            Button { appState.navigation = .overview } label: {
+            Button { appState.navigation = .agent } label: {
                 Image(systemName: "chevron.left")
                     .font(.system(size: 11, weight: .medium))
                     .foregroundColor(Color(red: 0, green: 0.478, blue: 1))

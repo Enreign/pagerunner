@@ -5,6 +5,11 @@ import Testing
 @Suite("AppState")
 @MainActor
 struct AppStateTests {
+    @Test("agent is the default landing view")
+    func defaultNavigationIsAgent() {
+        let state = AppState()
+        #expect(state.navigation == .agent)
+    }
 
     @Test("checkpointsFor returns checkpoints for matching profile only")
     func checkpointsForFiltersCorrectly() {

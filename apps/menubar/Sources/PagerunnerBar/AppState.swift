@@ -44,7 +44,7 @@ final class AppState {
     var transition: TransitionState = .none
 
     // MARK: - Navigation
-    var navigation: PanelNavigation = .overview
+    var navigation: PanelNavigation = .agent
 
     // MARK: - Binary path
     /// Path to the pagerunner binary, or nil if not found.
@@ -100,8 +100,18 @@ final class AppState {
     var voiceActive: Bool = false
     var voiceProcess: Process?
     var voiceStatus: VoiceStatus = .idle
-    var voiceMode: VoiceMode = .alwaysListening
-    var narrationMode: NarrationMode = .summary
+    var voiceMode: VoiceMode = .alwaysListening {
+        didSet {
+            guard voiceMode != oldValue else { return }
+            restartVoiceIfNeeded()
+        }
+    }
+    var narrationMode: NarrationMode = .summary {
+        didSet {
+            guard narrationMode != oldValue else { return }
+            restartVoiceIfNeeded()
+        }
+    }
     var voiceMuted: Bool = false {
         didSet {
             guard voiceActive, let pipe = voiceInputPipe else { return }
@@ -188,6 +198,14 @@ final class AppState {
         voiceInputPipe = nil
         voiceActive = false
         voiceStatus = .idle
+    }
+
+    private func restartVoiceIfNeeded() {
+        guard voiceActive else { return }
+        let muted = voiceMuted
+        stopVoice()
+        startVoice()
+        voiceMuted = muted
     }
 
     /// PTT: send start_listening command to sidecar stdin.
@@ -322,7 +340,12 @@ final class AppState {
 
     var agentState: AgentRunState = .idle
     var agentGoal: String = ""
-    var agentProfile: String = ""
+    var agentProfile: String = "" {
+        didSet {
+            guard agentProfile != oldValue else { return }
+            restartVoiceIfNeeded()
+        }
+    }
     var agentMode: AgentMode = .supervised
     var agentModel: String = "claude-haiku-4-5-20251001"
     var agentRunId: String?
@@ -580,7 +603,7 @@ final class AppState {
             let stream = client.streamAgentRun(
                 goal: goal,
                 profile: profile,
-                model: nil,
+                model: agentModel,
                 maxSteps: 15,
                 mode: mode
             )
