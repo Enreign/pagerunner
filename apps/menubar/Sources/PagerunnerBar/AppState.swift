@@ -256,7 +256,7 @@ final class AppState {
         case "speaking":
             voiceStatus = .speaking
         case "idle":
-            voiceStatus = .listening
+            voiceStatus = voiceMode == .pushToTalk ? .idle : .listening
             // If agent was running, mark completed
             if agentState == .running || agentState == .completed {
                 if agentState != .completed && agentState != .error {
