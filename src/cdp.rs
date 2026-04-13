@@ -447,16 +447,12 @@ mod tests {
 
     #[tokio::test]
     async fn test_events_not_confused_with_responses() {
-        use nix::unistd::dup;
-        use std::os::unix::io::{FromRawFd, IntoRawFd};
-
         let (cmd_read, cmd_write) = make_pipe_pair();
         let (evt_read, evt_write) = make_pipe_pair();
 
-        let evt_write_raw = evt_write.into_std().await.into_raw_fd();
-        let evt_write2_raw = dup(nix::libc::c_int::from(evt_write_raw as i32)).unwrap();
-        let evt_write1 = unsafe { tokio::fs::File::from_raw_fd(evt_write_raw) };
-        let evt_write2 = unsafe { tokio::fs::File::from_raw_fd(evt_write2_raw) };
+        let evt_write = evt_write.into_std().await;
+        let evt_write2 = tokio::fs::File::from_std(evt_write.try_clone().unwrap());
+        let evt_write1 = tokio::fs::File::from_std(evt_write);
 
         let (conn, _handle) = CdpConn::new(cmd_write, evt_read);
         let mut rx = conn.subscribe_events();

@@ -95,9 +95,8 @@ mod tests {
 
     #[test]
     fn test_transition_alive_to_reconnecting_to_dead() {
-        let mut health = SessionHealth::Alive;
+        let mut health = SessionHealth::Reconnecting;
 
-        health = SessionHealth::Reconnecting;
         assert!(health.is_alive_or_reconnecting());
 
         // Reconnection failed
@@ -109,20 +108,14 @@ mod tests {
 
     #[test]
     fn test_transition_alive_to_dead_directly() {
-        let mut health = SessionHealth::Alive;
-
-        // Chrome process died — skip Reconnecting
-        health = SessionHealth::Dead;
+        let health = SessionHealth::Dead;
         assert!(!health.is_usable());
         assert_eq!(health.status_str(), "crashed");
     }
 
     #[test]
     fn test_transition_alive_to_recovering_to_alive() {
-        let mut health = SessionHealth::Alive;
-
-        // Chrome process crashed — enter recovery
-        health = SessionHealth::Recovering;
+        let mut health = SessionHealth::Recovering;
         assert!(!health.is_usable());
         assert!(health.is_alive_or_reconnecting());
         assert_eq!(health.status_str(), "recovering");
@@ -135,10 +128,7 @@ mod tests {
 
     #[test]
     fn test_transition_alive_to_recovering_to_dead() {
-        let mut health = SessionHealth::Alive;
-
-        // Chrome process crashed — enter recovery
-        health = SessionHealth::Recovering;
+        let mut health = SessionHealth::Recovering;
         assert!(!health.is_usable());
         assert!(health.is_alive_or_reconnecting());
 

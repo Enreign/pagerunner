@@ -3,7 +3,6 @@
 use crate::db::Db;
 use crate::error::PagerunnerError;
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
-use rand::TryRngCore;
 use std::sync::Arc;
 
 pub struct Vault {
@@ -36,9 +35,7 @@ impl Vault {
 
         // Generate new 6-char hex nonce
         let mut bytes = [0u8; 3]; // 3 bytes = 6 hex chars
-        rand::rngs::OsRng
-            .try_fill_bytes(&mut bytes)
-            .expect("OsRng fill failed");
+        rand::fill(&mut bytes);
         let nonce = hex::encode(bytes);
         let token = format!("[{}:{}]", entity_type, nonce);
 
