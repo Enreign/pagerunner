@@ -350,7 +350,8 @@ impl HttpApiConfig {
         if self.auth == AuthMode::Token && self.token.is_empty() {
             return Err(PagerunnerError::Config(
                 "http_api.auth = \"token\" but http_api.token is empty — \
-                 set a token or switch auth to \"tailscale\".".into(),
+                 set a token or switch auth to \"tailscale\"."
+                    .into(),
             ));
         }
         if self.auth == AuthMode::Tailscale
@@ -358,7 +359,8 @@ impl HttpApiConfig {
         {
             return Err(PagerunnerError::Config(
                 "http_api.auth = \"tailscale\" requires binding to a Tailscale IP \
-                 (100.x.x.x), not loopback — Tailscale cannot identify local callers.".into(),
+                 (100.x.x.x), not loopback — Tailscale cannot identify local callers."
+                    .into(),
             ));
         }
         Ok(())
@@ -1116,7 +1118,10 @@ tailscale_allowed_tags = ["tag:phone"]
 "#;
         let cfg: PagerunnerConfig = toml::from_str(toml_str).unwrap();
         assert_eq!(cfg.http_api.auth, AuthMode::Tailscale);
-        assert_eq!(cfg.http_api.tailscale_allowed_users, vec!["alice@example.com"]);
+        assert_eq!(
+            cfg.http_api.tailscale_allowed_users,
+            vec!["alice@example.com"]
+        );
         assert_eq!(cfg.http_api.tailscale_allowed_tags, vec!["tag:phone"]);
     }
 

@@ -28,6 +28,7 @@ pub struct WhoisResult {
 pub struct UserProfile {
     #[serde(default)]
     pub login_name: String,
+    #[allow(dead_code)]
     #[serde(default)]
     pub display_name: String,
 }
@@ -35,6 +36,7 @@ pub struct UserProfile {
 #[derive(Debug, Default, Deserialize)]
 #[serde(rename_all = "PascalCase")]
 pub struct Node {
+    #[allow(dead_code)]
     #[serde(default)]
     pub name: String,
     #[serde(default)]

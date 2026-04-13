@@ -104,10 +104,7 @@ async fn authorize(
     }
 }
 
-async fn check_tailscale(
-    state: &ApiState,
-    peer: Option<SocketAddr>,
-) -> Result<(), StatusCode> {
+async fn check_tailscale(state: &ApiState, peer: Option<SocketAddr>) -> Result<(), StatusCode> {
     let Some(addr) = peer else {
         tracing::warn!("tailscale auth: no peer addr available");
         return Err(StatusCode::UNAUTHORIZED);
@@ -209,7 +206,10 @@ pub fn router(state: ApiState) -> Router {
         .route("/api/checkpoints/{profile}", get(checkpoints))
         .route("/api/recordings", get(recordings))
         .route("/ws/events", get(ws_events))
-        .layer(middleware::from_fn_with_state(state.clone(), auth_middleware))
+        .layer(middleware::from_fn_with_state(
+            state.clone(),
+            auth_middleware,
+        ))
         .with_state(state);
 
     public.merge(protected).layer(cors)
@@ -217,11 +217,7 @@ pub fn router(state: ApiState) -> Router {
 
 /// Tower middleware: runs before every protected route and rejects callers
 /// that can't satisfy the configured auth mode.
-async fn auth_middleware(
-    State(state): State<ApiState>,
-    request: Request,
-    next: Next,
-) -> Response {
+async fn auth_middleware(State(state): State<ApiState>, request: Request, next: Next) -> Response {
     let peer_addr = request
         .extensions()
         .get::<ConnectInfo<SocketAddr>>()
@@ -277,20 +273,14 @@ async fn tool_call(
     }
 }
 
-async fn list_profiles(
-    State(state): State<ApiState>,
-    _headers: HeaderMap,
-) -> impl IntoResponse {
+async fn list_profiles(State(state): State<ApiState>, _headers: HeaderMap) -> impl IntoResponse {
     match dispatch(&state, "list_profiles", &json!({})).await {
         Ok(r) => (StatusCode::OK, Json(parse_result(&r))),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e}))),
     }
 }
 
-async fn list_sessions(
-    State(state): State<ApiState>,
-    _headers: HeaderMap,
-) -> impl IntoResponse {
+async fn list_sessions(State(state): State<ApiState>, _headers: HeaderMap) -> impl IntoResponse {
     match dispatch(&state, "list_sessions", &json!({})).await {
         Ok(r) => (StatusCode::OK, Json(parse_result(&r))),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e}))),
@@ -359,10 +349,7 @@ async fn screenshot(
     }
 }
 
-async fn notifications(
-    State(state): State<ApiState>,
-    _headers: HeaderMap,
-) -> impl IntoResponse {
+async fn notifications(State(state): State<ApiState>, _headers: HeaderMap) -> impl IntoResponse {
     match dispatch(&state, "list_notifications", &json!({})).await {
         Ok(r) => (StatusCode::OK, Json(parse_result(&r))),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e}))),
@@ -374,16 +361,19 @@ async fn checkpoints(
     _headers: HeaderMap,
     Path(profile): Path<String>,
 ) -> impl IntoResponse {
-    match dispatch(&state, "list_session_checkpoints", &json!({"profile": profile})).await {
+    match dispatch(
+        &state,
+        "list_session_checkpoints",
+        &json!({"profile": profile}),
+    )
+    .await
+    {
         Ok(r) => (StatusCode::OK, Json(parse_result(&r))),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e}))),
     }
 }
 
-async fn recordings(
-    State(state): State<ApiState>,
-    _headers: HeaderMap,
-) -> impl IntoResponse {
+async fn recordings(State(state): State<ApiState>, _headers: HeaderMap) -> impl IntoResponse {
     match dispatch(&state, "list_recordings", &json!({})).await {
         Ok(r) => (StatusCode::OK, Json(parse_result(&r))),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e}))),
@@ -561,17 +551,17 @@ pub async fn start_http_server(
         .await
         .map_err(|e| format!("HTTP API bind {}: {}", addr, e))?;
 
-    tracing::info!(
-        "HTTP API listening on {} (auth: {:?})",
-        addr, config.auth
-    );
+    tracing::info!("HTTP API listening on {} (auth: {:?})", addr, config.auth);
 
     // `into_make_service_with_connect_info` exposes the TCP peer address to
     // handlers via `ConnectInfo<SocketAddr>`. Tailscale auth needs this to
     // identify the caller.
-    axum::serve(listener, app.into_make_service_with_connect_info::<SocketAddr>())
-        .await
-        .map_err(|e| format!("HTTP API server error: {}", e))?;
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<SocketAddr>(),
+    )
+    .await
+    .map_err(|e| format!("HTTP API server error: {}", e))?;
 
     Ok(())
 }
