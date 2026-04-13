@@ -382,7 +382,10 @@ mod tests {
 
         // Speech chunk should buffer, not transcribe yet
         let result = p.process_audio(&loud, 16_000).await.unwrap();
-        assert!(result.is_none(), "speech should buffer, not transcribe immediately");
+        assert!(
+            result.is_none(),
+            "speech should buffer, not transcribe immediately"
+        );
         assert!(p.is_speaking());
     }
 
@@ -414,7 +417,10 @@ mod tests {
         // One silence frame (less than required 2) — should still be buffering
         let silent = vec![0.0_f32; 160];
         let result = p.process_audio(&silent, 16_000).await.unwrap();
-        assert!(result.is_none(), "single silence frame should not end utterance");
+        assert!(
+            result.is_none(),
+            "single silence frame should not end utterance"
+        );
 
         // More speech resumes buffering
         let result = p.process_audio(&loud, 16_000).await.unwrap();
@@ -436,7 +442,11 @@ mod tests {
         // End with silence
         let results = feed_silence(&mut p, 3).await;
         let transcriptions: Vec<_> = results.into_iter().flatten().collect();
-        assert_eq!(transcriptions.len(), 1, "should transcribe exactly once for the full utterance");
+        assert_eq!(
+            transcriptions.len(),
+            1,
+            "should transcribe exactly once for the full utterance"
+        );
     }
 
     // -----------------------------------------------------------------------
