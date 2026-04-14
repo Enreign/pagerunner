@@ -189,8 +189,11 @@ final class AppState {
         do {
             let response = try await client.callTool("agent_run", args: ["goal": trimmed])
 
-            // If the WebSocket already appended a .agentDone for this turn
-            // (any item added after turnMarker), skip the HTTP duplicate.
+            // The HTTP response often beats the final WebSocket .done event
+            // by a few hundred ms — give the WebSocket a moment to catch up
+            // before deciding whether to fall back.
+            try? await Task.sleep(for: .milliseconds(600))
+
             let wsDoneThisTurn = chatItems[turnMarker...].contains { item in
                 if case .agentDone = item { return true }
                 return false
@@ -198,13 +201,11 @@ final class AppState {
 
             if let err = response.error, !err.isEmpty {
                 chatItems.append(.error(id: UUID(), message: err))
-            } else if let summary = response.result?["summary"]?.stringValue,
-                      !summary.isEmpty, !wsDoneThisTurn {
-                chatItems.append(.agentDone(id: UUID(), summary: summary))
             } else if !wsDoneThisTurn {
-                // Fallback: agent finished but returned no summary. Surface
-                // something so the user sees the turn completed.
-                chatItems.append(.agentDone(id: UUID(), summary: ""))
+                // WebSocket never delivered a done — fall back to the HTTP
+                // summary so the user doesn't see a silent turn.
+                let summary = response.result?["summary"]?.stringValue ?? ""
+                chatItems.append(.agentDone(id: UUID(), summary: summary))
             }
         } catch {
             chatItems.append(.error(id: UUID(), message: error.localizedDescription))
