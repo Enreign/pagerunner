@@ -42,8 +42,21 @@ use axum::{
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::net::SocketAddr;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use tokio::sync::{broadcast, Mutex};
+
+/// Global channel through which any in-daemon agent invocation can forward
+/// its events to the HTTP API's WebSocket subscribers, regardless of which
+/// call site launched it. Set exactly once by `start_http_server`.
+static HTTP_EVENT_TX: OnceLock<broadcast::Sender<DaemonEvent>> = OnceLock::new();
+
+/// Fan out a single agent event to every connected WebSocket client. No-op
+/// when the HTTP API isn't running (e.g. token mode with HTTP disabled).
+pub fn publish_agent_event(evt: DaemonEvent) {
+    if let Some(tx) = HTTP_EVENT_TX.get() {
+        let _ = tx.send(evt);
+    }
+}
 use tower_http::cors::{Any, CorsLayer};
 
 // ---------------------------------------------------------------------------
@@ -541,9 +554,13 @@ pub async fn start_http_server(
         auth_mode: config.auth,
         tailscale_allowed_users: config.tailscale_allowed_users.clone(),
         tailscale_allowed_tags: config.tailscale_allowed_tags.clone(),
-        event_tx,
+        event_tx: event_tx.clone(),
         notification_tx: broadcast::channel(256).0,
     };
+
+    // Make the broadcast channel reachable from mcp_server::dispatch_tool so
+    // that agent events produced by HTTP-triggered runs reach WS clients.
+    let _ = HTTP_EVENT_TX.set(event_tx);
 
     let app = router(state);
     let addr = format!("{}:{}", config.bind_address, config.port);

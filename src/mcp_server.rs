@@ -4831,11 +4831,31 @@ async fn dispatch_tool_inner(
                     audit: agent_audit,
                 });
 
-            let (event_tx, _event_rx) = tokio::sync::broadcast::channel(256);
+            let (event_tx, mut event_rx) = tokio::sync::broadcast::channel(256);
             let (_interrupt_tx, interrupt_rx) = tokio::sync::watch::channel(false);
             let (_approval_tx, approval_rx) = tokio::sync::mpsc::channel(16);
 
             let run_id = uuid::Uuid::new_v4().to_string();
+
+            // Forward every agent event to the HTTP API's broadcast channel
+            // so WebSocket clients see the run stream live. No-op when HTTP
+            // API isn't running.
+            let forward_run_id = run_id.clone();
+            let forwarder = tokio::spawn(async move {
+                loop {
+                    match event_rx.recv().await {
+                        Ok(event) => {
+                            crate::http_api::publish_agent_event(crate::ipc::DaemonEvent {
+                                run_id: forward_run_id.clone(),
+                                event,
+                            });
+                        }
+                        Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                        Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                    }
+                }
+            });
+
             let result = pagerunner_agent::run_agent(
                 enriched_goal,
                 agent_config,
@@ -4847,6 +4867,10 @@ async fn dispatch_tool_inner(
                 run_id,
             )
             .await;
+
+            // Give the forwarder a moment to drain any trailing events
+            // before we return the final HTTP response.
+            let _ = forwarder.await;
 
             let response = serde_json::json!({
                 "outcome": format!("{:?}", result.outcome),

@@ -44,7 +44,7 @@
 		7172AAAC50AA827A09182790 /* AppState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppState.swift; sourceTree = "<group>"; };
 		73C6AC813400F750FF2F8EEE /* SessionDetailView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionDetailView.swift; sourceTree = "<group>"; };
 		782BCE717E9057D8645B5B36 /* PagerunnerApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PagerunnerApp.swift; sourceTree = "<group>"; };
-		7BEB204C13E56AC6955FDAEE /* Pagerunner.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = Pagerunner.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		7BEB204C13E56AC6955FDAEE /* Pagerunner.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Pagerunner.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		841D5C67262A1FBBC696E745 /* DashboardView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DashboardView.swift; sourceTree = "<group>"; };
 		89CE2EC634E52FD245E06BBF /* ios */ = {isa = PBXFileReference; lastKnownFileType = folder; name = ios; path = .; sourceTree = SOURCE_ROOT; };
 		89DEEE9645A96B41C89B69BA /* AgentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentView.swift; sourceTree = "<group>"; };
@@ -201,7 +201,6 @@
 				LastUpgradeCheck = 1430;
 				TargetAttributes = {
 					C2392580BE38760E325BE321 = {
-						DevelopmentTeam = XDX3SXMPKU;
 						ProvisioningStyle = Automatic;
 					};
 				};
@@ -340,6 +339,7 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
+				DEVELOPMENT_TEAM = XDX3SXMPKU;
 				INFOPLIST_FILE = Sources/Pagerunner/Info.plist;
 				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
 				LD_RUNPATH_SEARCH_PATHS = (
@@ -427,6 +427,7 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
+				DEVELOPMENT_TEAM = XDX3SXMPKU;
 				INFOPLIST_FILE = Sources/Pagerunner/Info.plist;
 				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
 				LD_RUNPATH_SEARCH_PATHS = (
