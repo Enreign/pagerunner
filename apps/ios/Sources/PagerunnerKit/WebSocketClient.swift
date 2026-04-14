@@ -112,7 +112,9 @@ public final class WebSocketClient {
         state = .connecting
 
         let urlString = "\(apiClient.wsBaseURL)/ws/events"
+        PgrLog.websocket.info("connecting to \(urlString, privacy: .public)")
         guard let url = URL(string: urlString) else {
+            PgrLog.websocket.error("invalid URL: \(urlString, privacy: .public)")
             state = .disconnected
             return
         }
@@ -127,6 +129,7 @@ public final class WebSocketClient {
         wsTask.resume()
 
         state = .connected
+        PgrLog.websocket.info("connected")
         backoffSeconds = Self.initialBackoff
 
         receiveTask?.cancel()
@@ -143,12 +146,12 @@ public final class WebSocketClient {
                 let message = try await task.receive()
                 handleMessage(message)
             } catch {
-                // WebSocket closed or errored
+                PgrLog.websocket.error("receive failed: \(error.localizedDescription, privacy: .public)")
                 break
             }
         }
 
-        // If we get here, the connection dropped
+        PgrLog.websocket.info("connection dropped, handling reconnect")
         handleDisconnect()
     }
 
@@ -174,7 +177,10 @@ public final class WebSocketClient {
             if let eventData = wsMessage.data,
                let reEncoded = try? JSONEncoder().encode(eventData),
                let agentEvent = try? decoder.decode(AgentEvent.self, from: reEncoded) {
+                PgrLog.websocket.debug("agent_event run=\(agentEvent.runId, privacy: .public)")
                 onAgentEvent?(agentEvent)
+            } else {
+                PgrLog.websocket.error("agent_event decode failed")
             }
 
         case .sessionStatus:

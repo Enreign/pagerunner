@@ -114,6 +114,7 @@ final class AppState {
         ws.onAgentEvent = { [weak self] event in
             Task { @MainActor in
                 guard let self else { return }
+                PgrLog.agent.debug("event run=\(event.runId, privacy: .public) \(String(describing: event.event), privacy: .public)")
                 let wrapped = IdentifiableAgentEvent(event: event, index: self.agentEvents.count)
                 self.agentEvents.append(wrapped)
                 if let item = ChatItem.from(event.event) {
@@ -163,9 +164,16 @@ final class AppState {
         Task {
             // Fetch the first tab for the session and screenshot it.
             let targetId: String? = await (try? client.listTabs(sessionId: sessionId))?.first?.targetId
-            guard let targetId else { return }
-            if let base64 = try? await client.screenshot(sessionId: sessionId, targetId: targetId) {
+            guard let targetId else {
+                PgrLog.chat.notice("auto-screenshot skipped: no tabs for session \(sessionId, privacy: .public)")
+                return
+            }
+            do {
+                let base64 = try await client.screenshot(sessionId: sessionId, targetId: targetId)
                 chatItems.append(.screenshot(id: UUID(), base64: base64, sessionId: sessionId, targetId: targetId))
+                PgrLog.chat.info("auto-screenshot appended (tool=\(name, privacy: .public))")
+            } catch {
+                PgrLog.chat.error("auto-screenshot failed: \(error.localizedDescription, privacy: .public)")
             }
         }
     }
@@ -177,17 +185,25 @@ final class AppState {
     /// before by looking at the last few items, but that incorrectly
     /// swallowed every follow-up message whose previous turn had a done.
     func sendUserMessage(_ text: String) async {
-        guard let client = connection.apiClient else { return }
+        guard let client = connection.apiClient else {
+            PgrLog.chat.error("sendUserMessage with no apiClient")
+            return
+        }
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
 
+        PgrLog.chat.info("send: \(trimmed.count) chars")
         let turnMarker = chatItems.count
         chatItems.append(.user(id: UUID(), text: trimmed, sent: .now))
         isAgentRunning = true
-        defer { isAgentRunning = false }
+        defer {
+            isAgentRunning = false
+            PgrLog.chat.info("turn ended")
+        }
 
         do {
             let response = try await client.callTool("agent_run", args: ["goal": trimmed])
+            PgrLog.chat.info("agent_run returned ok=\(response.ok)")
 
             // The HTTP response often beats the final WebSocket .done event
             // by a few hundred ms — give the WebSocket a moment to catch up

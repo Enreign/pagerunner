@@ -76,6 +76,7 @@ public final class ConnectionManager {
     /// Updates `isConnected`, `daemonVersion`, and `lastError`.
     public func connect() async {
         lastError = nil
+        PgrLog.connection.info("connect host=\(self.host, privacy: .public) port=\(self.port)")
 
         let client = APIClient(
             host: host,
@@ -87,7 +88,9 @@ public final class ConnectionManager {
         do {
             let healthResponse = try await client.health()
             daemonVersion = healthResponse.version
+            PgrLog.connection.info("health ok, daemon=\(healthResponse.version, privacy: .public)")
         } catch {
+            PgrLog.connection.error("health failed: \(error.localizedDescription, privacy: .public)")
             lastError = error.localizedDescription
             isConnected = false
             apiClient = nil
@@ -100,15 +103,16 @@ public final class ConnectionManager {
             _ = try await client.listProfiles()
         } catch let error as PagerunnerError {
             if case .unauthorized = error {
+                PgrLog.connection.error("auth rejected")
                 lastError = "Invalid bearer token"
                 isConnected = false
                 apiClient = nil
                 wsClient = nil
                 return
             }
-            // Other errors are acceptable — daemon is reachable but maybe
-            // profiles aren't configured yet.
+            PgrLog.connection.notice("listProfiles non-fatal: \(error.localizedDescription, privacy: .public)")
         } catch {
+            PgrLog.connection.error("listProfiles failed: \(error.localizedDescription, privacy: .public)")
             lastError = error.localizedDescription
             isConnected = false
             apiClient = nil
@@ -125,10 +129,12 @@ public final class ConnectionManager {
 
         isConnected = true
         saveSettings()
+        PgrLog.connection.info("connected")
     }
 
     /// Disconnect from the daemon.
     public func disconnect() {
+        PgrLog.connection.info("disconnect")
         wsClient?.disconnect()
         wsClient = nil
         apiClient = nil
