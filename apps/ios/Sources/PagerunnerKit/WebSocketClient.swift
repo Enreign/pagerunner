@@ -165,7 +165,6 @@ public final class WebSocketClient {
             return
         }
 
-        // Decode the outer message to determine the event type
         guard let wsMessage = try? decoder.decode(WSMessage.self, from: data) else {
             return
         }

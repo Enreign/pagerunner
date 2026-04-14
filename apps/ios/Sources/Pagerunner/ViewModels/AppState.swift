@@ -123,6 +123,49 @@ final class AppState {
                     self.pendingApproval = event.event
                 }
                 self.activeRunId = event.runId
+
+                // After a visual action completes, fetch a screenshot of the
+                // affected tab and surface it inline — so the user sees the
+                // state of the browser at each step, not just tool metadata.
+                if case .toolResult(let name, _, let isError) = event.event, !isError {
+                    self.maybeAutoScreenshot(afterTool: name)
+                }
+            }
+        }
+    }
+
+    /// Tools that visually change the page. We screenshot after these so the
+    /// chat reflects the state the user would see if they opened the tab.
+    private static let autoScreenshotTools: Set<String> = [
+        "navigate", "new_tab", "click", "fill", "open_session",
+    ]
+
+    private func maybeAutoScreenshot(afterTool name: String) {
+        guard Self.autoScreenshotTools.contains(name),
+              let client = connection.apiClient else { return }
+        // Pick the most recent tool_call of the same name with a session id.
+        let sid: String? = {
+            for e in agentEvents.reversed() {
+                if case .toolCall(let ename, let args) = e.detail,
+                   ename == name,
+                   case .object(let dict) = args,
+                   case .string(let s) = dict["session_id"] ?? .null {
+                    return s
+                }
+            }
+            return nil
+        }()
+        // Fall back to the first alive session for tools like open_session
+        // that produce a new session_id we haven't observed yet.
+        let sessionId = sid ?? aliveSessions.first?.id
+        guard let sessionId else { return }
+
+        Task {
+            // Fetch the first tab for the session and screenshot it.
+            let targetId: String? = await (try? client.listTabs(sessionId: sessionId))?.first?.targetId
+            guard let targetId else { return }
+            if let base64 = try? await client.screenshot(sessionId: sessionId, targetId: targetId) {
+                chatItems.append(.screenshot(id: UUID(), base64: base64, sessionId: sessionId, targetId: targetId))
             }
         }
     }
