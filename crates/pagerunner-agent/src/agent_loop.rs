@@ -1428,6 +1428,101 @@ mod tests {
         }
     }
 
+    #[tokio::test]
+    async fn scope_dispatch_fires_scope_digest_and_turn_summary_events() {
+        use crate::scope::{Scope, ScopeTab};
+
+        // Turn 1: LLM calls _scope_digest
+        // Turn 2: LLM calls _turn_summary
+        // Turn 3: LLM returns text → loop terminates (Done)
+        let provider = Arc::new(MockProvider::new(vec![
+            Ok(tool_use_response(
+                "sd-1",
+                "_scope_digest",
+                serde_json::json!({
+                    "session_id": "s-1",
+                    "target_id": "t-a",
+                    "digest": "rows observed"
+                }),
+            )),
+            Ok(tool_use_response(
+                "ts-1",
+                "_turn_summary",
+                serde_json::json!({
+                    "summary": "done",
+                    "touched_tab_ids": ["s-1-t-a"]
+                }),
+            )),
+            Ok(text_response("All done.")),
+        ]));
+        let executor = Arc::new(MockExecutor::new(make_tools(), ToolResponse::ok("ok")));
+        let (event_tx, mut event_rx, _interrupt_tx, interrupt_rx, _approval_tx, approval_rx) =
+            setup_channels();
+
+        let config = AgentConfig {
+            scope: Some(Scope {
+                tabs: vec![ScopeTab {
+                    session_id: "s-1".into(),
+                    target_id: Some("t-a".into()),
+                    label: "Test Tab".into(),
+                    purpose: None,
+                    digest: None,
+                }],
+                ..Default::default()
+            }),
+            ..default_config()
+        };
+
+        let result = run_agent(
+            "Do something with the scope tab".to_string(),
+            config,
+            provider,
+            executor,
+            event_tx,
+            interrupt_rx,
+            approval_rx,
+            "run-scope-dispatch".to_string(),
+        )
+        .await;
+
+        assert_eq!(result.outcome, AgentOutcome::Completed);
+
+        // Drain all events into a vec so we can assert on them.
+        let mut events = Vec::new();
+        while let Ok(ev) = event_rx.try_recv() {
+            events.push(ev);
+        }
+
+        // ScopeDigest must be present with correct fields.
+        let scope_digest = events.iter().find(|ev| {
+            matches!(ev, AgentEvent::ScopeDigest { session_id, target_id, digest }
+                if session_id == "s-1"
+                && target_id.as_deref() == Some("t-a")
+                && digest == "rows observed")
+        });
+        assert!(scope_digest.is_some(), "expected ScopeDigest event; got: {:?}", events);
+
+        // TurnSummary must be present with correct fields.
+        let turn_summary = events.iter().find(|ev| {
+            matches!(ev, AgentEvent::TurnSummary { summary, touched_tab_ids }
+                if summary == "done" && touched_tab_ids == &["s-1-t-a"])
+        });
+        assert!(turn_summary.is_some(), "expected TurnSummary event; got: {:?}", events);
+
+        // Neither pseudo-tool should emit a ToolCall or ToolResult event.
+        let pseudo_tool_call = events.iter().find(|ev| {
+            matches!(ev, AgentEvent::ToolCall { name, .. }
+                if name == "_scope_digest" || name == "_turn_summary")
+        });
+        assert!(pseudo_tool_call.is_none(), "pseudo-tool ToolCall should be suppressed; got: {:?}", events);
+
+        let pseudo_tool_result = events.iter().find(|ev| {
+            matches!(ev, AgentEvent::ToolResult { name, .. }
+                if name == "_scope_digest" || name == "_turn_summary")
+        });
+        assert!(pseudo_tool_result.is_none(), "pseudo-tool ToolResult should be suppressed; got: {:?}", events);
+    }
+
     #[test]
     fn strip_session_params_skips_pseudo_tools() {
         let mut tools = vec![
