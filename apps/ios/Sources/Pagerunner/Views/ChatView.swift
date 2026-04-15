@@ -6,7 +6,7 @@ struct ChatView: View {
 
     @State private var draft = ""
     @State private var isSending = false
-    @State private var showSessions = false
+    @State private var showThreads = false
     @State private var showSettings = false
     @State private var inspectorContext: InspectorContext?
     @State private var fullscreenScreenshot: ChatItemView.FullscreenScreenshot?
@@ -29,11 +29,11 @@ struct ChatView: View {
         .toolbar {
             ToolbarItem(placement: .topBarLeading) {
                 Button {
-                    showSessions = true
+                    showThreads = true
                 } label: {
-                    Image(systemName: "macwindow.on.rectangle")
+                    Image(systemName: "line.3.horizontal")
                 }
-                .accessibilityLabel("Sessions")
+                .accessibilityLabel("Threads")
             }
             ToolbarItem(placement: .topBarTrailing) {
                 Button {
@@ -44,13 +44,10 @@ struct ChatView: View {
                 .accessibilityLabel("Settings")
             }
         }
-        .sheet(isPresented: $showSessions) {
-            SessionsSheet(onOpenInspector: { ctx in
-                showSessions = false
-                inspectorContext = ctx
-            })
-            .presentationDetents([.medium, .large])
-            .presentationDragIndicator(.visible)
+        .sheet(isPresented: $showThreads) {
+            ThreadsDrawer()
+                .presentationDetents([.medium, .large])
+                .presentationDragIndicator(.visible)
         }
         .sheet(isPresented: $showSettings) {
             NavigationStack { SettingsView() }
