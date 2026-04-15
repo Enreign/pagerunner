@@ -39,3 +39,29 @@ targets:
     dependencies:
       - package: PagerunnerMobile
         product: PagerunnerKit
+
+  PagerunnerKitTests:
+    type: bundle.unit-test
+    platform: iOS
+    deploymentTarget: "18.0"
+    sources:
+      - path: Tests/PagerunnerKitTests
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.enreign.pagerunner.ios.kittests
+        GENERATE_INFOPLIST_FILE: YES
+        TARGETED_DEVICE_FAMILY: "1"
+    dependencies:
+      - target: Pagerunner
+      - package: PagerunnerMobile
+        product: PagerunnerKit
+
+schemes:
+  Pagerunner:
+    build:
+      targets:
+        Pagerunner: all
+        PagerunnerKitTests: [test]
+    test:
+      targets:
+        - PagerunnerKitTests

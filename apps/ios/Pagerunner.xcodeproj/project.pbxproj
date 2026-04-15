@@ -13,7 +13,9 @@
 		1D07134B7A81A9D432C3A4B2 /* SessionListView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2DCAB6E12B6760E7453B3D7 /* SessionListView.swift */; };
 		1DF5DEF33CD8B124627E9419 /* EventRow.swift in Sources */ = {isa = PBXBuildFile; fileRef = A3F7D5168DBAC729969BA5E3 /* EventRow.swift */; };
 		27A269AF34F2FCC0A3C768AB /* ChatItemView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D965EF49712C8B5419D40E3A /* ChatItemView.swift */; };
+		2B0BBAAE999CEE4089F03A2F /* PagerunnerKit in Frameworks */ = {isa = PBXBuildFile; productRef = AF51AF5A2FC08005B510890B /* PagerunnerKit */; };
 		3D79EEF6CEEF8D73173E2CF8 /* PagerunnerApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 782BCE717E9057D8645B5B36 /* PagerunnerApp.swift */; };
+		402804A2B8B0D6AF5B8791BD /* ChatRecordTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D36B4D70B22FAB078F0DC440 /* ChatRecordTests.swift */; };
 		4500F29F059B0C6A354F9A66 /* SessionInspectorView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 21CEF1EC1B8D37B8A62FE3CD /* SessionInspectorView.swift */; };
 		506F4B4736EEAE94624F286F /* ObserveView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2159850D67E5293DCAE28536 /* ObserveView.swift */; };
 		5909699B35906A474D5654FC /* ChatItem.swift in Sources */ = {isa = PBXBuildFile; fileRef = A776F10B5C6853BF315AEF28 /* ChatItem.swift */; };
@@ -21,6 +23,7 @@
 		6F761C9E9136B78D22CF34BF /* NetworkLogRow.swift in Sources */ = {isa = PBXBuildFile; fileRef = 61C76450EA4FB13A6FD2BF11 /* NetworkLogRow.swift */; };
 		750A9536361D905C3DD5BA0D /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = CDE2A110345DA54EC8E41827 /* Assets.xcassets */; };
 		7E0941A57A3671D69F820D06 /* StatusDot.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1B18367DA4E0402F72700462 /* StatusDot.swift */; };
+		81CD89B81710273C2C53B75F /* ModelsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E8402200B211DBB741DE5AF0 /* ModelsTests.swift */; };
 		95BE930B1488D91E229907D2 /* AppState.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7172AAAC50AA827A09182790 /* AppState.swift */; };
 		97F8227C84A3965E020C2E70 /* AnimatedDot.swift in Sources */ = {isa = PBXBuildFile; fileRef = D3B8460B1BA791387E1464BB /* AnimatedDot.swift */; };
 		A40431DB1E7577468A4AB5E4 /* Card.swift in Sources */ = {isa = PBXBuildFile; fileRef = 63E36F852923CA0663E925F9 /* Card.swift */; };
@@ -33,6 +36,16 @@
 		FD03F9D80B0657D11DA38B51 /* PagerunnerKit in Frameworks */ = {isa = PBXBuildFile; productRef = 74DF9502314C770F4786162F /* PagerunnerKit */; };
 /* End PBXBuildFile section */
 
+/* Begin PBXContainerItemProxy section */
+		FE1B9F5C91268E5351820BE7 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = D416774B0C3DBD9B7B71D844 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = C2392580BE38760E325BE321;
+			remoteInfo = Pagerunner;
+		};
+/* End PBXContainerItemProxy section */
+
 /* Begin PBXFileReference section */
 		04712FC04515C81A77870DDF /* Theme.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Theme.swift; sourceTree = "<group>"; };
 		1B18367DA4E0402F72700462 /* StatusDot.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StatusDot.swift; sourceTree = "<group>"; };
@@ -44,7 +57,7 @@
 		7172AAAC50AA827A09182790 /* AppState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppState.swift; sourceTree = "<group>"; };
 		73C6AC813400F750FF2F8EEE /* SessionDetailView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionDetailView.swift; sourceTree = "<group>"; };
 		782BCE717E9057D8645B5B36 /* PagerunnerApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PagerunnerApp.swift; sourceTree = "<group>"; };
-		7BEB204C13E56AC6955FDAEE /* PGRNR.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = PGRNR.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		7BEB204C13E56AC6955FDAEE /* Pagerunner.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = Pagerunner.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		841D5C67262A1FBBC696E745 /* DashboardView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DashboardView.swift; sourceTree = "<group>"; };
 		89CE2EC634E52FD245E06BBF /* ios */ = {isa = PBXFileReference; lastKnownFileType = folder; name = ios; path = .; sourceTree = SOURCE_ROOT; };
 		89DEEE9645A96B41C89B69BA /* AgentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentView.swift; sourceTree = "<group>"; };
@@ -55,13 +68,24 @@
 		C4B35E601AF290B3016851FD /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
 		C5BCD76E3BCDDEF151C0F30A /* StatusBadge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StatusBadge.swift; sourceTree = "<group>"; };
 		CDE2A110345DA54EC8E41827 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		D36B4D70B22FAB078F0DC440 /* ChatRecordTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatRecordTests.swift; sourceTree = "<group>"; };
 		D3B8460B1BA791387E1464BB /* AnimatedDot.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AnimatedDot.swift; sourceTree = "<group>"; };
 		D965EF49712C8B5419D40E3A /* ChatItemView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatItemView.swift; sourceTree = "<group>"; };
 		E29D7828DA7F80D8DDED755A /* OnboardingView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OnboardingView.swift; sourceTree = "<group>"; };
+		E8402200B211DBB741DE5AF0 /* ModelsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ModelsTests.swift; sourceTree = "<group>"; };
 		E999EB53B8F924A740A6C646 /* SessionsSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionsSheet.swift; sourceTree = "<group>"; };
+		FC190AB70160A0CF431B646A /* PagerunnerKitTests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = PagerunnerKitTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
+		A0D324A1524549DF01B2A993 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				2B0BBAAE999CEE4089F03A2F /* PagerunnerKit in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		D0A01942B4A5F94D3AF5215F /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
@@ -73,6 +97,14 @@
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
+		0249BFED310D3C45FBE8EADB /* Tests */ = {
+			isa = PBXGroup;
+			children = (
+				3A82563BB63B22C195E93377 /* PagerunnerKitTests */,
+			);
+			path = Tests;
+			sourceTree = "<group>";
+		};
 		0364576579876FD9465B9ACF /* Theme */ = {
 			isa = PBXGroup;
 			children = (
@@ -89,6 +121,15 @@
 				89CE2EC634E52FD245E06BBF /* ios */,
 			);
 			name = Packages;
+			sourceTree = "<group>";
+		};
+		3A82563BB63B22C195E93377 /* PagerunnerKitTests */ = {
+			isa = PBXGroup;
+			children = (
+				D36B4D70B22FAB078F0DC440 /* ChatRecordTests.swift */,
+				E8402200B211DBB741DE5AF0 /* ModelsTests.swift */,
+			);
+			path = PagerunnerKitTests;
 			sourceTree = "<group>";
 		};
 		4BB7A92F33E9C83EE9DCFF94 /* Sources */ = {
@@ -136,6 +177,7 @@
 			children = (
 				36731E84B6637608A97D542E /* Packages */,
 				4BB7A92F33E9C83EE9DCFF94 /* Sources */,
+				0249BFED310D3C45FBE8EADB /* Tests */,
 				DB2E3B4EE4B62D714D8DA4F6 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -143,7 +185,8 @@
 		DB2E3B4EE4B62D714D8DA4F6 /* Products */ = {
 			isa = PBXGroup;
 			children = (
-				7BEB204C13E56AC6955FDAEE /* PGRNR.app */,
+				7BEB204C13E56AC6955FDAEE /* Pagerunner.app */,
+				FC190AB70160A0CF431B646A /* PagerunnerKitTests.xctest */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -171,6 +214,26 @@
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
+		7DD54B74FA891FE381A87EE7 /* PagerunnerKitTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 465DE6568F3CB063D2E82930 /* Build configuration list for PBXNativeTarget "PagerunnerKitTests" */;
+			buildPhases = (
+				E73B5B52744AE52BE2B4266F /* Sources */,
+				A0D324A1524549DF01B2A993 /* Frameworks */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				F99F30B3F87457F8BD5D6F34 /* PBXTargetDependency */,
+			);
+			name = PagerunnerKitTests;
+			packageProductDependencies = (
+				AF51AF5A2FC08005B510890B /* PagerunnerKit */,
+			);
+			productName = PagerunnerKitTests;
+			productReference = FC190AB70160A0CF431B646A /* PagerunnerKitTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
 		C2392580BE38760E325BE321 /* Pagerunner */ = {
 			isa = PBXNativeTarget;
 			buildConfigurationList = 1A8A8CC0662535406BC6C89F /* Build configuration list for PBXNativeTarget "Pagerunner" */;
@@ -188,7 +251,7 @@
 				74DF9502314C770F4786162F /* PagerunnerKit */,
 			);
 			productName = Pagerunner;
-			productReference = 7BEB204C13E56AC6955FDAEE /* PGRNR.app */;
+			productReference = 7BEB204C13E56AC6955FDAEE /* Pagerunner.app */;
 			productType = "com.apple.product-type.application";
 		};
 /* End PBXNativeTarget section */
@@ -200,7 +263,12 @@
 				BuildIndependentTargetsInParallel = YES;
 				LastUpgradeCheck = 1430;
 				TargetAttributes = {
+					7DD54B74FA891FE381A87EE7 = {
+						DevelopmentTeam = XDX3SXMPKU;
+						ProvisioningStyle = Automatic;
+					};
 					C2392580BE38760E325BE321 = {
+						DevelopmentTeam = XDX3SXMPKU;
 						ProvisioningStyle = Automatic;
 					};
 				};
@@ -223,6 +291,7 @@
 			projectRoot = "";
 			targets = (
 				C2392580BE38760E325BE321 /* Pagerunner */,
+				7DD54B74FA891FE381A87EE7 /* PagerunnerKitTests */,
 			);
 		};
 /* End PBXProject section */
@@ -268,9 +337,44 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		E73B5B52744AE52BE2B4266F /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				402804A2B8B0D6AF5B8791BD /* ChatRecordTests.swift in Sources */,
+				81CD89B81710273C2C53B75F /* ModelsTests.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXSourcesBuildPhase section */
 
+/* Begin PBXTargetDependency section */
+		F99F30B3F87457F8BD5D6F34 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = C2392580BE38760E325BE321 /* Pagerunner */;
+			targetProxy = FE1B9F5C91268E5351820BE7 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
+
 /* Begin XCBuildConfiguration section */
+		18B1A2390D4BE6E50D85F973 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.enreign.pagerunner.ios.kittests;
+				SDKROOT = iphoneos;
+				TARGETED_DEVICE_FAMILY = 1;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Pagerunner.app/Pagerunner";
+			};
+			name = Debug;
+		};
 		29B8B5D098CE4AF1AB55C934 /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
@@ -339,18 +443,33 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
-				DEVELOPMENT_TEAM = XDX3SXMPKU;
 				INFOPLIST_FILE = Sources/Pagerunner/Info.plist;
-				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.utilities";
 				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
 				PRODUCT_BUNDLE_IDENTIFIER = com.enreign.pagerunner.ios;
-				PRODUCT_NAME = "$(TARGET_NAME)";
 				SDKROOT = iphoneos;
 				TARGETED_DEVICE_FAMILY = 1;
+			};
+			name = Release;
+		};
+		7FFC9F2A766AB21692DFB668 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.enreign.pagerunner.ios.kittests;
+				SDKROOT = iphoneos;
+				TARGETED_DEVICE_FAMILY = 1;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Pagerunner.app/Pagerunner";
 			};
 			name = Release;
 		};
@@ -429,16 +548,13 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
-				DEVELOPMENT_TEAM = XDX3SXMPKU;
 				INFOPLIST_FILE = Sources/Pagerunner/Info.plist;
-				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.utilities";
 				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
 				PRODUCT_BUNDLE_IDENTIFIER = com.enreign.pagerunner.ios;
-				PRODUCT_NAME = "$(TARGET_NAME)";
 				SDKROOT = iphoneos;
 				TARGETED_DEVICE_FAMILY = 1;
 			};
@@ -452,6 +568,15 @@
 			buildConfigurations = (
 				DF04C5E322C3BA566DA37372 /* Debug */,
 				69324117C65CECC19BF25494 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		465DE6568F3CB063D2E82930 /* Build configuration list for PBXNativeTarget "PagerunnerKitTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				18B1A2390D4BE6E50D85F973 /* Debug */,
+				7FFC9F2A766AB21692DFB668 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Debug;
@@ -476,6 +601,10 @@
 
 /* Begin XCSwiftPackageProductDependency section */
 		74DF9502314C770F4786162F /* PagerunnerKit */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = PagerunnerKit;
+		};
+		AF51AF5A2FC08005B510890B /* PagerunnerKit */ = {
 			isa = XCSwiftPackageProductDependency;
 			productName = PagerunnerKit;
 		};
