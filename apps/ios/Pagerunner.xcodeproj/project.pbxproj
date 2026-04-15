@@ -35,6 +35,7 @@
 		DE83A7F5ACFAC6CDB781D171 /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 624B489098490C4B59A6A1EE /* SettingsView.swift */; };
 		E837EE0969542E7754C18E0B /* SessionsSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = E999EB53B8F924A740A6C646 /* SessionsSheet.swift */; };
 		EBB292DA8F6701EEFC43A67F /* SessionDetailView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 73C6AC813400F750FF2F8EEE /* SessionDetailView.swift */; };
+		FA1D1F4DF5DDABAE5AEC6967 /* ThreadsDrawer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5532BB8E95B7C08C37E6E028 /* ThreadsDrawer.swift */; };
 		FD03F9D80B0657D11DA38B51 /* PagerunnerKit in Frameworks */ = {isa = PBXBuildFile; productRef = 74DF9502314C770F4786162F /* PagerunnerKit */; };
 /* End PBXBuildFile section */
 
@@ -54,6 +55,7 @@
 		2159850D67E5293DCAE28536 /* ObserveView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ObserveView.swift; sourceTree = "<group>"; };
 		21CEF1EC1B8D37B8A62FE3CD /* SessionInspectorView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionInspectorView.swift; sourceTree = "<group>"; };
 		2FF8B742213EB3732F9386A7 /* ThreadStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ThreadStoreTests.swift; sourceTree = "<group>"; };
+		5532BB8E95B7C08C37E6E028 /* ThreadsDrawer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ThreadsDrawer.swift; sourceTree = "<group>"; };
 		61C76450EA4FB13A6FD2BF11 /* NetworkLogRow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NetworkLogRow.swift; sourceTree = "<group>"; };
 		624B489098490C4B59A6A1EE /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
 		627EA941DC10329719692DF1 /* ScreenshotFullscreenView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScreenshotFullscreenView.swift; sourceTree = "<group>"; };
@@ -213,6 +215,7 @@
 				A2DCAB6E12B6760E7453B3D7 /* SessionListView.swift */,
 				E999EB53B8F924A740A6C646 /* SessionsSheet.swift */,
 				624B489098490C4B59A6A1EE /* SettingsView.swift */,
+				5532BB8E95B7C08C37E6E028 /* ThreadsDrawer.swift */,
 			);
 			path = Views;
 			sourceTree = "<group>";
@@ -341,6 +344,7 @@
 				C16AF637B5E1CCADC7F7612A /* StatusBadge.swift in Sources */,
 				7E0941A57A3671D69F820D06 /* StatusDot.swift in Sources */,
 				0C1324F635740B5F4A305A67 /* Theme.swift in Sources */,
+				FA1D1F4DF5DDABAE5AEC6967 /* ThreadsDrawer.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
