@@ -168,32 +168,32 @@ struct ChatView: View {
     // MARK: Composer
 
     private var composer: some View {
-        HStack(spacing: Theme.Spacing.regular) {
-            TextField("Ask Pagerunner…", text: $draft, axis: .vertical)
-                .textFieldStyle(.plain)
-                .lineLimit(1...5)
-                .padding(.horizontal, Theme.Spacing.regular)
-                .padding(.vertical, 10)
-                .background(.operatorCard, in: RoundedRectangle(cornerRadius: Theme.Radius.card, style: .continuous))
-                .focused($composerFocused)
-                .submitLabel(.send)
-                .onSubmit(send)
+        GlassEffectContainer(spacing: 12) {
+            HStack(spacing: Theme.Spacing.regular) {
+                TextField("Ask Pagerunner…", text: $draft, axis: .vertical)
+                    .textFieldStyle(.plain)
+                    .lineLimit(1...5)
+                    .padding(.horizontal, Theme.Spacing.regular)
+                    .padding(.vertical, 10)
+                    .glassEffect(.regular.interactive(), in: .capsule)
+                    .focused($composerFocused)
+                    .submitLabel(.send)
+                    .onSubmit(send)
 
-            Button(action: send) {
-                Image(systemName: isSending ? "ellipsis" : "arrow.up")
-                    .font(.headline.weight(.bold))
-                    .frame(width: 44, height: 44)
-                    .background(canSend ? Color.accent : Color.accent.opacity(0.3),
-                                in: Circle())
-                    .foregroundStyle(.white)
+                Button(action: send) {
+                    Image(systemName: isSending ? "ellipsis" : "arrow.up")
+                        .font(.headline.weight(.bold))
+                        .frame(width: 44, height: 44)
+                        .foregroundStyle(.white)
+                }
+                .buttonStyle(.glassProminent)
+                .tint(canSend ? .accent : .accent.opacity(0.3))
+                .disabled(!canSend)
+                .accessibilityLabel("Send message")
             }
-            .buttonStyle(.plain)
-            .disabled(!canSend)
-            .accessibilityLabel("Send message")
+            .padding(.horizontal, Theme.Spacing.loose)
+            .padding(.vertical, Theme.Spacing.regular)
         }
-        .padding(.horizontal, Theme.Spacing.loose)
-        .padding(.vertical, Theme.Spacing.regular)
-        .background(Color.operatorBackground)
     }
 
     private var canSend: Bool {
