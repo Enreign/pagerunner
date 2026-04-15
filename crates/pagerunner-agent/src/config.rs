@@ -71,6 +71,11 @@ pub struct AgentConfig {
     /// LLM never sees or generates these parameters.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session_context: Option<SessionContext>,
+
+    /// Multi-tab Scope (see `crate::scope::Scope`). Rendered into the system
+    /// prompt when present so the agent knows which tabs are in play.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scope: Option<crate::scope::Scope>,
 }
 
 impl Default for AgentConfig {
@@ -84,6 +89,7 @@ impl Default for AgentConfig {
             session_profile: None,
             system_prompt_extra: None,
             session_context: None,
+            scope: None,
         }
     }
 }
@@ -161,6 +167,7 @@ mod tests {
             session_profile: Some("work".to_string()),
             system_prompt_extra: None,
             session_context: None,
+            scope: None,
         };
         let json = serde_json::to_string(&original).unwrap();
         let decoded: AgentConfig = serde_json::from_str(&json).unwrap();
@@ -174,6 +181,7 @@ mod tests {
         assert!(!json.contains("session_profile"));
         assert!(!json.contains("system_prompt_extra"));
         assert!(!json.contains("session_context"));
+        assert!(!json.contains("scope"));
     }
 
     #[test]
@@ -201,5 +209,35 @@ mod tests {
         assert!(json.contains("s1"));
         let decoded: AgentConfig = serde_json::from_str(&json).unwrap();
         assert_eq!(decoded.session_context, cfg.session_context);
+    }
+
+    #[test]
+    fn agent_config_with_scope_roundtrip() {
+        use crate::scope::{Scope, ScopeTab};
+        let cfg = AgentConfig {
+            scope: Some(Scope {
+                tabs: vec![ScopeTab {
+                    session_id: "s-1".into(),
+                    target_id: Some("t-a".into()),
+                    label: "Notion".into(),
+                    purpose: None,
+                    digest: None,
+                }],
+                goal: Some("weekly review".into()),
+                ..Default::default()
+            }),
+            ..AgentConfig::default()
+        };
+        let json = serde_json::to_string(&cfg).unwrap();
+        assert!(json.contains("\"scope\""));
+        assert!(json.contains("\"weekly review\""));
+        let decoded: AgentConfig = serde_json::from_str(&json).unwrap();
+        assert_eq!(decoded.scope, cfg.scope);
+    }
+
+    #[test]
+    fn agent_config_scope_none_by_default() {
+        let cfg = AgentConfig::default();
+        assert!(cfg.scope.is_none());
     }
 }
