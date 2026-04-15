@@ -366,12 +366,12 @@ final class AppState {
                 appendRecord(.agentDone(id: did, summary: summary, at: .now))
             }
         } catch {
-            let eid = UUID()
-            chatItems.append(.error(id: eid, message: error.localizedDescription))
             let wsErrorThisTurn = chatItems[turnMarker...].contains { item in
                 if case .error = item { return true }
                 return false
             }
+            let eid = UUID()
+            chatItems.append(.error(id: eid, message: error.localizedDescription))
             if !wsErrorThisTurn {
                 appendRecord(.error(id: eid, message: error.localizedDescription, at: .now))
             }
