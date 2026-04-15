@@ -1,7 +1,10 @@
 import SwiftUI
 import PagerunnerKit
 
-struct ContextsDrawer: View {
+/// Grid picker for adding a tab to the current Scope. Reuses the live tab
+/// grid from the old `ContextsDrawer` but the action is "add to scope"
+/// (deduplicated by `ScopeTab.id`) instead of "replace pin".
+struct ScopeTabPickerView: View {
     @Environment(AppState.self) private var appState
     @Environment(\.dismiss) private var dismiss
 
@@ -24,20 +27,11 @@ struct ContextsDrawer: View {
                 .padding(Theme.Spacing.loose)
             }
             .background(.thinMaterial)
-            .navigationTitle("Contexts")
+            .navigationTitle("Add tab")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
-                    Button("Done") { dismiss() }
-                }
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button {
-                        appState.setScope(Scope())
-                        dismiss()
-                    } label: {
-                        Label("Unpin", systemImage: "pin.slash")
-                    }
-                    .disabled(appState.currentThread?.scope.tabs.isEmpty ?? true)
+                    Button("Cancel") { dismiss() }
                 }
             }
             .task {
@@ -67,7 +61,7 @@ struct ContextsDrawer: View {
                 } else {
                     LazyVGrid(columns: columns, spacing: 12) {
                         ForEach(tabs) { tab in
-                            tabTile(session: session, tab: tab)
+                            tile(session: session, tab: tab)
                         }
                     }
                 }
@@ -75,13 +69,19 @@ struct ContextsDrawer: View {
         }
     }
 
-    private func tabTile(session: Session, tab: PagerunnerKit.Tab) -> some View {
+    private func tile(session: Session, tab: PagerunnerKit.Tab) -> some View {
         let ctx = PinnedContext(sessionId: session.id, targetId: tab.targetId)
+        let tabId = "\(session.id)-\(tab.targetId)"
+        let alreadyInScope = appState.currentThread?.scope.tabs.contains(where: { $0.id == tabId }) ?? false
         let thumb = appState.thumbnails.image(for: ctx)
-        let isPinned = appState.pinnedContext == ctx
+        let label = tab.title.isEmpty ? (URL(string: tab.url)?.host() ?? "Untitled") : tab.title
 
         return Button {
-            appState.addTabToScope(sessionId: session.id, targetId: tab.targetId, label: tab.title.isEmpty ? tab.url : tab.title)
+            appState.addTabToScope(
+                sessionId: session.id,
+                targetId: tab.targetId,
+                label: label
+            )
             dismiss()
         } label: {
             VStack(alignment: .leading, spacing: 6) {
@@ -97,12 +97,20 @@ struct ContextsDrawer: View {
                 .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.chip, style: .continuous))
                 .overlay(
                     RoundedRectangle(cornerRadius: Theme.Radius.chip, style: .continuous)
-                        .stroke(isPinned ? Color.accent : .clear, lineWidth: 2)
+                        .stroke(alreadyInScope ? Color.accent : .clear, lineWidth: 2)
                 )
+                .opacity(alreadyInScope ? 0.6 : 1)
 
-                Text(tab.title.isEmpty ? "Untitled" : tab.title)
-                    .font(.caption.weight(.medium))
-                    .lineLimit(1)
+                HStack(spacing: 4) {
+                    Text(label)
+                        .font(.caption.weight(.medium))
+                        .lineLimit(1)
+                    if alreadyInScope {
+                        Image(systemName: "checkmark.circle.fill")
+                            .font(.caption2)
+                            .foregroundStyle(.accent)
+                    }
+                }
                 Text(URL(string: tab.url)?.host() ?? tab.url)
                     .font(.caption2)
                     .foregroundStyle(.secondary)
@@ -110,6 +118,7 @@ struct ContextsDrawer: View {
             }
         }
         .buttonStyle(.plain)
+        .disabled(alreadyInScope)
         .task(id: ctx) {
             if let client = appState.connection.apiClient {
                 appState.thumbnails.fetchIfNeeded(ctx, client: client)

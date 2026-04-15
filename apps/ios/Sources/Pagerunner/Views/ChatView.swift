@@ -55,7 +55,7 @@ struct ChatView: View {
                 .presentationDragIndicator(.visible)
         }
         .sheet(isPresented: $showScope) {
-            ContextsDrawer()
+            ScopeDrawer()
                 .presentationDetents([.medium, .large])
                 .presentationDragIndicator(.visible)
         }
