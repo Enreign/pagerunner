@@ -30,7 +30,7 @@ struct ContextChip: View {
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 8)
-            .background(.operatorCard, in: Capsule())
+            .glassEffect(.regular.interactive(), in: .capsule)
         }
         .buttonStyle(.plain)
         .task(id: appState.pinnedContext) {
