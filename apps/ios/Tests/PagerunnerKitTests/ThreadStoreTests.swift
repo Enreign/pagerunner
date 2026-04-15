@@ -21,7 +21,7 @@ struct ThreadStoreTests {
         let (store, _) = try freshStore()
         let thread = ChatThread(
             title: "test",
-            pinnedContext: PinnedContext(sessionId: "s-1"),
+            scope: Scope(tabs: [ScopeTab(sessionId: "s-1", targetId: nil, label: "")]),
             records: [.user(id: UUID(), text: "hi", at: Date(timeIntervalSince1970: 1))]
         )
         try store.save([thread])

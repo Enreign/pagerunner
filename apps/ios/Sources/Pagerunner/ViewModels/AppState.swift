@@ -136,7 +136,8 @@ final class AppState {
 
     /// Create a new thread, switch to it, and persist.
     func createThread(pinnedContext: PinnedContext? = nil) {
-        let thread = ChatThread(pinnedContext: pinnedContext)
+        var thread = ChatThread()
+        thread.pinnedContext = pinnedContext
         threads.insert(thread, at: 0)
         switchTo(threadId: thread.id)
         persistThreads()
