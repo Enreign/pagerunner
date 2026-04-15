@@ -1,9 +1,8 @@
 import SwiftUI
 import PagerunnerKit
 
-/// Grid picker for adding a tab to the current Scope. Reuses the live tab
-/// grid from the old `ContextsDrawer` but the action is "add to scope"
-/// (deduplicated by `ScopeTab.id`) instead of "replace pin".
+/// Grid picker for adding a tab to the current Scope.
+/// Tapping a tile calls `addTabToScope`; already-added tabs are shown with a checkmark and disabled.
 struct ScopeTabPickerView: View {
     @Environment(AppState.self) private var appState
     @Environment(\.dismiss) private var dismiss
