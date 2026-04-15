@@ -222,7 +222,7 @@ struct ChatItemView: View {
         }
         .padding(.horizontal, Theme.Spacing.regular)
         .padding(.vertical, 10)
-        .background(.operatorCard)
+        .glassEffect(.regular, in: .rect(cornerRadius: 0))
     }
 
     private func errorRow(_ message: String) -> some View {
