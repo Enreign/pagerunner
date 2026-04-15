@@ -1,8 +1,8 @@
 import Foundation
 
-/// A persistent chat. Anchors to a `PinnedContext` (or none) and accumulates
+/// A persistent chat thread. Anchors to a `PinnedContext` (or none) and accumulates
 /// `ChatRecord` entries representing the user-visible turn outcomes.
-public struct Thread: Codable, Sendable, Identifiable, Hashable {
+public struct ChatThread: Codable, Sendable, Identifiable, Hashable {
     public let id: UUID
     public var title: String
     public var pinnedContext: PinnedContext?
