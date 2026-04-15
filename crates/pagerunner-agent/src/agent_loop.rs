@@ -63,6 +63,10 @@ pub fn build_system_prompt(config: &AgentConfig, tool_names: &[String]) -> Strin
         prompt.push_str(extra);
     }
 
+    if let Some(scope) = &config.scope {
+        prompt.push_str(&crate::scope::build_scope_prompt(scope));
+    }
+
     prompt
 }
 
@@ -1193,5 +1197,35 @@ mod tests {
         assert_eq!(calls[0].1["session_id"], "sess-injected");
         assert_eq!(calls[0].1["target_id"], "tab-injected");
         assert_eq!(calls[0].1["url"], "https://example.com");
+    }
+
+    #[test]
+    fn build_system_prompt_includes_scope_when_set() {
+        use crate::scope::{Scope, ScopeTab};
+        let config = AgentConfig {
+            scope: Some(Scope {
+                tabs: vec![ScopeTab {
+                    session_id: "s-1".into(),
+                    target_id: Some("t-a".into()),
+                    label: "Notion".into(),
+                    purpose: Some("source".into()),
+                    digest: None,
+                }],
+                goal: Some("weekly".into()),
+                ..Default::default()
+            }),
+            ..AgentConfig::default()
+        };
+        let prompt = build_system_prompt(&config, &[]);
+        assert!(prompt.contains("SCOPE: weekly"));
+        assert!(prompt.contains("@Notion"));
+        assert!(prompt.contains("_scope_digest"));
+    }
+
+    #[test]
+    fn build_system_prompt_no_scope_section_when_empty() {
+        let prompt = build_system_prompt(&AgentConfig::default(), &[]);
+        assert!(!prompt.contains("SCOPE:"));
+        assert!(!prompt.contains("_scope_digest"));
     }
 }
