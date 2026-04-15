@@ -16,6 +16,7 @@ struct ContentView: View {
         }
         .animation(.spring(duration: 0.5, bounce: 0.15), value: appState.connection.isConnected)
         .task {
+            appState.loadThreads()
             appState.connection.loadSettings()
             guard !appState.connection.host.isEmpty else { return }
             // Probe first — we might not need a token (tailscale mode).
