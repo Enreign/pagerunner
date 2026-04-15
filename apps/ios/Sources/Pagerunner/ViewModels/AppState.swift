@@ -170,7 +170,7 @@ final class AppState {
             }
             do {
                 let base64 = try await client.screenshot(sessionId: sessionId, targetId: targetId)
-                chatItems.append(.screenshot(id: UUID(), base64: base64, sessionId: sessionId, targetId: targetId))
+                chatItems.append(.screenshot(id: UUID(), base64: base64, sessionId: sessionId, targetId: targetId, caption: nil))
                 PgrLog.chat.info("auto-screenshot appended (tool=\(name, privacy: .public))")
             } catch {
                 PgrLog.chat.error("auto-screenshot failed: \(error.localizedDescription, privacy: .public)")

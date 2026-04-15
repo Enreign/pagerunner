@@ -15,7 +15,7 @@ struct ChatItemView: View {
             toolCallRow(name: name, args: args, sessionId: sid, targetId: tid)
         case .toolResult(_, _, let summary, let isError):
             toolResultRow(summary: summary, isError: isError)
-        case .screenshot(_, let base64, let sid, let tid):
+        case .screenshot(_, let base64, let sid, let tid, _):
             screenshotCard(base64: base64, sessionId: sid, targetId: tid)
         case .agentDone(_, let summary):
             doneRow(summary)

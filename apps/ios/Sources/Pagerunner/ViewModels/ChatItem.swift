@@ -8,7 +8,7 @@ enum ChatItem: Identifiable, Sendable {
     case agentThinking(id: UUID, text: String)
     case toolCall(id: UUID, name: String, args: String, sessionId: String?, targetId: String?)
     case toolResult(id: UUID, name: String, summary: String, isError: Bool)
-    case screenshot(id: UUID, base64: String, sessionId: String?, targetId: String?)
+    case screenshot(id: UUID, base64: String, sessionId: String?, targetId: String?, caption: Caption?)
     case agentDone(id: UUID, summary: String)
     case approval(id: UUID, runId: String, action: String, description: String)
     case error(id: UUID, message: String)
@@ -19,11 +19,20 @@ enum ChatItem: Identifiable, Sendable {
              .agentThinking(let id, _),
              .toolCall(let id, _, _, _, _),
              .toolResult(let id, _, _, _),
-             .screenshot(let id, _, _, _),
+             .screenshot(let id, _, _, _, _),
              .agentDone(let id, _),
              .approval(let id, _, _, _),
              .error(let id, _):
             return id
+        }
+    }
+
+    struct Caption: Sendable, Hashable {
+        let title: String
+        let url: String
+
+        var host: String {
+            URL(string: url)?.host() ?? url
         }
     }
 }
@@ -50,7 +59,7 @@ extension ChatItem {
             // Screenshots come back as JSON carrying base64 data — render
             // them as an inline image card instead of a text status row.
             if name.contains("screenshot"), !isError, let base64 = extractScreenshotBase64(result) {
-                return .screenshot(id: UUID(), base64: base64, sessionId: nil, targetId: nil)
+                return .screenshot(id: UUID(), base64: base64, sessionId: nil, targetId: nil, caption: nil)
             }
             return .toolResult(id: UUID(), name: name, summary: summarise(result), isError: isError)
         case .done(let summary):
