@@ -101,6 +101,10 @@ pub fn extract_text(content: &[ContentBlock]) -> Option<String> {
 pub fn strip_session_params(tools: &mut [ToolSchema]) {
     const STRIP: &[&str] = &["session_id", "target_id"];
     for tool in tools.iter_mut() {
+        if tool.name.starts_with('_') {
+            // Pseudo-tools (scope, turn summary) keep their params as-is.
+            continue;
+        }
         if let Some(props) = tool.input_schema.get_mut("properties") {
             if let Some(obj) = props.as_object_mut() {
                 for key in STRIP {
@@ -184,6 +188,39 @@ pub async fn run_agent(
     // If session context is set, strip session_id/target_id from schemas.
     if config.session_context.is_some() {
         strip_session_params(&mut tools);
+    }
+
+    // Register pseudo-tool schemas so the LLM knows about them.
+    if config.scope.is_some() {
+        tools.push(ToolSchema {
+            name: "_scope_digest".to_string(),
+            description: "Report an observation about a Scope tab. Call after any successful \
+                          tool call on a Scope tab. digest must be ≤ 500 chars."
+                .to_string(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "session_id": {"type": "string"},
+                    "target_id": {"type": ["string", "null"]},
+                    "digest": {"type": "string", "maxLength": 500}
+                },
+                "required": ["session_id", "digest"]
+            }),
+        });
+        tools.push(ToolSchema {
+            name: "_turn_summary".to_string(),
+            description: "Summarize this turn for the user's thread log. Call once, \
+                          right before emitting `done`."
+                .to_string(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "summary": {"type": "string"},
+                    "touched_tab_ids": {"type": "array", "items": {"type": "string"}}
+                },
+                "required": ["summary"]
+            }),
+        });
     }
 
     let tool_names: Vec<String> = tools.iter().map(|t| t.name.clone()).collect();
@@ -315,6 +352,20 @@ pub async fn run_agent(
         messages.push(Message::assistant(response.content));
 
         for (tool_use_id, tool_name, tool_args) in &tool_calls {
+            // Scope pseudo-tools: the agent uses these to report observations
+            // back to iOS. Intercepted here — never hit the real executor.
+            if tool_name == "_scope_digest" || tool_name == "_turn_summary" {
+                if tool_name == "_scope_digest" {
+                    emit_scope_digest(tool_args, &event_tx);
+                } else {
+                    emit_turn_summary(tool_args, &event_tx);
+                }
+                // Synthesize a successful tool result so the agent continues.
+                let ok_response = ToolResponse::ok("{\"ok\":true}");
+                messages.push(make_tool_result_message(tool_use_id, &ok_response));
+                continue;
+            }
+
             // Auto-inject session context into tool args if configured.
             let mut tool_args = tool_args.clone();
             if let Some(ref ctx) = config.session_context {
@@ -471,6 +522,66 @@ fn make_tool_result_message(tool_use_id: &str, response: &ToolResponse) -> Messa
             is_error: if response.is_error { Some(true) } else { None },
         }],
     }
+}
+
+// ---------------------------------------------------------------------------
+// Scope pseudo-tool helpers
+// ---------------------------------------------------------------------------
+
+fn emit_scope_digest(args: &Value, event_tx: &broadcast::Sender<AgentEvent>) {
+    let session_id = args
+        .get("session_id")
+        .and_then(|v| v.as_str())
+        .unwrap_or_default()
+        .to_string();
+    let target_id = args
+        .get("target_id")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+    let raw_digest = args
+        .get("digest")
+        .and_then(|v| v.as_str())
+        .unwrap_or_default();
+    // Truncate to 500 chars to match iOS ScopeTab.digestCap.
+    let digest: String = if raw_digest.chars().count() > 500 {
+        raw_digest.chars().take(500).collect()
+    } else {
+        raw_digest.to_string()
+    };
+    if session_id.is_empty() || digest.is_empty() {
+        warn!("_scope_digest called with missing session_id or digest; ignoring");
+        return;
+    }
+    let _ = event_tx.send(AgentEvent::ScopeDigest {
+        session_id,
+        target_id,
+        digest,
+    });
+}
+
+fn emit_turn_summary(args: &Value, event_tx: &broadcast::Sender<AgentEvent>) {
+    let summary = args
+        .get("summary")
+        .and_then(|v| v.as_str())
+        .unwrap_or_default()
+        .to_string();
+    let touched_tab_ids = args
+        .get("touched_tab_ids")
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|el| el.as_str().map(String::from))
+                .collect::<Vec<String>>()
+        })
+        .unwrap_or_default();
+    if summary.is_empty() {
+        warn!("_turn_summary called with empty summary; ignoring");
+        return;
+    }
+    let _ = event_tx.send(AgentEvent::TurnSummary {
+        summary,
+        touched_tab_ids,
+    });
 }
 
 // ---------------------------------------------------------------------------
@@ -1227,5 +1338,126 @@ mod tests {
         let prompt = build_system_prompt(&AgentConfig::default(), &[]);
         assert!(!prompt.contains("SCOPE:"));
         assert!(!prompt.contains("_scope_digest"));
+    }
+
+    // --- Scope pseudo-tool tests ---
+
+    #[test]
+    fn emit_scope_digest_sends_event() {
+        use tokio::sync::broadcast;
+        let (tx, mut rx) = broadcast::channel(8);
+        let args = serde_json::json!({
+            "session_id": "s-1",
+            "target_id": "t-a",
+            "digest": "rows 1..47"
+        });
+        emit_scope_digest(&args, &tx);
+        let ev = rx.try_recv().expect("event");
+        match ev {
+            AgentEvent::ScopeDigest {
+                session_id,
+                target_id,
+                digest,
+            } => {
+                assert_eq!(session_id, "s-1");
+                assert_eq!(target_id.as_deref(), Some("t-a"));
+                assert_eq!(digest, "rows 1..47");
+            }
+            other => panic!("unexpected event: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn emit_scope_digest_truncates_at_500_chars() {
+        use tokio::sync::broadcast;
+        let (tx, mut rx) = broadcast::channel(8);
+        let long = "z".repeat(800);
+        let args = serde_json::json!({
+            "session_id": "s-1",
+            "digest": long
+        });
+        emit_scope_digest(&args, &tx);
+        let ev = rx.try_recv().unwrap();
+        if let AgentEvent::ScopeDigest { digest, .. } = ev {
+            assert_eq!(digest.len(), 500);
+        } else {
+            panic!("expected ScopeDigest");
+        }
+    }
+
+    #[test]
+    fn emit_scope_digest_ignores_empty_args() {
+        use tokio::sync::broadcast;
+        let (tx, mut rx) = broadcast::channel(8);
+        emit_scope_digest(&serde_json::json!({}), &tx);
+        assert!(rx.try_recv().is_err(), "should not send on empty args");
+    }
+
+    #[test]
+    fn emit_turn_summary_sends_event() {
+        use tokio::sync::broadcast;
+        let (tx, mut rx) = broadcast::channel(8);
+        let args = serde_json::json!({
+            "summary": "done",
+            "touched_tab_ids": ["s-1-t-a", "s-1-t-b"]
+        });
+        emit_turn_summary(&args, &tx);
+        let ev = rx.try_recv().unwrap();
+        if let AgentEvent::TurnSummary {
+            summary,
+            touched_tab_ids,
+        } = ev
+        {
+            assert_eq!(summary, "done");
+            assert_eq!(touched_tab_ids, vec!["s-1-t-a", "s-1-t-b"]);
+        } else {
+            panic!("expected TurnSummary");
+        }
+    }
+
+    #[test]
+    fn emit_turn_summary_allows_missing_touched_ids() {
+        use tokio::sync::broadcast;
+        let (tx, mut rx) = broadcast::channel(8);
+        emit_turn_summary(&serde_json::json!({"summary": "s"}), &tx);
+        let ev = rx.try_recv().unwrap();
+        if let AgentEvent::TurnSummary { touched_tab_ids, .. } = ev {
+            assert!(touched_tab_ids.is_empty());
+        } else {
+            panic!("expected TurnSummary");
+        }
+    }
+
+    #[test]
+    fn strip_session_params_skips_pseudo_tools() {
+        let mut tools = vec![
+            ToolSchema {
+                name: "navigate".to_string(),
+                description: "".to_string(),
+                input_schema: serde_json::json!({
+                    "type": "object",
+                    "properties": {"session_id": {"type": "string"}, "url": {"type": "string"}},
+                    "required": ["session_id", "url"]
+                }),
+            },
+            ToolSchema {
+                name: "_scope_digest".to_string(),
+                description: "".to_string(),
+                input_schema: serde_json::json!({
+                    "type": "object",
+                    "properties": {"session_id": {"type": "string"}, "digest": {"type": "string"}},
+                    "required": ["session_id", "digest"]
+                }),
+            },
+        ];
+        strip_session_params(&mut tools);
+        // navigate: session_id stripped
+        assert!(tools[0].input_schema["properties"]
+            .get("session_id")
+            .is_none());
+        // _scope_digest: session_id still there
+        assert!(tools[1].input_schema["properties"]
+            .get("session_id")
+            .is_some());
     }
 }
