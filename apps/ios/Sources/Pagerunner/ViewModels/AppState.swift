@@ -53,16 +53,28 @@ final class AppState {
     var agentEvents: [IdentifiableAgentEvent] = []
     var pendingApproval: AgentEventDetail?
 
-    // MARK: - Chat
+    // MARK: - Chat / Threads
 
+    var threads: [ChatThread] = []
+    var currentThreadId: UUID?
+
+    /// Live transcript for the current thread (base64 screenshots etc.). This
+    /// is rebuilt from the thread's persisted `ChatRecord`s on switch and grows
+    /// as live agent events stream in.
     var chatItems: [ChatItem] = []
     var activeRunId: String?
-    var activeContext: ActiveContext?
 
-    struct ActiveContext: Equatable {
-        var sessionId: String
-        var targetId: String?
+    /// Convenience: pinned context for the current thread, or nil.
+    var pinnedContext: PinnedContext? {
+        currentThread?.pinnedContext
     }
+
+    var currentThread: ChatThread? {
+        guard let id = currentThreadId else { return nil }
+        return threads.first(where: { $0.id == id })
+    }
+
+    private let threadStore = ThreadStore()
 
     // MARK: - Navigation
 
@@ -92,6 +104,103 @@ final class AppState {
         sessions.filter { $0.profile == profileName }
     }
 
+    // MARK: - Threads
+
+    /// Load threads from disk. If none exist, create a starter thread.
+    func loadThreads() {
+        do {
+            let loaded = try threadStore.load()
+            threads = loaded.sorted(by: { $0.updatedAt > $1.updatedAt })
+        } catch {
+            PgrLog.app.error("loadThreads: \(error.localizedDescription, privacy: .public)")
+            threads = []
+        }
+        if threads.isEmpty {
+            let starter = ChatThread()
+            threads = [starter]
+        }
+        // Restore the most recently updated thread on launch.
+        switchTo(threadId: threads[0].id)
+    }
+
+    /// Switch the active thread. Rebuilds `chatItems` from persisted records.
+    func switchTo(threadId: UUID) {
+        currentThreadId = threadId
+        guard let thread = threads.first(where: { $0.id == threadId }) else {
+            chatItems = []
+            return
+        }
+        chatItems = thread.records.map(Self.live(from:))
+    }
+
+    /// Create a new thread, switch to it, and persist.
+    func createThread(pinnedContext: PinnedContext? = nil) {
+        let thread = ChatThread(pinnedContext: pinnedContext)
+        threads.insert(thread, at: 0)
+        switchTo(threadId: thread.id)
+        persistThreads()
+    }
+
+    /// Update the pinned context on the current thread.
+    func setPinnedContext(_ context: PinnedContext?) {
+        guard let id = currentThreadId,
+              let idx = threads.firstIndex(where: { $0.id == id }) else { return }
+        threads[idx].pinnedContext = context
+        threads[idx].updatedAt = .now
+        persistThreads()
+    }
+
+    /// Delete a thread. If it was the current one, switch to the next or
+    /// create a new starter.
+    func deleteThread(_ id: UUID) {
+        threads.removeAll(where: { $0.id == id })
+        persistThreads()
+        if currentThreadId == id {
+            if let next = threads.first {
+                switchTo(threadId: next.id)
+            } else {
+                createThread()
+            }
+        }
+    }
+
+    /// Append a `ChatRecord` to the current thread and save.
+    private func appendRecord(_ record: ChatRecord) {
+        guard let id = currentThreadId,
+              let idx = threads.firstIndex(where: { $0.id == id }) else { return }
+        threads[idx].records.append(record)
+        threads[idx].updatedAt = .now
+        // Auto-title from the first user message if still default.
+        if threads[idx].title == "New thread", case .user(_, let text, _) = record {
+            threads[idx].title = String(text.prefix(40))
+        }
+        persistThreads()
+    }
+
+    private func persistThreads() {
+        do {
+            try threadStore.save(threads)
+        } catch {
+            PgrLog.app.error("persistThreads: \(error.localizedDescription, privacy: .public)")
+        }
+    }
+
+    /// Build a live `ChatItem` from a persisted `ChatRecord`. Screenshots
+    /// recover their metadata caption but lose the base64 image (rendered
+    /// as a placeholder).
+    private static func live(from record: ChatRecord) -> ChatItem {
+        switch record {
+        case .user(let id, let text, let sent):
+            return .user(id: id, text: text, sent: sent)
+        case .agentDone(let id, let summary, _):
+            return .agentDone(id: id, summary: summary)
+        case .screenshot(let id, let sid, let tid, let title, let url, _):
+            return .screenshot(id: id, base64: "", sessionId: sid, targetId: tid, caption: ChatItem.Caption(title: title, url: url))
+        case .error(let id, let message, _):
+            return .error(id: id, message: message)
+        }
+    }
+
     // MARK: - Polling
 
     func startPolling() {
@@ -119,6 +228,15 @@ final class AppState {
                 self.agentEvents.append(wrapped)
                 if let item = ChatItem.from(event.event) {
                     self.chatItems.append(item)
+                }
+                // Persist user-visible turn outcomes only.
+                switch event.event {
+                case .done(let summary):
+                    self.appendRecord(.agentDone(id: UUID(), summary: summary, at: .now))
+                case .error(let message, _):
+                    self.appendRecord(.error(id: UUID(), message: message, at: .now))
+                default:
+                    break
                 }
                 if case .approvalRequired = event.event {
                     self.pendingApproval = event.event
@@ -194,7 +312,10 @@ final class AppState {
 
         PgrLog.chat.info("send: \(trimmed.count) chars")
         let turnMarker = chatItems.count
-        chatItems.append(.user(id: UUID(), text: trimmed, sent: .now))
+        let userId = UUID()
+        let now = Date.now
+        chatItems.append(.user(id: userId, text: trimmed, sent: now))
+        appendRecord(.user(id: userId, text: trimmed, at: now))
         isAgentRunning = true
         defer {
             isAgentRunning = false
@@ -202,7 +323,14 @@ final class AppState {
         }
 
         do {
-            let response = try await client.callTool("agent_run", args: ["goal": trimmed])
+            var args: [String: Any] = ["goal": trimmed]
+            if let ctx = pinnedContext {
+                args["session_id"] = ctx.sessionId
+                if let tid = ctx.targetId {
+                    args["target_id"] = tid
+                }
+            }
+            let response = try await client.callTool("agent_run", args: args)
             PgrLog.chat.info("agent_run returned ok=\(response.ok)")
 
             // The HTTP response often beats the final WebSocket .done event
@@ -216,15 +344,21 @@ final class AppState {
             }
 
             if let err = response.error, !err.isEmpty {
-                chatItems.append(.error(id: UUID(), message: err))
+                let eid = UUID()
+                chatItems.append(.error(id: eid, message: err))
+                appendRecord(.error(id: eid, message: err, at: .now))
             } else if !wsDoneThisTurn {
                 // WebSocket never delivered a done — fall back to the HTTP
                 // summary so the user doesn't see a silent turn.
                 let summary = response.result?["summary"]?.stringValue ?? ""
-                chatItems.append(.agentDone(id: UUID(), summary: summary))
+                let did = UUID()
+                chatItems.append(.agentDone(id: did, summary: summary))
+                appendRecord(.agentDone(id: did, summary: summary, at: .now))
             }
         } catch {
-            chatItems.append(.error(id: UUID(), message: error.localizedDescription))
+            let eid = UUID()
+            chatItems.append(.error(id: eid, message: error.localizedDescription))
+            appendRecord(.error(id: eid, message: error.localizedDescription, at: .now))
         }
     }
 
