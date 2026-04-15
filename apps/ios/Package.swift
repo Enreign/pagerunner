@@ -1,9 +1,9 @@
-// swift-tools-version: 6.0
+// swift-tools-version: 6.2
 import PackageDescription
 
 let package = Package(
     name: "PagerunnerMobile",
-    platforms: [.iOS(.v18)],
+    platforms: [.iOS(.v26)],
     products: [
         .library(name: "PagerunnerKit", targets: ["PagerunnerKit"]),
     ],

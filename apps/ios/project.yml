@@ -2,7 +2,7 @@ name: Pagerunner
 options:
   minimumXcodeGenVersion: 2.40.0
   deploymentTarget:
-    iOS: "18.0"
+    iOS: "26.0"
   createIntermediateGroups: true
   groupSortPosition: top
 
@@ -25,7 +25,7 @@ targets:
   Pagerunner:
     type: application
     platform: iOS
-    deploymentTarget: "18.0"
+    deploymentTarget: "26.0"
     sources:
       - path: Sources/Pagerunner
         excludes:
@@ -43,7 +43,7 @@ targets:
   PagerunnerKitTests:
     type: bundle.unit-test
     platform: iOS
-    deploymentTarget: "18.0"
+    deploymentTarget: "26.0"
     sources:
       - path: Tests/PagerunnerKitTests
     settings:
