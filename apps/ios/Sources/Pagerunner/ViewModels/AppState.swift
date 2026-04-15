@@ -172,7 +172,11 @@ final class AppState {
         threads[idx].updatedAt = .now
         // Auto-title from the first user message if still default.
         if threads[idx].title == "New thread", case .user(_, let text, _) = record {
-            threads[idx].title = String(text.prefix(40))
+            let firstLine = text
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+                .components(separatedBy: .newlines)
+                .first ?? text
+            threads[idx].title = String(firstLine.prefix(40))
         }
         persistThreads()
     }
@@ -342,11 +346,17 @@ final class AppState {
                 if case .agentDone = item { return true }
                 return false
             }
+            let wsErrorThisTurn = chatItems[turnMarker...].contains { item in
+                if case .error = item { return true }
+                return false
+            }
 
             if let err = response.error, !err.isEmpty {
                 let eid = UUID()
                 chatItems.append(.error(id: eid, message: err))
-                appendRecord(.error(id: eid, message: err, at: .now))
+                if !wsErrorThisTurn {
+                    appendRecord(.error(id: eid, message: err, at: .now))
+                }
             } else if !wsDoneThisTurn {
                 // WebSocket never delivered a done — fall back to the HTTP
                 // summary so the user doesn't see a silent turn.
@@ -358,7 +368,13 @@ final class AppState {
         } catch {
             let eid = UUID()
             chatItems.append(.error(id: eid, message: error.localizedDescription))
-            appendRecord(.error(id: eid, message: error.localizedDescription, at: .now))
+            let wsErrorThisTurn = chatItems[turnMarker...].contains { item in
+                if case .error = item { return true }
+                return false
+            }
+            if !wsErrorThisTurn {
+                appendRecord(.error(id: eid, message: error.localizedDescription, at: .now))
+            }
         }
     }
 
