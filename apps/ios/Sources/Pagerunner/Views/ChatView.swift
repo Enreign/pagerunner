@@ -82,11 +82,13 @@ struct ChatView: View {
                         emptyState
                     } else {
                         ForEach(appState.chatItems) { item in
-                            ChatItemView(item: item, onOpenInspector: { ctx in
-                                inspectorContext = ctx
-                            }, onOpenFullscreen: { shot in
-                                fullscreenScreenshot = shot
-                            })
+                            ChatItemView(
+                                item: item,
+                                onOpenInspector: { ctx in inspectorContext = ctx },
+                                onOpenFullscreen: { shot in fullscreenScreenshot = shot },
+                                scopeLabel: { sid, tid in appState.scopeLabel(sessionId: sid, targetId: tid) },
+                                lastTurnLabels: appState.lastTurnTouchedLabels()
+                            )
                             .id(item.id)
                         }
                         if appState.isAgentRunning {

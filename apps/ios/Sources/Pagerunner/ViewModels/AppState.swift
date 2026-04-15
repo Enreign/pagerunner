@@ -563,6 +563,27 @@ final class AppState {
         persistThreads()
     }
 
+    /// Look up a Scope tab label for a given session/target pair, or nil if
+    /// the pair isn't part of the current thread's Scope.
+    func scopeLabel(sessionId: String?, targetId: String?) -> String? {
+        guard let sessionId,
+              let id = currentThreadId,
+              let thread = threads.first(where: { $0.id == id }) else { return nil }
+        let tabId = "\(sessionId)-\(targetId ?? "first")"
+        return thread.scope.tabs.first(where: { $0.id == tabId })?.label
+    }
+
+    /// Return the labels of tabs touched in the most recent `TurnLogEntry`
+    /// of the current thread. Empty if no turn log or no touched tabs.
+    func lastTurnTouchedLabels() -> [String] {
+        guard let id = currentThreadId,
+              let thread = threads.first(where: { $0.id == id }),
+              let entry = thread.scope.turnLog.last else { return [] }
+        return entry.touchedTabIds.compactMap { tid in
+            thread.scope.tabs.first(where: { $0.id == tid })?.label
+        }.filter { !$0.isEmpty }
+    }
+
     /// Build an `AnyCodableValue` payload for the daemon's `agent_run` tool.
     /// Keys match the Rust daemon's JSON schema. Using `AnyCodableValue` (which
     /// is `Sendable`) avoids strict-concurrency errors when crossing actor

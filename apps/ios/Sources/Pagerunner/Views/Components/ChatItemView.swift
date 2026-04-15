@@ -5,6 +5,8 @@ struct ChatItemView: View {
     let item: ChatItem
     var onOpenInspector: (ChatView.InspectorContext) -> Void
     var onOpenFullscreen: (FullscreenScreenshot) -> Void = { _ in }
+    var scopeLabel: ((String?, String?) -> String?)? = nil
+    var lastTurnLabels: [String] = []
 
     struct FullscreenScreenshot: Identifiable, Equatable {
         let id = UUID()
@@ -75,6 +77,15 @@ struct ChatItemView: View {
                     Text("done")
                         .font(.caption)
                         .foregroundStyle(.secondary)
+                    if !lastTurnLabels.isEmpty {
+                        Text("·")
+                            .font(.caption)
+                            .foregroundStyle(.tertiary)
+                        Text("Used: \(lastTurnLabels.joined(separator: ", "))")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                    }
                 }
             }
             Spacer(minLength: 40)
@@ -115,9 +126,17 @@ struct ChatItemView: View {
                     .frame(width: 20)
                     .padding(.top, 3)
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(name)
-                        .font(.monoCaption.weight(.semibold))
-                        .foregroundStyle(.primary)
+                    HStack(spacing: 6) {
+                        Text(name)
+                            .font(.monoCaption.weight(.semibold))
+                            .foregroundStyle(.primary)
+                        if let label = scopeLabel?(sessionId, targetId), !label.isEmpty {
+                            Text("· @\(label)")
+                                .font(.monoCaption)
+                                .foregroundStyle(.accent)
+                                .lineLimit(1)
+                        }
+                    }
                     if !args.isEmpty {
                         Text(args)
                             .font(.monoFootnote)
