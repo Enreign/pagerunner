@@ -23,7 +23,7 @@ struct ContextsDrawer: View {
                 }
                 .padding(Theme.Spacing.loose)
             }
-            .background(Color.operatorBackground)
+            .background(.thinMaterial)
             .navigationTitle("Contexts")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {

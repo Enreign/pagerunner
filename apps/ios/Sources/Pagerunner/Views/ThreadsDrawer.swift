@@ -30,7 +30,7 @@ struct ThreadsDrawer: View {
             }
             .listStyle(.insetGrouped)
             .scrollContentBackground(.hidden)
-            .background(Color.operatorBackground)
+            .background(.thinMaterial)
             .navigationTitle("Threads")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
