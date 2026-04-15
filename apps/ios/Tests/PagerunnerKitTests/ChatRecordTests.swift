@@ -8,7 +8,7 @@ struct ChatRecordTests {
     private let decoder = JSONDecoder()
 
     @Test func userRoundtrip() throws {
-        let record = ChatRecord.user(id: UUID(), text: "hello", sentAt: Date(timeIntervalSince1970: 1_000_000))
+        let record = ChatRecord.user(id: UUID(), text: "hello", at: Date(timeIntervalSince1970: 1_000_000))
         let data = try encoder.encode(record)
         let decoded = try decoder.decode(ChatRecord.self, from: data)
         #expect(decoded == record)

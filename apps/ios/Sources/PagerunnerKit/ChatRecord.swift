@@ -4,7 +4,7 @@ import Foundation
 /// `ChatThread`. Lossy on purpose: tool calls, results, and live thinking are
 /// dropped; screenshots persist only their metadata, not the base64 image.
 public enum ChatRecord: Codable, Sendable, Identifiable, Hashable {
-    case user(id: UUID, text: String, sentAt: Date)
+    case user(id: UUID, text: String, at: Date)
     case agentDone(id: UUID, summary: String, at: Date)
     case screenshot(id: UUID, sessionId: String, targetId: String, tabTitle: String, tabUrl: String, at: Date)
     case error(id: UUID, message: String, at: Date)
