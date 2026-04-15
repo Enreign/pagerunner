@@ -250,6 +250,45 @@ struct AgentEventTests {
             Issue.record("Expected unknown event")
         }
     }
+
+    @Test func scopeDigestEvent() throws {
+        let json = """
+        {"run_id": "r1", "event": {"type": "scope_digest", "session_id": "s-1", "target_id": "t-a", "digest": "rows 1..47"}}
+        """.data(using: .utf8)!
+        let event = try decoder.decode(AgentEvent.self, from: json)
+        if case .scopeDigest(let sid, let tid, let digest) = event.event {
+            #expect(sid == "s-1")
+            #expect(tid == "t-a")
+            #expect(digest == "rows 1..47")
+        } else {
+            Issue.record("Expected scope_digest event")
+        }
+    }
+
+    @Test func turnSummaryEvent() throws {
+        let json = """
+        {"run_id": "r1", "event": {"type": "turn_summary", "summary": "done", "touched_tab_ids": ["s-1-t-a", "s-1-t-b"]}}
+        """.data(using: .utf8)!
+        let event = try decoder.decode(AgentEvent.self, from: json)
+        if case .turnSummary(let summary, let ids) = event.event {
+            #expect(summary == "done")
+            #expect(ids == ["s-1-t-a", "s-1-t-b"])
+        } else {
+            Issue.record("Expected turn_summary event")
+        }
+    }
+
+    @Test func turnSummaryAllowsEmptyTouchedTabIds() throws {
+        let json = """
+        {"run_id": "r1", "event": {"type": "turn_summary", "summary": "noop", "touched_tab_ids": []}}
+        """.data(using: .utf8)!
+        let event = try decoder.decode(AgentEvent.self, from: json)
+        if case .turnSummary(_, let ids) = event.event {
+            #expect(ids.isEmpty)
+        } else {
+            Issue.record("Expected turn_summary event")
+        }
+    }
 }
 
 @Suite("AnyCodableValue")

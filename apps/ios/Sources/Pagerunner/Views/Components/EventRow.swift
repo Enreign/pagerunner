@@ -70,6 +70,12 @@ struct EventRow: View {
         case .budgetExceeded:
             Image(systemName: "exclamationmark.triangle.fill")
                 .foregroundStyle(.yellow)
+        case .scopeDigest:
+            Image(systemName: "doc.text.magnifyingglass")
+                .foregroundStyle(.secondary)
+        case .turnSummary:
+            Image(systemName: "list.bullet.clipboard")
+                .foregroundStyle(.secondary)
         case .unknown:
             Image(systemName: "questionmark.circle.fill")
                 .foregroundStyle(.secondary)
@@ -90,6 +96,8 @@ struct EventRow: View {
         case .error(let message, _): "Error: \(message.prefix(40))"
         case .interrupted: "Interrupted"
         case .budgetExceeded: "Budget Exceeded"
+        case .scopeDigest: "Scope Digest"
+        case .turnSummary: "Turn Summary"
         case .unknown(let type): "Unknown: \(type)"
         }
     }
@@ -117,6 +125,8 @@ struct EventRow: View {
         case .error(let message, _): message
         case .interrupted: "Agent was interrupted by user."
         case .budgetExceeded(let reason): reason
+        case .scopeDigest(_, _, let digest): digest
+        case .turnSummary(let summary, _): summary
         case .unknown: nil
         }
     }

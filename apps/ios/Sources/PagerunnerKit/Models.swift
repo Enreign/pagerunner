@@ -342,6 +342,8 @@ public enum AgentEventDetail: Codable, Sendable {
     case error(message: String, recoverable: Bool)
     case interrupted
     case budgetExceeded(reason: String)
+    case scopeDigest(sessionId: String, targetId: String?, digest: String)
+    case turnSummary(summary: String, touchedTabIds: [String])
     case unknown(type: String)
 
     private enum TypeKey: String, CodingKey {
@@ -359,6 +361,8 @@ public enum AgentEventDetail: Codable, Sendable {
         case error
         case interrupted
         case budgetExceeded = "budget_exceeded"
+        case scopeDigest = "scope_digest"
+        case turnSummary = "turn_summary"
     }
 
     // -- Payload keys per variant --
@@ -400,6 +404,17 @@ public enum AgentEventDetail: Codable, Sendable {
 
     private enum BudgetExceededKeys: String, CodingKey {
         case type, reason
+    }
+
+    private enum ScopeDigestKeys: String, CodingKey {
+        case type, digest
+        case sessionId = "session_id"
+        case targetId = "target_id"
+    }
+
+    private enum TurnSummaryKeys: String, CodingKey {
+        case type, summary
+        case touchedTabIds = "touched_tab_ids"
     }
 
     public init(from decoder: Decoder) throws {
@@ -467,6 +482,21 @@ public enum AgentEventDetail: Codable, Sendable {
         case .budgetExceeded:
             let c = try decoder.container(keyedBy: BudgetExceededKeys.self)
             self = .budgetExceeded(reason: try c.decode(String.self, forKey: .reason))
+
+        case .scopeDigest:
+            let c = try decoder.container(keyedBy: ScopeDigestKeys.self)
+            self = .scopeDigest(
+                sessionId: try c.decode(String.self, forKey: .sessionId),
+                targetId: try c.decodeIfPresent(String.self, forKey: .targetId),
+                digest: try c.decode(String.self, forKey: .digest)
+            )
+
+        case .turnSummary:
+            let c = try decoder.container(keyedBy: TurnSummaryKeys.self)
+            self = .turnSummary(
+                summary: try c.decode(String.self, forKey: .summary),
+                touchedTabIds: try c.decode([String].self, forKey: .touchedTabIds)
+            )
         }
     }
 
@@ -527,6 +557,19 @@ public enum AgentEventDetail: Codable, Sendable {
             var c = encoder.container(keyedBy: BudgetExceededKeys.self)
             try c.encode("budget_exceeded", forKey: .type)
             try c.encode(reason, forKey: .reason)
+
+        case .scopeDigest(let sessionId, let targetId, let digest):
+            var c = encoder.container(keyedBy: ScopeDigestKeys.self)
+            try c.encode("scope_digest", forKey: .type)
+            try c.encode(sessionId, forKey: .sessionId)
+            try c.encodeIfPresent(targetId, forKey: .targetId)
+            try c.encode(digest, forKey: .digest)
+
+        case .turnSummary(let summary, let touchedTabIds):
+            var c = encoder.container(keyedBy: TurnSummaryKeys.self)
+            try c.encode("turn_summary", forKey: .type)
+            try c.encode(summary, forKey: .summary)
+            try c.encode(touchedTabIds, forKey: .touchedTabIds)
 
         case .unknown(let type):
             var c = encoder.container(keyedBy: TypeKey.self)

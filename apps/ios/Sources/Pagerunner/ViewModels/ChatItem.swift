@@ -68,7 +68,8 @@ extension ChatItem {
             return .error(id: UUID(), message: message)
         case .approvalRequired(let runId, let action, let description):
             return .approval(id: UUID(), runId: runId, action: action, description: description)
-        case .progress, .interrupted, .budgetExceeded, .approvalResponse, .unknown:
+        case .progress, .interrupted, .budgetExceeded, .approvalResponse, .unknown,
+             .scopeDigest, .turnSummary:
             return nil
         }
     }

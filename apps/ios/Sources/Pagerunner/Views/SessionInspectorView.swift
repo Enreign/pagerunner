@@ -221,6 +221,8 @@ struct SessionInspectorView: View {
         case .interrupted: "pause.fill"
         case .budgetExceeded: "gauge.with.dots.needle.bottom.50percent"
         case .approvalResponse: "checkmark.message"
+        case .scopeDigest: "doc.text.magnifyingglass"
+        case .turnSummary: "list.bullet.clipboard"
         case .unknown: "questionmark"
         }
     }
@@ -246,6 +248,8 @@ struct SessionInspectorView: View {
         case .error(let m, _):              return m
         case .interrupted:                  return "interrupted"
         case .budgetExceeded(let r):        return "budget: \(r)"
+        case .scopeDigest(_, _, let d):     return d
+        case .turnSummary(let s, _):        return s
         case .unknown(let t):               return t
         }
     }
