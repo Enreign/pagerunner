@@ -1,1 +1,1 @@
-Scope (iOS side) shipped on branch; Rust daemon plan next.
+Scope end-to-end: iOS + Rust daemon both wired up. Ready for runtime testing.
