@@ -20,6 +20,7 @@
 		506F4B4736EEAE94624F286F /* ObserveView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2159850D67E5293DCAE28536 /* ObserveView.swift */; };
 		5909699B35906A474D5654FC /* ChatItem.swift in Sources */ = {isa = PBXBuildFile; fileRef = A776F10B5C6853BF315AEF28 /* ChatItem.swift */; };
 		593E781FD632E1043E1DCDE5 /* ChatView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9B22570CF5865A0277B85F32 /* ChatView.swift */; };
+		6864D6DD106B15C3381E3710 /* ScreenshotFullscreenView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 627EA941DC10329719692DF1 /* ScreenshotFullscreenView.swift */; };
 		6F761C9E9136B78D22CF34BF /* NetworkLogRow.swift in Sources */ = {isa = PBXBuildFile; fileRef = 61C76450EA4FB13A6FD2BF11 /* NetworkLogRow.swift */; };
 		750A9536361D905C3DD5BA0D /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = CDE2A110345DA54EC8E41827 /* Assets.xcassets */; };
 		7E0941A57A3671D69F820D06 /* StatusDot.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1B18367DA4E0402F72700462 /* StatusDot.swift */; };
@@ -55,6 +56,7 @@
 		2FF8B742213EB3732F9386A7 /* ThreadStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ThreadStoreTests.swift; sourceTree = "<group>"; };
 		61C76450EA4FB13A6FD2BF11 /* NetworkLogRow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NetworkLogRow.swift; sourceTree = "<group>"; };
 		624B489098490C4B59A6A1EE /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
+		627EA941DC10329719692DF1 /* ScreenshotFullscreenView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScreenshotFullscreenView.swift; sourceTree = "<group>"; };
 		63E36F852923CA0663E925F9 /* Card.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Card.swift; sourceTree = "<group>"; };
 		7172AAAC50AA827A09182790 /* AppState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppState.swift; sourceTree = "<group>"; };
 		73C6AC813400F750FF2F8EEE /* SessionDetailView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionDetailView.swift; sourceTree = "<group>"; };
@@ -205,6 +207,7 @@
 				841D5C67262A1FBBC696E745 /* DashboardView.swift */,
 				2159850D67E5293DCAE28536 /* ObserveView.swift */,
 				E29D7828DA7F80D8DDED755A /* OnboardingView.swift */,
+				627EA941DC10329719692DF1 /* ScreenshotFullscreenView.swift */,
 				73C6AC813400F750FF2F8EEE /* SessionDetailView.swift */,
 				21CEF1EC1B8D37B8A62FE3CD /* SessionInspectorView.swift */,
 				A2DCAB6E12B6760E7453B3D7 /* SessionListView.swift */,
@@ -329,6 +332,7 @@
 				506F4B4736EEAE94624F286F /* ObserveView.swift in Sources */,
 				A628EE197364062997A24253 /* OnboardingView.swift in Sources */,
 				3D79EEF6CEEF8D73173E2CF8 /* PagerunnerApp.swift in Sources */,
+				6864D6DD106B15C3381E3710 /* ScreenshotFullscreenView.swift in Sources */,
 				EBB292DA8F6701EEFC43A67F /* SessionDetailView.swift in Sources */,
 				4500F29F059B0C6A354F9A66 /* SessionInspectorView.swift in Sources */,
 				1D07134B7A81A9D432C3A4B2 /* SessionListView.swift in Sources */,

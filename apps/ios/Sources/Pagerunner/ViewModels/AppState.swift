@@ -284,15 +284,18 @@ final class AppState {
         guard let sessionId else { return }
 
         Task {
-            // Fetch the first tab for the session and screenshot it.
-            let targetId: String? = await (try? client.listTabs(sessionId: sessionId))?.first?.targetId
-            guard let targetId else {
+            let allTabs: [PagerunnerKit.Tab] = (try? await client.listTabs(sessionId: sessionId)) ?? []
+            guard let firstTab = allTabs.first else {
                 PgrLog.chat.notice("auto-screenshot skipped: no tabs for session \(sessionId, privacy: .public)")
                 return
             }
+            let targetId = firstTab.targetId
             do {
                 let base64 = try await client.screenshot(sessionId: sessionId, targetId: targetId)
-                chatItems.append(.screenshot(id: UUID(), base64: base64, sessionId: sessionId, targetId: targetId, caption: nil))
+                let caption = ChatItem.Caption(title: firstTab.title, url: firstTab.url)
+                let id = UUID()
+                chatItems.append(.screenshot(id: id, base64: base64, sessionId: sessionId, targetId: targetId, caption: caption))
+                appendRecord(.screenshot(id: id, sessionId: sessionId, targetId: targetId, tabTitle: firstTab.title, tabUrl: firstTab.url, at: .now))
                 PgrLog.chat.info("auto-screenshot appended (tool=\(name, privacy: .public))")
             } catch {
                 PgrLog.chat.error("auto-screenshot failed: \(error.localizedDescription, privacy: .public)")

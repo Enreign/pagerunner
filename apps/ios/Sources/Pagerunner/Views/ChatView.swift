@@ -9,6 +9,7 @@ struct ChatView: View {
     @State private var showSessions = false
     @State private var showSettings = false
     @State private var inspectorContext: InspectorContext?
+    @State private var fullscreenScreenshot: ChatItemView.FullscreenScreenshot?
     @FocusState private var composerFocused: Bool
 
     struct InspectorContext: Identifiable, Equatable {
@@ -59,6 +60,9 @@ struct ChatView: View {
                 SessionInspectorView(sessionId: ctx.sessionId, targetId: ctx.targetId)
             }
         }
+        .fullScreenCover(item: $fullscreenScreenshot) { shot in
+            ScreenshotFullscreenView(image: shot.image, caption: shot.caption)
+        }
     }
 
     // MARK: Transcript
@@ -71,9 +75,11 @@ struct ChatView: View {
                         emptyState
                     } else {
                         ForEach(appState.chatItems) { item in
-                            ChatItemView(item: item) { ctx in
+                            ChatItemView(item: item, onOpenInspector: { ctx in
                                 inspectorContext = ctx
-                            }
+                            }, onOpenFullscreen: { shot in
+                                fullscreenScreenshot = shot
+                            })
                             .id(item.id)
                         }
                         if appState.isAgentRunning {

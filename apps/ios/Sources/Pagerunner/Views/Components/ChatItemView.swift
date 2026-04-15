@@ -4,6 +4,15 @@ import PagerunnerKit
 struct ChatItemView: View {
     let item: ChatItem
     var onOpenInspector: (ChatView.InspectorContext) -> Void
+    var onOpenFullscreen: (FullscreenScreenshot) -> Void = { _ in }
+
+    struct FullscreenScreenshot: Identifiable, Equatable {
+        let id = UUID()
+        let image: UIImage
+        let caption: ChatItem.Caption?
+
+        static func == (lhs: Self, rhs: Self) -> Bool { lhs.id == rhs.id }
+    }
 
     var body: some View {
         switch item {
@@ -15,8 +24,8 @@ struct ChatItemView: View {
             toolCallRow(name: name, args: args, sessionId: sid, targetId: tid)
         case .toolResult(_, _, let summary, let isError):
             toolResultRow(summary: summary, isError: isError)
-        case .screenshot(_, let base64, let sid, let tid, _):
-            screenshotCard(base64: base64, sessionId: sid, targetId: tid)
+        case .screenshot(_, let base64, let sid, let tid, let caption):
+            screenshotCard(base64: base64, sessionId: sid, targetId: tid, caption: caption)
         case .agentDone(_, let summary):
             doneRow(summary)
         case .approval(_, _, let action, let description):
@@ -145,8 +154,9 @@ struct ChatItemView: View {
         .padding(.horizontal, Theme.Spacing.regular)
     }
 
-    private func screenshotCard(base64: String, sessionId: String?, targetId: String?) -> some View {
+    private func screenshotCard(base64: String, sessionId: String?, targetId: String?, caption: ChatItem.Caption?) -> some View {
         let img: UIImage? = {
+            guard !base64.isEmpty else { return nil }
             let stripped: String = {
                 if let r = base64.range(of: ";base64,") { return String(base64[r.upperBound...]) }
                 return base64
@@ -155,45 +165,62 @@ struct ChatItemView: View {
             return UIImage(data: data)
         }()
 
-        return HStack(alignment: .top, spacing: 10) {
-            agentAvatar
-            Button {
-                if let sid = sessionId {
-                    onOpenInspector(.init(sessionId: sid, targetId: targetId))
+        return Button {
+            if let img {
+                onOpenFullscreen(.init(image: img, caption: caption))
+            } else if let sid = sessionId {
+                onOpenInspector(.init(sessionId: sid, targetId: targetId))
+            }
+        } label: {
+            VStack(alignment: .leading, spacing: 0) {
+                if let img {
+                    Image(uiImage: img)
+                        .resizable()
+                        .scaledToFit()
+                        .frame(maxWidth: .infinity)
+                } else {
+                    Rectangle()
+                        .fill(.operatorCard)
+                        .frame(height: 180)
+                        .overlay(
+                            VStack(spacing: 6) {
+                                Image(systemName: "photo")
+                                Text("screenshot not in history")
+                                    .font(.caption2)
+                            }
+                            .foregroundStyle(.secondary)
+                        )
                 }
-            } label: {
-                VStack(alignment: .leading, spacing: 6) {
-                    if let img {
-                        Image(uiImage: img)
-                            .resizable()
-                            .scaledToFit()
-                            .frame(maxWidth: .infinity)
-                            .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.chip, style: .continuous))
-                    } else {
-                        RoundedRectangle(cornerRadius: Theme.Radius.chip, style: .continuous)
-                            .fill(.operatorCard)
-                            .frame(height: 160)
-                            .overlay(Image(systemName: "photo").foregroundStyle(.secondary))
-                    }
-                    HStack(spacing: 4) {
-                        Image(systemName: "camera.fill").font(.caption2)
-                        Text("screenshot")
-                            .font(.caption)
-                        if sessionId != nil {
-                            Spacer()
-                            Text("tap to inspect")
-                                .font(.caption2)
-                                .foregroundStyle(.tertiary)
-                            Image(systemName: "chevron.right")
-                                .font(.caption2)
-                                .foregroundStyle(.tertiary)
-                        }
-                    }
-                    .foregroundStyle(.secondary)
+                if let caption {
+                    captionStrip(caption)
                 }
             }
-            .buttonStyle(.plain)
+            .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.card, style: .continuous))
+            .shadow(color: .black.opacity(0.25), radius: 12, y: 4)
         }
+        .buttonStyle(.plain)
+    }
+
+    private func captionStrip(_ caption: ChatItem.Caption) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: "globe")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(caption.title.isEmpty ? caption.host : caption.title)
+                    .font(.footnote.weight(.medium))
+                    .foregroundStyle(.primary)
+                    .lineLimit(1)
+                Text(caption.host)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, Theme.Spacing.regular)
+        .padding(.vertical, 10)
+        .background(.operatorCard)
     }
 
     private func errorRow(_ message: String) -> some View {
