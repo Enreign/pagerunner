@@ -39,6 +39,7 @@ final class AppState {
     // MARK: - Connection
 
     var connection = ConnectionManager()
+    var thumbnails = ThumbnailCache()
 
     // MARK: - Data
 
