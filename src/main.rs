@@ -1865,6 +1865,10 @@ async fn run() -> anyhow::Result<()> {
                                 if *approved { "approved" } else { "denied" }
                             );
                         }
+                        pagerunner_agent::AgentEvent::ScopeDigest { .. }
+                        | pagerunner_agent::AgentEvent::TurnSummary { .. } => {
+                            // Informational events; no CLI output needed.
+                        }
                     }
                     continue;
                 }

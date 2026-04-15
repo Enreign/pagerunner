@@ -4778,6 +4778,24 @@ async fn dispatch_tool_inner(
                 agent_config.budget.max_steps = 15;
             }
 
+            // Optional structured Scope (multi-tab context). When absent,
+            // the agent runs with no scope — same as pre-Scope clients.
+            if let Some(scope_value) = args.get("scope") {
+                if !scope_value.is_null() {
+                    match serde_json::from_value::<pagerunner_agent::Scope>(scope_value.clone()) {
+                        Ok(scope) => {
+                            agent_config.scope = Some(scope);
+                        }
+                        Err(e) => {
+                            return Err(PagerunnerError::Config(format!(
+                                "invalid 'scope' argument: {}",
+                                e
+                            )));
+                        }
+                    }
+                }
+            }
+
             // Create LLM provider
             let mut llm_config = config.agent.llm.clone();
             if agent_config.model != "claude-haiku-4-5-20251001" {
@@ -6586,5 +6604,17 @@ mod secret_tests {
         let required = tool["inputSchema"]["required"].as_array().unwrap();
         let req_names: Vec<&str> = required.iter().map(|v| v.as_str().unwrap()).collect();
         assert!(req_names.contains(&"name"));
+    }
+
+    #[test]
+    fn agent_run_scope_arg_decodes() {
+        let scope_json = serde_json::json!({
+            "tabs": [{"session_id": "s-1", "target_id": "t-a", "label": "Notion"}],
+            "goal": "demo"
+        });
+        let scope: pagerunner_agent::Scope = serde_json::from_value(scope_json).expect("decode");
+        assert_eq!(scope.tabs.len(), 1);
+        assert_eq!(scope.tabs[0].session_id, "s-1");
+        assert_eq!(scope.goal.as_deref(), Some("demo"));
     }
 }
