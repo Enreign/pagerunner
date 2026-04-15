@@ -86,6 +86,7 @@ final class AppState {
 
     var isPolling = false
     private var pollingTask: Task<Void, Never>?
+    private var pendingUserGoal: String?
 
     // MARK: - Computed
 
@@ -143,11 +144,62 @@ final class AppState {
         persistThreads()
     }
 
-    /// Update the pinned context on the current thread.
-    func setPinnedContext(_ context: PinnedContext?) {
+    /// Replace the current thread's Scope wholesale.
+    func setScope(_ scope: Scope) {
         guard let id = currentThreadId,
               let idx = threads.firstIndex(where: { $0.id == id }) else { return }
-        threads[idx].pinnedContext = context
+        threads[idx].scope = scope
+        threads[idx].updatedAt = .now
+        persistThreads()
+    }
+
+    /// Add a tab to the current thread's Scope. No-op if already present.
+    func addTabToScope(sessionId: String, targetId: String?, label: String, purpose: String? = nil) {
+        guard let id = currentThreadId,
+              let idx = threads.firstIndex(where: { $0.id == id }) else { return }
+        let newTab = ScopeTab(sessionId: sessionId, targetId: targetId, label: label, purpose: purpose)
+        if threads[idx].scope.tabs.contains(where: { $0.id == newTab.id }) { return }
+        threads[idx].scope.tabs.append(newTab)
+        threads[idx].updatedAt = .now
+        persistThreads()
+    }
+
+    /// Remove a tab from the current thread's Scope by its derived id.
+    func removeTabFromScope(tabId: String) {
+        guard let id = currentThreadId,
+              let idx = threads.firstIndex(where: { $0.id == id }) else { return }
+        threads[idx].scope.tabs.removeAll(where: { $0.id == tabId })
+        threads[idx].updatedAt = .now
+        persistThreads()
+    }
+
+    /// Set the current thread's Scope goal (one-liner user intent).
+    func updateScopeGoal(_ goal: String?) {
+        guard let id = currentThreadId,
+              let idx = threads.firstIndex(where: { $0.id == id }) else { return }
+        let trimmed = goal?.trimmingCharacters(in: .whitespacesAndNewlines)
+        threads[idx].scope.goal = (trimmed?.isEmpty ?? true) ? nil : trimmed
+        threads[idx].updatedAt = .now
+        persistThreads()
+    }
+
+    /// Set the current thread's Scope notes (multiline free-form).
+    func updateScopeNotes(_ notes: String?) {
+        guard let id = currentThreadId,
+              let idx = threads.firstIndex(where: { $0.id == id }) else { return }
+        let trimmed = notes?.trimmingCharacters(in: .whitespacesAndNewlines)
+        threads[idx].scope.notes = (trimmed?.isEmpty ?? true) ? nil : trimmed
+        threads[idx].updatedAt = .now
+        persistThreads()
+    }
+
+    /// Update a single tab's `purpose`.
+    func updateTabPurpose(tabId: String, purpose: String?) {
+        guard let id = currentThreadId,
+              let idx = threads.firstIndex(where: { $0.id == id }),
+              let tIdx = threads[idx].scope.tabs.firstIndex(where: { $0.id == tabId }) else { return }
+        let trimmed = purpose?.trimmingCharacters(in: .whitespacesAndNewlines)
+        threads[idx].scope.tabs[tIdx].purpose = (trimmed?.isEmpty ?? true) ? nil : trimmed
         threads[idx].updatedAt = .now
         persistThreads()
     }
@@ -235,6 +287,16 @@ final class AppState {
                 if let item = ChatItem.from(event.event) {
                     self.chatItems.append(item)
                 }
+                // Live scope updates from the agent.
+                switch event.event {
+                case .scopeDigest(let sessionId, let targetId, let digest):
+                    self.applyScopeDigest(sessionId: sessionId, targetId: targetId, digest: digest)
+                case .turnSummary(let summary, let touchedTabIds):
+                    self.applyTurnSummary(summary: summary, touchedTabIds: touchedTabIds)
+                default:
+                    break
+                }
+
                 // Persist user-visible turn outcomes only.
                 switch event.event {
                 case .done(let summary):
@@ -318,6 +380,7 @@ final class AppState {
         }
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
+        pendingUserGoal = trimmed
 
         PgrLog.chat.info("send: \(trimmed.count) chars")
         let turnMarker = chatItems.count
@@ -328,18 +391,16 @@ final class AppState {
         isAgentRunning = true
         defer {
             isAgentRunning = false
+            pendingUserGoal = nil
             PgrLog.chat.info("turn ended")
         }
 
         do {
-            var args: [String: Any] = ["goal": trimmed]
-            if let ctx = pinnedContext {
-                args["session_id"] = ctx.sessionId
-                if let tid = ctx.targetId {
-                    args["target_id"] = tid
-                }
+            var argsMap: [String: AnyCodableValue] = ["goal": .string(trimmed)]
+            if let scope = currentThread?.scope, !scope.tabs.isEmpty {
+                argsMap["scope"] = Self.scopeArgs(scope)
             }
-            let response = try await client.callTool("agent_run", args: args)
+            let response = try await client.callTool("agent_run", codableArgs: .object(argsMap))
             PgrLog.chat.info("agent_run returned ok=\(response.ok)")
 
             // The HTTP response often beats the final WebSocket .done event
@@ -470,5 +531,64 @@ final class AppState {
         } catch {
             // Ignore
         }
+    }
+
+    // MARK: - Scope helpers
+
+    private func applyScopeDigest(sessionId: String, targetId: String?, digest: String) {
+        guard let id = currentThreadId,
+              let idx = threads.firstIndex(where: { $0.id == id }) else { return }
+        let tabId = "\(sessionId)-\(targetId ?? "first")"
+        guard let tIdx = threads[idx].scope.tabs.firstIndex(where: { $0.id == tabId }) else {
+            PgrLog.chat.notice("scopeDigest ignored: no tab \(tabId, privacy: .public) in current scope")
+            return
+        }
+        threads[idx].scope.tabs[tIdx].setDigest(digest)
+        threads[idx].scope.tabs[tIdx].lastTouchedAt = .now
+        threads[idx].updatedAt = .now
+        persistThreads()
+    }
+
+    private func applyTurnSummary(summary: String, touchedTabIds: [String]) {
+        guard let id = currentThreadId,
+              let idx = threads.firstIndex(where: { $0.id == id }) else { return }
+        let entry = TurnLogEntry(
+            userGoal: pendingUserGoal ?? "",
+            summary: summary,
+            touchedTabIds: touchedTabIds,
+            timestamp: .now
+        )
+        threads[idx].scope.append(entry)
+        threads[idx].updatedAt = .now
+        persistThreads()
+    }
+
+    /// Build an `AnyCodableValue` payload for the daemon's `agent_run` tool.
+    /// Keys match the Rust daemon's JSON schema. Using `AnyCodableValue` (which
+    /// is `Sendable`) avoids strict-concurrency errors when crossing actor
+    /// boundaries with raw `[String: Any]`.
+    private static func scopeArgs(_ scope: Scope) -> AnyCodableValue {
+        let tabs: AnyCodableValue = .array(scope.tabs.map { tab in
+            var d: [String: AnyCodableValue] = [
+                "session_id": .string(tab.sessionId),
+                "label": .string(tab.label),
+            ]
+            if let tid = tab.targetId { d["target_id"] = .string(tid) }
+            if let p = tab.purpose { d["purpose"] = .string(p) }
+            if let dg = tab.digest { d["digest"] = .string(dg) }
+            return .object(d)
+        })
+        let turnLog: AnyCodableValue = .array(scope.turnLog.map { entry in
+            .object([
+                "user_goal": .string(entry.userGoal),
+                "summary": .string(entry.summary),
+                "touched_tab_ids": .array(entry.touchedTabIds.map { .string($0) }),
+                "timestamp": .string(ISO8601DateFormatter().string(from: entry.timestamp)),
+            ])
+        })
+        var out: [String: AnyCodableValue] = ["tabs": tabs, "turn_log": turnLog]
+        if let g = scope.goal { out["goal"] = .string(g) }
+        if let n = scope.notes { out["notes"] = .string(n) }
+        return .object(out)
     }
 }

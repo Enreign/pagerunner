@@ -32,12 +32,12 @@ struct ContextsDrawer: View {
                 }
                 ToolbarItem(placement: .topBarTrailing) {
                     Button {
-                        appState.setPinnedContext(nil)
+                        appState.setScope(Scope())
                         dismiss()
                     } label: {
                         Label("Unpin", systemImage: "pin.slash")
                     }
-                    .disabled(appState.pinnedContext == nil)
+                    .disabled(appState.currentThread?.scope.tabs.isEmpty ?? true)
                 }
             }
             .task {
@@ -81,7 +81,7 @@ struct ContextsDrawer: View {
         let isPinned = appState.pinnedContext == ctx
 
         return Button {
-            appState.setPinnedContext(ctx)
+            appState.addTabToScope(sessionId: session.id, targetId: tab.targetId, label: tab.title.isEmpty ? tab.url : tab.title)
             dismiss()
         } label: {
             VStack(alignment: .leading, spacing: 6) {

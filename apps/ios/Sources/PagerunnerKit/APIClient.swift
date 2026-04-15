@@ -166,6 +166,14 @@ public final class APIClient: Sendable {
         return try await post("/api/tool", body: body)
     }
 
+    /// Execute any tool with a pre-built `AnyCodableValue` args payload.
+    /// Prefer this overload when building args from `@MainActor` context
+    /// to avoid Sendable violations with `[String: Any]`.
+    public func callTool(_ tool: String, codableArgs: AnyCodableValue) async throws -> ToolCallResponse {
+        let body = ToolCallRequest(tool: tool, args: codableArgs)
+        return try await post("/api/tool", body: body)
+    }
+
     // MARK: - Convenience action methods
 
     /// Open a new session on the given profile.
