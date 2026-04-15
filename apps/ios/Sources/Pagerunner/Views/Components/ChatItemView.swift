@@ -211,10 +211,12 @@ struct ChatItemView: View {
                     .font(.footnote.weight(.medium))
                     .foregroundStyle(.primary)
                     .lineLimit(1)
-                Text(caption.host)
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
+                if !caption.title.isEmpty {
+                    Text(caption.host)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
             }
             Spacer(minLength: 0)
         }

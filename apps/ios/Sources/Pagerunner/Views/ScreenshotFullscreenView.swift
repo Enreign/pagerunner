@@ -17,10 +17,10 @@ struct ScreenshotFullscreenView: View {
                 .scaledToFit()
                 .scaleEffect(scale * pinch)
                 .gesture(
-                    MagnificationGesture()
-                        .updating($pinch) { value, state, _ in state = value }
+                    MagnifyGesture()
+                        .updating($pinch) { value, state, _ in state = value.magnification }
                         .onEnded { value in
-                            scale = max(1, min(scale * value, 5))
+                            scale = max(1, min(scale * value.magnification, 5))
                         }
                 )
                 .onTapGesture(count: 2) {
@@ -49,10 +49,12 @@ struct ScreenshotFullscreenView: View {
                                 .font(.footnote.weight(.medium))
                                 .foregroundStyle(.white)
                                 .lineLimit(1)
-                            Text(caption.host)
-                                .font(.caption2)
-                                .foregroundStyle(.white.opacity(0.7))
-                                .lineLimit(1)
+                            if !caption.title.isEmpty {
+                                Text(caption.host)
+                                    .font(.caption2)
+                                    .foregroundStyle(.white.opacity(0.7))
+                                    .lineLimit(1)
+                            }
                         }
                         Spacer(minLength: 0)
                     }
