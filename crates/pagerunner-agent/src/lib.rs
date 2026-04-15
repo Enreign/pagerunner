@@ -7,6 +7,7 @@ pub mod config;
 pub mod context;
 pub mod events;
 pub mod executor;
+pub mod scope;
 
 pub use agent_loop::{build_system_prompt, extract_text, run_agent};
 pub use autonomy::{AutonomyPolicy, ToolDecision};
@@ -15,3 +16,4 @@ pub use config::{AgentConfig, SessionContext};
 pub use context::ContextConfig;
 pub use events::{AgentEvent, AgentOutcome, AgentResult};
 pub use executor::{ToolExecutor, ToolResponse};
+pub use scope::{build_scope_prompt, Scope, ScopeTab, TurnLogEntry};
