@@ -7,7 +7,7 @@ struct ChatView: View {
     @State private var draft = ""
     @State private var isSending = false
     @State private var showThreads = false
-    @State private var showContexts = false
+    @State private var showScope = false
     @State private var showSettings = false
     @State private var inspectorContext: InspectorContext?
     @State private var fullscreenScreenshot: ChatItemView.FullscreenScreenshot?
@@ -21,7 +21,7 @@ struct ChatView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            ContextChip { showContexts = true }
+            ScopeChip { showScope = true }
                 .padding(.horizontal, Theme.Spacing.loose)
                 .padding(.top, Theme.Spacing.tight)
                 .padding(.bottom, Theme.Spacing.tight)
@@ -54,7 +54,7 @@ struct ChatView: View {
                 .presentationDetents([.medium, .large])
                 .presentationDragIndicator(.visible)
         }
-        .sheet(isPresented: $showContexts) {
+        .sheet(isPresented: $showScope) {
             ContextsDrawer()
                 .presentationDetents([.medium, .large])
                 .presentationDragIndicator(.visible)
