@@ -34,8 +34,12 @@ public struct ThreadStore: Sendable {
     public func load() throws -> [ChatThread] {
         guard FileManager.default.fileExists(atPath: fileURL.path) else { return [] }
         let data = try Data(contentsOf: fileURL)
-        guard let threads = try? decoder.decode([ChatThread].self, from: data) else { return [] }
-        return threads
+        do {
+            return try decoder.decode([ChatThread].self, from: data)
+        } catch {
+            PgrLog.app.error("ThreadStore decode failed, treating as empty: \(error.localizedDescription, privacy: .public)")
+            return []
+        }
     }
 
     public func save(_ threads: [ChatThread]) throws {
