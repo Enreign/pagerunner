@@ -118,7 +118,8 @@ pub fn build_scope_prompt(scope: &Scope) -> String {
          `_scope_digest` tool with { session_id, target_id, digest } where digest is ≤ 500 chars \
          summarising what you now know about that tab.\n\
          - Right before emitting `done`, call `_turn_summary` with { summary, touched_tab_ids } \
-         listing the Scope tab ids you actually interacted with this turn.\n\
+         where each entry in touched_tab_ids uses the format \"{session_id}-{target_id}\" \
+         (e.g. \"s-abc-t-xyz\"). Use \"first\" as target_id if the tab has no target_id.\n\
          - Do NOT call `_scope_digest` or `_turn_summary` for tabs outside the Scope.",
     );
 
