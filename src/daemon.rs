@@ -887,7 +887,6 @@ async fn handle_connection(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use crate::ipc::{DaemonRequest, DaemonResponse};
 
     #[test]

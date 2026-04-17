@@ -1092,11 +1092,10 @@ mod tests {
             "mp4".into(),
         );
 
-        let mut handle = RecordingHandle::start(state, rec_dir.clone(), "mp4", 2, 2).await;
-        if handle.is_err() {
+        let Ok(mut handle) = RecordingHandle::start(state, rec_dir.clone(), "mp4", 2, 2).await
+        else {
             return;
-        }
-        let mut handle = handle.unwrap();
+        };
 
         // Add markers
         handle

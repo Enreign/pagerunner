@@ -5833,8 +5833,7 @@ Normal visible content here."#;
 #[cfg(test)]
 mod anon_open_session_tests {
     use super::*;
-    use crate::anonymizer::AnonConfig;
-    use crate::config::{AnonMode, AnonymizationConfig, DomainAnonProfile, EntityTypeConfig};
+    use crate::config::{AnonMode, AnonymizationConfig, EntityTypeConfig};
 
     #[test]
     fn test_entity_type_from_config_email() {
@@ -5963,7 +5962,6 @@ mod anon_open_session_tests {
 
 #[cfg(test)]
 mod anon_integration_tests {
-    use super::*;
     use crate::anonymizer::patterns::EntityType;
     use crate::anonymizer::vault::Vault;
     use crate::anonymizer::{AnonConfig, AnonEngine};
@@ -6152,7 +6150,6 @@ mod metadata_tests {
 
 #[cfg(test)]
 mod anon_detokenize_tests {
-    use super::*;
     use crate::anonymizer::is_token;
     use crate::anonymizer::vault::Vault;
     use crate::db::Db;

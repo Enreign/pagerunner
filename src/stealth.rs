@@ -1,5 +1,6 @@
 use crate::cdp::CdpConn;
 use crate::error::Result;
+use rand::RngExt;
 use serde_json::json;
 
 /// JavaScript injected via Page.addScriptToEvaluateOnNewDocument.
@@ -75,7 +76,6 @@ pub async fn inject(cdp: &CdpConn, session_id: &str) -> Result<()> {
 
 /// Random delay between `min_ms` and `max_ms` milliseconds.
 pub async fn human_delay(min_ms: u64, max_ms: u64) {
-    use rand::Rng;
     let ms = rand::rng().random_range(min_ms..=max_ms);
     tokio::time::sleep(std::time::Duration::from_millis(ms)).await;
 }
