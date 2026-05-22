@@ -4778,6 +4778,24 @@ async fn dispatch_tool_inner(
                 agent_config.budget.max_steps = 15;
             }
 
+            // Optional structured Scope (multi-tab context). When absent,
+            // the agent runs with no scope — same as pre-Scope clients.
+            if let Some(scope_value) = args.get("scope") {
+                if !scope_value.is_null() {
+                    match serde_json::from_value::<pagerunner_agent::Scope>(scope_value.clone()) {
+                        Ok(scope) => {
+                            agent_config.scope = Some(scope);
+                        }
+                        Err(e) => {
+                            return Err(PagerunnerError::Config(format!(
+                                "invalid 'scope' argument: {}",
+                                e
+                            )));
+                        }
+                    }
+                }
+            }
+
             // Create LLM provider
             let mut llm_config = config.agent.llm.clone();
             if agent_config.model != "claude-haiku-4-5-20251001" {
@@ -4831,11 +4849,31 @@ async fn dispatch_tool_inner(
                     audit: agent_audit,
                 });
 
-            let (event_tx, _event_rx) = tokio::sync::broadcast::channel(256);
+            let (event_tx, mut event_rx) = tokio::sync::broadcast::channel(256);
             let (_interrupt_tx, interrupt_rx) = tokio::sync::watch::channel(false);
             let (_approval_tx, approval_rx) = tokio::sync::mpsc::channel(16);
 
             let run_id = uuid::Uuid::new_v4().to_string();
+
+            // Forward every agent event to the HTTP API's broadcast channel
+            // so WebSocket clients see the run stream live. No-op when HTTP
+            // API isn't running.
+            let forward_run_id = run_id.clone();
+            let forwarder = tokio::spawn(async move {
+                loop {
+                    match event_rx.recv().await {
+                        Ok(event) => {
+                            crate::http_api::publish_agent_event(crate::ipc::DaemonEvent {
+                                run_id: forward_run_id.clone(),
+                                event,
+                            });
+                        }
+                        Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                        Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                    }
+                }
+            });
+
             let result = pagerunner_agent::run_agent(
                 enriched_goal,
                 agent_config,
@@ -4847,6 +4885,10 @@ async fn dispatch_tool_inner(
                 run_id,
             )
             .await;
+
+            // Give the forwarder a moment to drain any trailing events
+            // before we return the final HTTP response.
+            let _ = forwarder.await;
 
             let response = serde_json::json!({
                 "outcome": format!("{:?}", result.outcome),
@@ -6559,5 +6601,17 @@ mod secret_tests {
         let required = tool["inputSchema"]["required"].as_array().unwrap();
         let req_names: Vec<&str> = required.iter().map(|v| v.as_str().unwrap()).collect();
         assert!(req_names.contains(&"name"));
+    }
+
+    #[test]
+    fn agent_run_scope_arg_decodes() {
+        let scope_json = serde_json::json!({
+            "tabs": [{"session_id": "s-1", "target_id": "t-a", "label": "Notion"}],
+            "goal": "demo"
+        });
+        let scope: pagerunner_agent::Scope = serde_json::from_value(scope_json).expect("decode");
+        assert_eq!(scope.tabs.len(), 1);
+        assert_eq!(scope.tabs[0].session_id, "s-1");
+        assert_eq!(scope.goal.as_deref(), Some("demo"));
     }
 }

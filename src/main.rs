@@ -17,6 +17,7 @@ mod daemon_client;
 mod db;
 mod endpoint_mapper;
 mod error;
+mod http_api;
 mod init;
 mod ipc;
 mod mcp_server;
@@ -36,6 +37,7 @@ mod site_knowledge;
 mod sleep_watcher;
 mod snapshot;
 mod stealth;
+mod tailscale;
 
 use chrono::{DateTime, Utc};
 use clap::{Parser, Subcommand};
@@ -1862,6 +1864,10 @@ async fn run() -> anyhow::Result<()> {
                                 "[approval] {}",
                                 if *approved { "approved" } else { "denied" }
                             );
+                        }
+                        pagerunner_agent::AgentEvent::ScopeDigest { .. }
+                        | pagerunner_agent::AgentEvent::TurnSummary { .. } => {
+                            // Informational events; no CLI output needed.
                         }
                     }
                     continue;

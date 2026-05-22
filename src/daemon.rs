@@ -64,6 +64,32 @@ pub async fn run() -> Result<()> {
 
     tracing::info!("Pagerunner daemon listening on {:?}", socket_path);
 
+    // Start HTTP API server if enabled
+    let event_tx: broadcast::Sender<crate::ipc::DaemonEvent> = broadcast::channel(256).0;
+    if config.http_api.enabled {
+        // `validate()` now checks both wildcard bind and auth-mode requirements
+        // (token presence in token mode, non-loopback in tailscale mode).
+        config.http_api.validate()?;
+        let http_config = config.http_api.clone();
+        let http_sessions = Arc::clone(&sessions);
+        let http_db = Arc::clone(&db);
+        let http_app_config = config.clone();
+        let http_event_tx = event_tx.clone();
+        tokio::spawn(async move {
+            if let Err(e) = crate::http_api::start_http_server(
+                &http_config,
+                http_app_config,
+                http_sessions,
+                http_db,
+                http_event_tx,
+            )
+            .await
+            {
+                tracing::error!("HTTP API server failed: {}", e);
+            }
+        });
+    }
+
     // Reattach surviving Chrome sessions. Passing site_store: None here is intentional —
     // the daemon constructs site knowledge per-request in dispatch_tool_inner, not at startup.
     let reattached = crate::session_registry::reconcile_sessions(

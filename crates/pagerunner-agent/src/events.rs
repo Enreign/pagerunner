@@ -63,6 +63,24 @@ pub enum AgentEvent {
 
     /// The agent exceeded its configured budget.
     BudgetExceeded { reason: String },
+
+    /// Agent's latest observation about one of the Scope tabs. Emitted after
+    /// a successful tool call on that tab. iOS updates the corresponding
+    /// `ScopeTab.digest`.
+    ScopeDigest {
+        session_id: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        target_id: Option<String>,
+        digest: String,
+    },
+
+    /// End-of-turn summary. Emitted exactly once, right before `Done`. iOS
+    /// appends this as a new `TurnLogEntry`.
+    TurnSummary {
+        summary: String,
+        #[serde(default)]
+        touched_tab_ids: Vec<String>,
+    },
 }
 
 // ---------------------------------------------------------------------------
@@ -247,6 +265,44 @@ mod tests {
         assert_eq!(v["reason"], "max_steps reached");
     }
 
+    #[test]
+    fn scope_digest_event_serialization() {
+        let ev = AgentEvent::ScopeDigest {
+            session_id: "s-1".into(),
+            target_id: Some("t-a".into()),
+            digest: "rows 1..47".into(),
+        };
+        let v: serde_json::Value = serde_json::to_value(&ev).unwrap();
+        assert_eq!(v["type"], "scope_digest");
+        assert_eq!(v["session_id"], "s-1");
+        assert_eq!(v["target_id"], "t-a");
+        assert_eq!(v["digest"], "rows 1..47");
+    }
+
+    #[test]
+    fn scope_digest_omits_target_id_when_none() {
+        let ev = AgentEvent::ScopeDigest {
+            session_id: "s-1".into(),
+            target_id: None,
+            digest: "d".into(),
+        };
+        let v: serde_json::Value = serde_json::to_value(&ev).unwrap();
+        assert_eq!(v["type"], "scope_digest");
+        assert!(v.get("target_id").is_none());
+    }
+
+    #[test]
+    fn turn_summary_event_serialization() {
+        let ev = AgentEvent::TurnSummary {
+            summary: "did the thing".into(),
+            touched_tab_ids: vec!["s-1-t-a".into(), "s-1-t-b".into()],
+        };
+        let v: serde_json::Value = serde_json::to_value(&ev).unwrap();
+        assert_eq!(v["type"], "turn_summary");
+        assert_eq!(v["summary"], "did the thing");
+        assert_eq!(v["touched_tab_ids"].as_array().unwrap().len(), 2);
+    }
+
     // --- Roundtrip for all variants ---
 
     #[test]
@@ -287,6 +343,15 @@ mod tests {
             AgentEvent::Interrupted,
             AgentEvent::BudgetExceeded {
                 reason: "too many tokens".to_string(),
+            },
+            AgentEvent::ScopeDigest {
+                session_id: "s-1".to_string(),
+                target_id: Some("t-a".to_string()),
+                digest: "d".to_string(),
+            },
+            AgentEvent::TurnSummary {
+                summary: "s".to_string(),
+                touched_tab_ids: vec![],
             },
         ];
         for ev in &events {

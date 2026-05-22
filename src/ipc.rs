@@ -53,7 +53,7 @@ pub enum DaemonMessage {
 }
 
 /// An event streamed from daemon to client during an agent run.
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DaemonEvent {
     pub run_id: String,
     pub event: pagerunner_agent::AgentEvent,
