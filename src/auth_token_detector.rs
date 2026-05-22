@@ -18,10 +18,8 @@ pub fn detect_tokens(headers: &HashMap<String, String>) -> Vec<(String, String)>
                     results.push(("basic".into(), token.trim().into()));
                 }
             }
-            "x-api-key" | "x-auth-token" => {
-                if !value.is_empty() {
-                    results.push(("api_key".into(), value.clone()));
-                }
+            "x-api-key" | "x-auth-token" if !value.is_empty() => {
+                results.push(("api_key".into(), value.clone()));
             }
             "cookie" => {
                 for part in value.split(';') {
