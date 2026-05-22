@@ -115,7 +115,7 @@ impl AnonEngine {
         let mut output = text.to_string();
         let mut entity_counts: HashMap<String, usize> = HashMap::new();
         let mut sorted_spans = spans;
-        sorted_spans.sort_by(|a, b| b.start.cmp(&a.start)); // right-to-left
+        sorted_spans.sort_by_key(|span| std::cmp::Reverse(span.start)); // right-to-left
 
         // Track value→token cache for this call (for multi-occurrence consistency without extra vault reads)
         let mut value_to_token: HashMap<String, String> = HashMap::new();
