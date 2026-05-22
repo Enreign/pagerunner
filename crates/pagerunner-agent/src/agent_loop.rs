@@ -1421,7 +1421,10 @@ mod tests {
         let (tx, mut rx) = broadcast::channel(8);
         emit_turn_summary(&serde_json::json!({"summary": "s"}), &tx);
         let ev = rx.try_recv().unwrap();
-        if let AgentEvent::TurnSummary { touched_tab_ids, .. } = ev {
+        if let AgentEvent::TurnSummary {
+            touched_tab_ids, ..
+        } = ev
+        {
             assert!(touched_tab_ids.is_empty());
         } else {
             panic!("expected TurnSummary");
@@ -1500,27 +1503,43 @@ mod tests {
                 && target_id.as_deref() == Some("t-a")
                 && digest == "rows observed")
         });
-        assert!(scope_digest.is_some(), "expected ScopeDigest event; got: {:?}", events);
+        assert!(
+            scope_digest.is_some(),
+            "expected ScopeDigest event; got: {:?}",
+            events
+        );
 
         // TurnSummary must be present with correct fields.
         let turn_summary = events.iter().find(|ev| {
             matches!(ev, AgentEvent::TurnSummary { summary, touched_tab_ids }
                 if summary == "done" && touched_tab_ids == &["s-1-t-a"])
         });
-        assert!(turn_summary.is_some(), "expected TurnSummary event; got: {:?}", events);
+        assert!(
+            turn_summary.is_some(),
+            "expected TurnSummary event; got: {:?}",
+            events
+        );
 
         // Neither pseudo-tool should emit a ToolCall or ToolResult event.
         let pseudo_tool_call = events.iter().find(|ev| {
             matches!(ev, AgentEvent::ToolCall { name, .. }
                 if name == "_scope_digest" || name == "_turn_summary")
         });
-        assert!(pseudo_tool_call.is_none(), "pseudo-tool ToolCall should be suppressed; got: {:?}", events);
+        assert!(
+            pseudo_tool_call.is_none(),
+            "pseudo-tool ToolCall should be suppressed; got: {:?}",
+            events
+        );
 
         let pseudo_tool_result = events.iter().find(|ev| {
             matches!(ev, AgentEvent::ToolResult { name, .. }
                 if name == "_scope_digest" || name == "_turn_summary")
         });
-        assert!(pseudo_tool_result.is_none(), "pseudo-tool ToolResult should be suppressed; got: {:?}", events);
+        assert!(
+            pseudo_tool_result.is_none(),
+            "pseudo-tool ToolResult should be suppressed; got: {:?}",
+            events
+        );
     }
 
     #[test]
