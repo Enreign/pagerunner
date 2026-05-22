@@ -240,7 +240,7 @@ pub fn query_entries(
     let total_matched = all_entries.len();
 
     // Sort newest-first by timestamp_ms
-    all_entries.sort_by(|a, b| b.timestamp_ms.cmp(&a.timestamp_ms));
+    all_entries.sort_by_key(|entry| std::cmp::Reverse(entry.timestamp_ms));
 
     let result_truncated = total_matched > query.limit;
     all_entries.truncate(query.limit);
