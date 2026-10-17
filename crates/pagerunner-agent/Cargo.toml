@@ -31,7 +31,7 @@ name = "demo_live"
 version = "0.1"
 
 [dev-dependencies.dirs]
-version = "6"
+version = "7"
 
 [dev-dependencies.uuid]
 version = "1"
